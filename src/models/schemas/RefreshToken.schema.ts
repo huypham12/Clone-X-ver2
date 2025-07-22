@@ -1,6 +1,6 @@
 import { ObjectId } from 'mongodb'
 
-interface RefreshTokenType {
+type RefreshTokenType = {
   _id?: ObjectId
   token: string
   created_at?: Date
