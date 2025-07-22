@@ -3,9 +3,4 @@ dist/
 .env
 .env.production
 .env.staging
-test.js
-progress/
-bieu-do/
-client_secret_oauth.json
 uploads/
-notes/
