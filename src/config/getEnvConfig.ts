@@ -1,27 +1,27 @@
 import { config } from 'dotenv'
 import minimist from 'minimist'
 
-// Parse command-line arguments
+// lấy các tham số từ dòng lệnh
 const args = minimist(process.argv.slice(2))
 export const isProduction = args.env === 'production'
 
 console.log(`[ENV] Loaded: ${args.env || 'default'} | isProduction: ${isProduction}`)
 
-// Load the appropriate .env file
+// truyền biến môi trường vào dotenv
 config({
   path: args.env ? `.env.${args.env}` : '.env'
 })
 
-// Helper to safely get env vars
+// Lấy biến môi trường
 const getEnvVar = (key: string, required = true): string => {
-  const value = process.env[key]
+  const value = process.env[key] //  các biến trong file .env
   if (!value && required) {
     throw new Error(`Missing required environment variable: ${key}`)
   }
   return value || ''
 }
 
-// Group of env keys to auto-map (optional – DRY)
+// tạo danh sách các collection của database để dễ quản lý
 const dbCollections = [
   'USERS',
   'REFRESH_TOKEN',
@@ -30,15 +30,20 @@ const dbCollections = [
   'HASHTAGS',
   'BOOKMARKS',
   'LIKES',
-  'CONVERSATIONS'
+  'MESSAGES',
+  'DIRECT_CONVERSATIONS',
+  'GROUP_CONVERSATIONS'
 ]
 
 // Export config object
 export const getEnvConfig = () => {
+  // chuyển [key, value] thành { key: value }
   const DB_COLLECTIONS = Object.fromEntries(
     dbCollections.map((name) => [name + '_COLLECTION', getEnvVar(`DB_${name}_COLLECTION`)])
+    // cái hàm getEnvVar sẽ kiểm tra xem mấy db này có tồn tại trong file .env hay không
   )
 
+  // trả về các cụm cấu hình cho dễ quản lý
   return {
     APP: {
       PORT: parseInt(getEnvVar('PORT')),

@@ -2,15 +2,19 @@
 
 import { MongoClient, Db, Collection, ObjectId } from 'mongodb'
 import { config } from 'dotenv'
-import User from '~/models/schemas/User.schema'
-import RefreshToken from '~/models/schemas/RefreshToken.schema'
-import Follower from '~/models/schemas/Follower.schema'
-import Tweet from '~/models/schemas/Tweet.schema'
-import Hashtag from '~/models/schemas/Hashtag.schema'
-import Bookmark from '~/models/schemas/Bookmark.schema'
-import Like from '~/models/schemas/Like.schema'
-import Conversation from '~/models/schemas/Conversation.schema'
-import { getEnvConfig } from '~/config/getEnvConfig'
+import {
+  User,
+  RefreshToken,
+  Bookmark,
+  DirectConversation,
+  Follower,
+  GroupConversation,
+  Hashtag,
+  Like,
+  Message,
+  Tweet
+} from '~/models/schemas'
+import { getEnvConfig } from './getEnvConfig'
 
 config()
 getEnvConfig()
@@ -111,8 +115,15 @@ class DatabaseService {
     return this.db.collection(process.env.DB_LIKES_COLLECTION!)
   }
 
-  get conversations(): Collection<Conversation> {
-    return this.db.collection(process.env.DB_CONVERSATIONS_COLLECTION!)
+  get messages(): Collection<Message> {
+    return this.db.collection(process.env.DB_MESSAGES_COLLECTION!)
+  }
+
+  get directConversations(): Collection<DirectConversation> {
+    return this.db.collection(process.env.DB_DIRECT_CONVERSATIONS_COLLECTION!)
+  }
+  get groupConversations(): Collection<GroupConversation> {
+    return this.db.collection(process.env.DB_GROUP_CONVERSATIONS_COLLECTION!)
   }
 
   get test() {
