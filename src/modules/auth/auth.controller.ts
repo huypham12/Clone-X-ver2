@@ -11,13 +11,14 @@ export class AuthController {
     this.authService = authService;
   }
   */
+
   // mấy cái tham số này là để express hiểu mình đang dùng kiểu gì
   register = async (
     req: Request<ParamsDictionary, RegisterResponseDto, RegisterBodyDto, any>,
     res: Response<RegisterResponseDto>
   ) => {
-    const registerDto = req.body
-    const result = await this.authService.register(registerDto)
+    const payload = req.body
+    const result = await this.authService.register(payload)
     res.status(result.statusCode).json(result)
   }
 }

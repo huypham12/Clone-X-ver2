@@ -1,6 +1,6 @@
 import { SuccessResponseDto } from '~/common/success-response.dto'
 import { HTTP_STATUS } from '~/constants/httpStatus'
-import { authMessage } from '~/constants/messages'
+import { MESSAGES } from '~/constants/messages'
 
 // REQUEST DTO
 export class RegisterBodyDto {
@@ -22,6 +22,6 @@ export interface RegisterData {
 
 export class RegisterResponseDto extends SuccessResponseDto<RegisterData> {
   constructor(data: RegisterData) {
-    super(HTTP_STATUS.CREATED, authMessage.REGISTER_SUCCESS, data)
+    super(HTTP_STATUS.CREATED, MESSAGES.REGISTER_SUCCESS, data)
   }
 }

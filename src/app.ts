@@ -1,13 +1,13 @@
-// main.ts hoặc index.ts
 import express from 'express'
 import DatabaseService from './config/database.service'
 import { getEnvConfig } from './config/getEnvConfig'
 import { authRouter } from './modules'
+import { errorHandler } from './middleware/error-handler.middleware'
 
 const main = async () => {
-  getEnvConfig()
+  const envConfig = getEnvConfig()
   const app = express()
-  const PORT = process.env.PORT || 3000
+  const PORT = envConfig.APP.PORT || 3000
 
   const databaseService = new DatabaseService()
 
@@ -18,6 +18,7 @@ const main = async () => {
     // Sau khi kết nối DB xong thì mới khởi động app
     app.use(express.json())
     app.use('/auth', authRouter)
+    app.use(errorHandler)
 
     app.listen(PORT, () => {
       console.log(`Server is running on http://localhost:${PORT}`)
