@@ -1,7 +1,8 @@
 export enum MediaType {
-  Image,
-  Video,
-  Icon
+  Image = 'image',
+  Video = 'video',
+  Sticker = 'sticker',
+  Audio = 'audio'
 }
 
 export type Media = {

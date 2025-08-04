@@ -13,7 +13,7 @@ import {
   Like,
   Message,
   Tweet
-} from '~/models/schemas'
+} from '~/schemas'
 import { getEnvConfig } from './getEnvConfig'
 
 config()
@@ -21,7 +21,7 @@ getEnvConfig()
 
 const uri = `mongodb+srv://${process.env.DB_USERNAME}:${process.env.DB_PASSWORD}@clone-x-ver2.qhuiotw.mongodb.net/?retryWrites=true&w=majority&appName=Clone-X-ver2`
 
-class DatabaseService {
+export default class DatabaseService {
   private client: MongoClient
   private db: Db
   ObjectId = ObjectId
@@ -130,6 +130,3 @@ class DatabaseService {
     return this.db.collection('test')
   }
 }
-
-const databaseService = new DatabaseService()
-export default databaseService
