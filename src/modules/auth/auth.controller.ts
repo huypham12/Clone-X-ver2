@@ -1,7 +1,8 @@
 import { AuthService } from './auth.service'
-import { Request, Response } from 'express'
 import { LoginBodyDto, LoginResponseDto, RegisterBodyDto, RegisterResponseDto } from './dto'
-import { ParamsDictionary } from 'express-serve-static-core'
+import { PostHandler } from '~/types/controller-handler.type'
+import { LogoutBodyDto, LogoutResponseDto } from './dto/logout.dto'
+import { RefreshTokenBodyDto, RefreshTokenResponseDto } from './dto/refresh-token.dto'
 
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
@@ -12,20 +13,26 @@ export class AuthController {
   }
   */
 
-  // mấy cái tham số này là để express hiểu mình đang dùng kiểu gì
-  register = async (
-    req: Request<ParamsDictionary, RegisterResponseDto, RegisterBodyDto, any>,
-    res: Response<RegisterResponseDto>
-  ) => {
-    const payload = req.body
-    const result = await this.authService.register(payload)
+  // dùng đúng loại handler cho từng method, ở đây register là post nên dùng PostHandler
+  register: PostHandler<RegisterBodyDto, RegisterResponseDto> = async (req, res) => {
+    const result = await this.authService.register(req.body)
     res.status(result.statusCode).json(result)
   }
 
-  login = async (req: Request<ParamsDictionary, any, LoginBodyDto, any>, res: Response<LoginResponseDto>) => {
-    const payload = req.body
-    console.log(payload)
-    const result = await this.authService.login(payload)
+  login: PostHandler<LoginBodyDto, LoginResponseDto> = async (req, res) => {
+    const result = await this.authService.login(req.body)
     res.status(result.statusCode).json(result)
+  }
+
+  logout: PostHandler<LogoutBodyDto, LogoutResponseDto> = async (req, res) => {
+    const { refresh_token } = req.body
+    const result = await this.authService.logout(refresh_token)
+    res.json(result)
+  }
+
+  refreshToken: PostHandler<RefreshTokenBodyDto, RefreshTokenResponseDto> = async (req, res) => {
+    const { refresh_token } = req.body
+    const result = await this.authService.refreshToken(refresh_token)
+    res.json(result)
   }
 }

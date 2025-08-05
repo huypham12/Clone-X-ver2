@@ -40,7 +40,7 @@ export const MESSAGES = {
   EMAIL_ALREADY_VERIFIED_BEFORE: 'Email already verified before',
   GMAIL_NOT_VERIFIED: 'Gmail not verified',
   INVALID_TOKEN: 'Invalid token',
-
+  REFRESH_TOKEN_INVALID_OR_REVOKED: 'Refresh token is invalid or revoked',
   VERIFY_FORGOT_PASSWORD_TOKEN_SUCCESS: 'Verify forgot password token success',
 
   // user messages

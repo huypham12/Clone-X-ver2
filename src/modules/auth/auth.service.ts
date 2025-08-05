@@ -9,6 +9,8 @@ import { signToken, verifyToken } from '~/utils/jwt'
 import { hashPassword } from '~/utils/crypto'
 import { envConfig } from '~/config/getEnvConfig'
 import { HttpError } from '~/common/http-error'
+import { LogoutResponseDto } from './dto/logout.dto'
+import { RefreshTokenResponseDto } from './dto/refresh-token.dto'
 
 export class AuthService {
   constructor(private readonly databaseService: DatabaseService) {}
@@ -163,11 +165,9 @@ export class AuthService {
       verify: user.verify
     })
 
-    console.log(access_token, refresh_token)
-
     // lưu refresh token vào db
     const { user_id, exp } = await this.decodeRefreshToken(refresh_token)
-    console.log(exp, user_id)
+
     if (!exp) {
       throw new HttpError(MESSAGES.INVALID_REFRESH_TOKEN, HTTP_STATUS.BAD_REQUEST)
     }
@@ -188,5 +188,28 @@ export class AuthService {
 
     // Trả về LoginResponseDto
     return new LoginResponseDto(loginData)
+  }
+
+  logout = async (refresh_token: string): Promise<LogoutResponseDto> => {
+    await this.databaseService.refreshTokens.deleteOne({ token: refresh_token })
+    return new LogoutResponseDto(MESSAGES.LOGOUT_SUCCESS)
+  }
+
+  refreshToken = async (refresh_token: string): Promise<RefreshTokenResponseDto> => {
+    const { user_id, verify, exp } = await this.decodeRefreshToken(refresh_token)
+    if (!exp) {
+      throw new HttpError(MESSAGES.INVALID_REFRESH_TOKEN, HTTP_STATUS.BAD_REQUEST)
+    }
+    //tạo token mới để trả về
+    const [refreshToken, accesToken] = await Promise.all([
+      this.signRefreshToken({ user_id, verify, exp }), // vẫn cùng exp với refresh_token cũ
+      this.signAccessToken({ user_id, verify }),
+      this.databaseService.refreshTokens.deleteOne({ token: refresh_token })
+    ])
+
+    await this.databaseService.refreshTokens.insertOne(
+      new RefreshToken({ user_id: new ObjectId(user_id), token: refreshToken, exp })
+    )
+    return new RefreshTokenResponseDto({ access_token: accesToken, refresh_token: refreshToken })
   }
 }

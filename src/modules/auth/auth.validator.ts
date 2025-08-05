@@ -249,16 +249,11 @@ export const refreshTokenValidator = validate(
             if (!refreshToken) {
               ctx.addIssue({
                 code: 'custom',
-                message: MESSAGES.REFRESH_TOKEN_IS_REQUIRED,
+                message: MESSAGES.REFRESH_TOKEN_INVALID_OR_REVOKED,
                 path: ['refresh_token']
               })
               return
             }
-            const decodedToken = await verifyToken({
-              token: value,
-              secretKey: process.env.JWT_SECRET_REFRESH_TOKEN as string
-            })
-            ;(ctx as any).decoded_refresh_token = decodedToken
           } catch (error) {
             ctx.addIssue({
               code: 'custom',
