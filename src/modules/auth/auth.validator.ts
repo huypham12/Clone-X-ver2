@@ -3,8 +3,10 @@ import { z, ZodError } from 'zod'
 import { HttpError } from '~/common/http-error'
 import { MESSAGES } from '~/constants/messages'
 import { verifyToken } from '~/utils/jwt'
+import { hashPassword } from '~/utils/crypto'
 import DatabaseService from '~/config/database.service'
 import { ObjectId } from 'mongodb'
+import { TokenExpiredError } from 'jsonwebtoken'
 
 const databaseService = new DatabaseService()
 
@@ -157,4 +159,114 @@ export const registerValidator = validate(
       message: MESSAGES.CONFIRM_PASSWORD_DOES_NOT_MATCH,
       path: ['body', 'confirm_password']
     })
+)
+
+// Login validator
+export const loginValidator = validate(
+  z.object({
+    body: z
+      .object({
+        email: z
+          .email({
+            message: MESSAGES.EMAIL_MUST_BE_VALID
+          })
+          .trim(),
+        password: z
+          .string({
+            message: MESSAGES.PASSWORD_MUST_BE_STRING
+          })
+          .min(1, MESSAGES.PASSWORD_IS_REQUIRED)
+      })
+      .superRefine(async ({ email, password }, ctx) => {
+        const user = await databaseService.users.findOne({
+          email,
+          password: hashPassword(password)
+        })
+        if (!user) {
+          ctx.addIssue({
+            code: 'custom',
+            message: MESSAGES.USER_DOES_NOT_EXIST,
+            path: ['email']
+          })
+          return
+        }
+        ;(ctx as any).user = user
+      })
+  })
+)
+
+// Access token validator
+export const accessTokenValidator = validate(
+  z.object({
+    headers: z.object({
+      authorization: z
+        .string({
+          message: MESSAGES.ACCESS_TOKEN_IS_REQUIRED
+        })
+        .min(1, MESSAGES.ACCESS_TOKEN_IS_REQUIRED)
+        .superRefine(async (value, ctx) => {
+          try {
+            const [bearer, token] = value.split(' ')
+            if (!token || bearer !== 'Bearer') {
+              ctx.addIssue({
+                code: 'custom',
+                message: 'Invalid token format. Must be: Bearer <token>',
+                path: ['authorization']
+              })
+              return
+            }
+            const decodedToken = await verifyToken({
+              token,
+              secretKey: process.env.JWT_SECRET_ACCESS_TOKEN as string
+            })
+            ;(ctx as any).decoded_authorization = decodedToken
+          } catch (error) {
+            ctx.addIssue({
+              code: 'custom',
+              message: error instanceof TokenExpiredError ? MESSAGES.TOKEN_EXPIRED : MESSAGES.UNAUTHORIZED,
+              path: ['authorization']
+            })
+          }
+        })
+    })
+  })
+)
+
+// Refresh token validator
+export const refreshTokenValidator = validate(
+  z.object({
+    body: z.object({
+      refresh_token: z
+        .string({
+          message: MESSAGES.REFRESH_TOKEN_IS_REQUIRED
+        })
+        .min(1, MESSAGES.REFRESH_TOKEN_IS_REQUIRED)
+        .superRefine(async (value, ctx) => {
+          try {
+            const refreshToken = await databaseService.refreshTokens.findOne({
+              token: value
+            })
+            if (!refreshToken) {
+              ctx.addIssue({
+                code: 'custom',
+                message: MESSAGES.REFRESH_TOKEN_IS_REQUIRED,
+                path: ['refresh_token']
+              })
+              return
+            }
+            const decodedToken = await verifyToken({
+              token: value,
+              secretKey: process.env.JWT_SECRET_REFRESH_TOKEN as string
+            })
+            ;(ctx as any).decoded_refresh_token = decodedToken
+          } catch (error) {
+            ctx.addIssue({
+              code: 'custom',
+              message: MESSAGES.UNAUTHORIZED,
+              path: ['refresh_token']
+            })
+          }
+        })
+    })
+  })
 )

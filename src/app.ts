@@ -1,13 +1,12 @@
 import express from 'express'
 import DatabaseService from './config/database.service'
-import { getEnvConfig } from './config/getEnvConfig'
+import { envConfig } from './config/getEnvConfig'
 import { authRouter } from './modules'
 import { errorHandler } from './middleware/error-handler.middleware'
 
 const main = async () => {
-  const envConfig = getEnvConfig()
   const app = express()
-  const PORT = envConfig.APP.PORT || 3000
+  const PORT = envConfig.app.port || 3000
 
   const databaseService = new DatabaseService()
 

@@ -1,15 +1,14 @@
 import DatabaseService from '~/config/database.service'
-import { RegisterBodyDto, RegisterData, RegisterResponseDto } from './dto'
+import { LoginData, LoginResponseDto, RegisterBodyDto, RegisterData, RegisterResponseDto } from './dto'
 import { ObjectId } from 'mongodb'
-import { User } from '~/schemas'
+import { RefreshToken, User } from '~/schemas'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import { MESSAGES } from '~/constants/messages'
 import { TokenType, UserVerifyStatus } from '~/constants/enums'
-import { signToken } from '~/utils/jwt'
+import { signToken, verifyToken } from '~/utils/jwt'
 import { hashPassword } from '~/utils/crypto'
-import { getEnvConfig } from '~/config/getEnvConfig'
-
-const envConfig = getEnvConfig()
+import { envConfig } from '~/config/getEnvConfig'
+import { HttpError } from '~/common/http-error'
 
 export class AuthService {
   constructor(private readonly databaseService: DatabaseService) {}
@@ -21,11 +20,11 @@ export class AuthService {
         token_type: TokenType.AccessToken,
         verify
       },
-      secretKey: envConfig.SECRETS.JWT.ACCESS as string,
+      secretKey: envConfig.secrets.jwt.access as string,
       options: {
         algorithm: 'HS256',
         // cái này nó là dạng chuỗi đặc biệt để định dạng Date
-        expiresIn: envConfig.TOKEN_EXPIRES.ACCESS as `${number}${'ms' | 's' | 'm' | 'h' | 'd' | 'w' | 'y'}`
+        expiresIn: envConfig.tokenExpires.access as `${number}${'ms' | 's' | 'm' | 'h' | 'd' | 'w' | 'y'}`
       }
     })
   }
@@ -40,7 +39,7 @@ export class AuthService {
 
     return signToken({
       payload,
-      secretKey: envConfig.SECRETS.JWT.REFRESH as string,
+      secretKey: envConfig.secrets.jwt.refresh as string,
       options: {
         algorithm: 'HS256',
         ...(exp
@@ -59,11 +58,11 @@ export class AuthService {
         token_type: TokenType.EmailVerifyToken,
         verify: UserVerifyStatus.Unverified
       },
-      secretKey: envConfig.SECRETS.JWT.EMAIL_VERIFY as string,
+      secretKey: envConfig.secrets.jwt.emailVerify as string,
       options: {
         algorithm: 'HS256',
         // cái này nó là dạng chuỗi đặc biệt để định dạng Date
-        expiresIn: envConfig.TOKEN_EXPIRES.EMAIL_VERIFY as `${number}${'ms' | 's' | 'm' | 'h' | 'd' | 'w' | 'y'}`
+        expiresIn: envConfig.tokenExpires.emailVerify as `${number}${'ms' | 's' | 'm' | 'h' | 'd' | 'w' | 'y'}`
       }
     })
   }
@@ -80,9 +79,18 @@ export class AuthService {
     return Promise.all([this.signAccessToken({ user_id, verify }), this.signRefreshToken({ user_id, verify, exp })])
   }
 
+  private decodeRefreshToken(token: string) {
+    return verifyToken({
+      token,
+      secretKey: envConfig.secrets.jwt.refresh as string
+    })
+  }
+
   register = async (payload: RegisterBodyDto): Promise<RegisterResponseDto> => {
     // sau khi đăng ký thì thêm vào db và tạo các token gửi về cho người dùng
     const user_id = new ObjectId()
+
+    //tạo token trả về
     const email_verify_token = await this.signEmailVerifyToken({
       user_id: user_id.toString(),
       verify: UserVerifyStatus.Unverified
@@ -91,6 +99,22 @@ export class AuthService {
       user_id: user_id.toString(),
       verify: UserVerifyStatus.Unverified
     })
+
+    // lưu refresh token vào db
+    const { exp } = await this.decodeRefreshToken(refresh_token)
+    if (!exp) {
+      throw new HttpError(MESSAGES.INVALID_REFRESH_TOKEN, HTTP_STATUS.BAD_REQUEST)
+    }
+    await this.databaseService.refreshTokens.insertOne(
+      new RefreshToken({
+        token: refresh_token,
+        created_at: new Date(),
+        user_id,
+        exp // Convert seconds to milliseconds if exp exists
+      })
+    )
+
+    // insert user
     const result = await this.databaseService.users.insertOne(
       new User({
         ...payload,
@@ -114,5 +138,55 @@ export class AuthService {
 
     // Trả về RegisterResponseDto
     return new RegisterResponseDto(registerData)
+  }
+
+  login = async (payload: { email: string; password: string }): Promise<LoginResponseDto> => {
+    // tìm user theo email
+    const user = await this.databaseService.users.findOne({ email: payload.email })
+    if (!user) {
+      throw new HttpError(MESSAGES.USER_NOT_FOUND, HTTP_STATUS.NOT_FOUND)
+    }
+
+    // kiểm tra mật khẩu
+    if (user.password !== hashPassword(payload.password)) {
+      throw new HttpError(MESSAGES.INVALID_PASSWORD, HTTP_STATUS.UNAUTHORIZED)
+    }
+
+    // nếu user chưa verify thì trả về lỗi
+    if (user.verify === UserVerifyStatus.Unverified) {
+      throw new HttpError(MESSAGES.USER_NOT_VERIFIED, HTTP_STATUS.FORBIDDEN)
+    }
+
+    // tạo access token và refresh token
+    const [access_token, refresh_token] = await this.signAccessAndRefreshToken({
+      user_id: user._id.toString(),
+      verify: user.verify
+    })
+
+    console.log(access_token, refresh_token)
+
+    // lưu refresh token vào db
+    const { user_id, exp } = await this.decodeRefreshToken(refresh_token)
+    console.log(exp, user_id)
+    if (!exp) {
+      throw new HttpError(MESSAGES.INVALID_REFRESH_TOKEN, HTTP_STATUS.BAD_REQUEST)
+    }
+    await this.databaseService.refreshTokens.insertOne(
+      new RefreshToken({
+        token: refresh_token,
+        created_at: new Date(),
+        user_id: new ObjectId(user_id),
+        exp // Convert seconds to milliseconds if exp exists
+      })
+    )
+
+    // Tạo LoginData từ user login
+    const loginData: LoginData = {
+      access_token,
+      refresh_token
+    }
+
+    // Trả về LoginResponseDto
+    return new LoginResponseDto(loginData)
   }
 }

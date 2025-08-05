@@ -9,6 +9,7 @@ export const MESSAGES = {
   EMAIL_DOES_NOT_EXIST: 'Email does not exist',
   USER_DOES_NOT_EXIST: 'Email does not exist or password is incorrect',
   USER_NOT_FOUND: 'User not found',
+  INVALID_PASSWORD: 'Invalid password',
 
   // success messages
   REFRESH_TOKEN_SUCCESS: 'Refresh token success',
@@ -38,6 +39,7 @@ export const MESSAGES = {
   EMAIL_VERIFY_SUCCESS: 'Email verify success',
   EMAIL_ALREADY_VERIFIED_BEFORE: 'Email already verified before',
   GMAIL_NOT_VERIFIED: 'Gmail not verified',
+  INVALID_TOKEN: 'Invalid token',
 
   VERIFY_FORGOT_PASSWORD_TOKEN_SUCCESS: 'Verify forgot password token success',
 

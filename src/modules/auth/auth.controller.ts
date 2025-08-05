@@ -1,6 +1,6 @@
 import { AuthService } from './auth.service'
 import { Request, Response } from 'express'
-import { RegisterBodyDto, RegisterResponseDto } from './dto'
+import { LoginBodyDto, LoginResponseDto, RegisterBodyDto, RegisterResponseDto } from './dto'
 import { ParamsDictionary } from 'express-serve-static-core'
 
 export class AuthController {
@@ -19,6 +19,13 @@ export class AuthController {
   ) => {
     const payload = req.body
     const result = await this.authService.register(payload)
+    res.status(result.statusCode).json(result)
+  }
+
+  login = async (req: Request<ParamsDictionary, any, LoginBodyDto, any>, res: Response<LoginResponseDto>) => {
+    const payload = req.body
+    console.log(payload)
+    const result = await this.authService.login(payload)
     res.status(result.statusCode).json(result)
   }
 }

@@ -8,9 +8,8 @@ import { z } from 'zod'
 
 // Promisify jwt.sign và jwt.verify để tránh callback
 const signAsync = promisify<string | Buffer | object, string, SignOptions | undefined, string>(jwt.sign)
-const verifyAsync = promisify<string, string, VerifyOptions | undefined, TokenPayload>(
-  (token: string, secretOrKey: string, options?: VerifyOptions) => jwt.verify(token, secretOrKey, options || {})
-)
+const verifyAsync = promisify<string, string | Buffer, VerifyOptions | undefined, any>(jwt.verify)
+
 // Schema để validate TokenPayload
 const tokenPayloadSchema = z.object({
   user_id: z.string(),
