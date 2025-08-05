@@ -56,6 +56,9 @@ interface EnvConfig {
     emailVerify: string
     forgotPassword: string
   }
+  sendGrid: {
+    apiKey: string
+  }
   resendApiKey: string
 }
 
@@ -125,6 +128,9 @@ export const envConfig: EnvConfig = {
     refresh: getEnvVar('REFRESH_TOKEN_EXPIRES_IN'),
     emailVerify: getEnvVar('EMAIL_VERIFY_TOKEN_EXPIRES_IN'),
     forgotPassword: getEnvVar('FORGOT_PASSWORD_TOKEN_EXPIRES_IN')
+  },
+  sendGrid: {
+    apiKey: getEnvVar('SENDGRID_API_KEY')
   },
   resendApiKey: getEnvVar('RESEND_API_KEY')
 }

@@ -1,6 +1,7 @@
 export const MESSAGES = {
   // auth messages
   REGISTER_SUCCESS: 'Register success',
+  REGISTER_SUCCESS_WITH_VERIFY_EMAIL: 'Register success, please check your email to verify your account',
   LOGIN_SUCCESS: 'Login success',
   LOGOUT_SUCCESS: 'Logout success',
   UNAUTHORIZED: 'Unauthorized',
@@ -10,8 +11,12 @@ export const MESSAGES = {
   USER_DOES_NOT_EXIST: 'Email does not exist or password is incorrect',
   USER_NOT_FOUND: 'User not found',
   INVALID_PASSWORD: 'Invalid password',
+  USER_ALREADY_VERIFIED: 'User already verified',
+  EMAIL_ALREADY_VERIFIED: 'Email already verified',
 
   // success messages
+  RESEND_VERIFY_EMAIL_SUCCESS: 'Resend verify email success',
+  VERIFY_EMAIL_SUCCESS: 'Verify email success',
   REFRESH_TOKEN_SUCCESS: 'Refresh token success',
   GET_USER_PROFILE_SUCCESS: 'Get user profile success',
   FOLLOW_USER_SUCCESS: 'Follow user success',
@@ -26,8 +31,13 @@ export const MESSAGES = {
   FOLLOWED: 'Followed',
   UNFOLLOWED: 'Unfollowed',
   CHECK_EMAIL_TO_RESET_PASSWORD: 'Check your email to reset password',
+  EMAIL_SENT_SUCCESS: 'Email sent successfully',
 
   // token messages
+  TOKEN_IS_REQUIRED: 'Token is required',
+  TOKEN_INVALID_FORMAT: 'Invalid token format',
+  TOKEN_MUST_BE_STRING: 'Token must be a string',
+  INVALID_TOKEN_FORMAT: 'Invalid token format. Must be: Bearer <token>',
   ACCESS_TOKEN_IS_REQUIRED: 'Access token is required',
   REFRESH_TOKEN_IS_REQUIRED: 'Refresh token is required',
   USED_REFRESH_TOKEN_OR_NOT_EXIST: 'Used refresh token or not exist',

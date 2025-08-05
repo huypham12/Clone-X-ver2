@@ -17,11 +17,10 @@ export class RegisterBodyDto {
 export interface RegisterData {
   access_token: string
   refresh_token: string
-  email_verify_token: string
 }
 
 export class RegisterResponseDto extends SuccessResponseDto<RegisterData> {
   constructor(data: RegisterData) {
-    super(HTTP_STATUS.CREATED, MESSAGES.REGISTER_SUCCESS, data)
+    super(HTTP_STATUS.CREATED, MESSAGES.REGISTER_SUCCESS_WITH_VERIFY_EMAIL, data)
   }
 }

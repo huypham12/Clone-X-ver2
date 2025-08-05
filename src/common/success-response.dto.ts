@@ -2,7 +2,7 @@ export class SuccessResponseDto<T = any> {
   constructor(
     public statusCode: number,
     public message: string,
-    public data: T
+    public data?: T
   ) {}
 }
 

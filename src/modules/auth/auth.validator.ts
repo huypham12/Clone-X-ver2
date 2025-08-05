@@ -10,42 +10,6 @@ import { TokenExpiredError } from 'jsonwebtoken'
 
 const databaseService = new DatabaseService()
 
-// Middleware để validate dữ liệu bằng Zod
-const validate = (schema: z.ZodSchema) => {
-  return async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      await schema.parseAsync({
-        body: req.body,
-        query: req.query,
-        headers: req.headers,
-        params: req.params
-      })
-      next()
-    } catch (error) {
-      // tất cả các error này sẽ được next đề error handler xử lý theo định dạng chung
-      if (error instanceof ZodError) {
-        // Chuyển lỗi Zod thành định dạng Record<string, string[]> trong HttpError
-        // để phù hợp với cấu trúc của ErrorResponseDto
-        const errors: Record<string, string[]> = {}
-        error.issues.forEach((err) => {
-          const path = err.path.join('.')
-          if (!errors[path]) {
-            errors[path] = []
-          }
-          errors[path].push(err.message)
-        })
-        throw new HttpError('Validation failed', 400, errors)
-      } else if (error instanceof HttpError) {
-        // Nếu lỗi đã là HttpError (từ superRefine), ném lại nguyên vẹn
-        throw error
-      } else {
-        // Xử lý các lỗi khác (lỗi hệ thống)
-        throw new HttpError('Internal Server Error', 500)
-      }
-    }
-  }
-}
-
 // Schema cho password
 const passwordSchema = z
   .string({
@@ -115,6 +79,34 @@ const forgotPasswordTokenSchema = z
     }
   })
 
+// Middleware để validate dữ liệu bằng Zod
+const validate = (schema: z.ZodSchema) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await schema.parseAsync({
+        body: req.body,
+        query: req.query,
+        headers: req.headers,
+        params: req.params
+      })
+      next()
+    } catch (error) {
+      if (error instanceof ZodError) {
+        const errors: Record<string, string[]> = {}
+        error.issues.forEach((err) => {
+          const path = err.path.join('.') || 'validation'
+          if (!errors[path]) errors[path] = []
+          errors[path].push(err.message)
+        })
+        return next(new HttpError('Validation failed', 400, errors))
+      } else {
+        console.error('Validation error:', error)
+        return next(new HttpError('Internal Server Error', 500))
+      }
+    }
+  }
+}
+
 // Register validator
 export const registerValidator = validate(
   z
@@ -131,17 +123,7 @@ export const registerValidator = validate(
           .email({
             message: MESSAGES.EMAIL_MUST_BE_VALID
           })
-          .trim()
-          .superRefine(async (value, ctx) => {
-            const isExistEmail = await databaseService.users.findOne({ email: value })
-            if (isExistEmail) {
-              ctx.addIssue({
-                code: 'custom',
-                message: MESSAGES.EMAIL_ALREADY_EXISTS,
-                path: ['email']
-              })
-            }
-          }),
+          .trim(),
         password: passwordSchema,
         confirm_password: passwordSchema,
         date_of_birth: z.string().refine(
@@ -164,34 +146,18 @@ export const registerValidator = validate(
 // Login validator
 export const loginValidator = validate(
   z.object({
-    body: z
-      .object({
-        email: z
-          .email({
-            message: MESSAGES.EMAIL_MUST_BE_VALID
-          })
-          .trim(),
-        password: z
-          .string({
-            message: MESSAGES.PASSWORD_MUST_BE_STRING
-          })
-          .min(1, MESSAGES.PASSWORD_IS_REQUIRED)
-      })
-      .superRefine(async ({ email, password }, ctx) => {
-        const user = await databaseService.users.findOne({
-          email,
-          password: hashPassword(password)
+    body: z.object({
+      email: z
+        .email({
+          message: MESSAGES.EMAIL_MUST_BE_VALID
         })
-        if (!user) {
-          ctx.addIssue({
-            code: 'custom',
-            message: MESSAGES.USER_DOES_NOT_EXIST,
-            path: ['email']
-          })
-          return
-        }
-        ;(ctx as any).user = user
-      })
+        .trim(),
+      password: z
+        .string({
+          message: MESSAGES.PASSWORD_MUST_BE_STRING
+        })
+        .min(1, MESSAGES.PASSWORD_IS_REQUIRED)
+    })
   })
 )
 
@@ -204,30 +170,13 @@ export const accessTokenValidator = validate(
           message: MESSAGES.ACCESS_TOKEN_IS_REQUIRED
         })
         .min(1, MESSAGES.ACCESS_TOKEN_IS_REQUIRED)
-        .superRefine(async (value, ctx) => {
-          try {
+        .refine(
+          (value) => {
             const [bearer, token] = value.split(' ')
-            if (!token || bearer !== 'Bearer') {
-              ctx.addIssue({
-                code: 'custom',
-                message: 'Invalid token format. Must be: Bearer <token>',
-                path: ['authorization']
-              })
-              return
-            }
-            const decodedToken = await verifyToken({
-              token,
-              secretKey: process.env.JWT_SECRET_ACCESS_TOKEN as string
-            })
-            ;(ctx as any).decoded_authorization = decodedToken
-          } catch (error) {
-            ctx.addIssue({
-              code: 'custom',
-              message: error instanceof TokenExpiredError ? MESSAGES.TOKEN_EXPIRED : MESSAGES.UNAUTHORIZED,
-              path: ['authorization']
-            })
-          }
-        })
+            return bearer === 'Bearer' && token
+          },
+          { message: MESSAGES.INVALID_TOKEN_FORMAT }
+        )
     })
   })
 )
@@ -241,27 +190,19 @@ export const refreshTokenValidator = validate(
           message: MESSAGES.REFRESH_TOKEN_IS_REQUIRED
         })
         .min(1, MESSAGES.REFRESH_TOKEN_IS_REQUIRED)
-        .superRefine(async (value, ctx) => {
-          try {
-            const refreshToken = await databaseService.refreshTokens.findOne({
-              token: value
-            })
-            if (!refreshToken) {
-              ctx.addIssue({
-                code: 'custom',
-                message: MESSAGES.REFRESH_TOKEN_INVALID_OR_REVOKED,
-                path: ['refresh_token']
-              })
-              return
-            }
-          } catch (error) {
-            ctx.addIssue({
-              code: 'custom',
-              message: MESSAGES.UNAUTHORIZED,
-              path: ['refresh_token']
-            })
-          }
+    })
+  })
+)
+
+// Validator cho endpoint /verify-email
+export const verifyEmailValidator = validate(
+  z.object({
+    query: z.object({
+      token: z
+        .string({
+          message: MESSAGES.TOKEN_MUST_BE_STRING
         })
+        .min(1, MESSAGES.TOKEN_IS_REQUIRED)
     })
   })
 )

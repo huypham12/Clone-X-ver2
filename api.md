@@ -1,11 +1,11 @@
 # Auth API
 
-- `POST /api/auth/register` – Đăng ký tài khoản
+- `POST /api/auth/register` – Đăng ký tài khoản + gửi email xác thực luôn
 - `POST /api/auth/login` – Đăng nhập
 - `GET /api/auth/oauth/google` - Đăng nhập với google
 - `POST /api/auth/logout` - Đăng xuất
 - `POST /api/auth/refresh-token` - Cấp lại access token
-- `POST /api/auth/email-verifications` - Gửi link xác nhận đăng kí
+- `POST /api/auth/verify-email` - Xác thực email verify token
 - `POST /api/auth/resend-verify-email` - Gửi lại link xác nhận đăng kí
 - `POST /api/auth/forgot-password` - Tạo token và gửi link xác thực tới email tài khoản muốn đổi mật khẩu
 - `POST /api/auth/verify-forgot-password` - Xác thực token mà người dùng click từ link được gửi
