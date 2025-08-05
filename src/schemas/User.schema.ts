@@ -1,5 +1,5 @@
 import { ObjectId } from 'mongodb'
-import { UserVerifyStatus } from '~/enums'
+import { UserVerifyStatus } from '~/constants/enums'
 
 // USERS
 

@@ -1,29 +1,31 @@
 import express from 'express'
-import databaseService from './config/mongo.service'
-import { getEnvConfig } from './config/getEnvConfig'
-import { ObjectId } from 'mongodb'
-getEnvConfig()
-const app = express()
-databaseService.users.insertOne({
-  _id: new ObjectId(),
-  name: 'Test User',
-  email: 'test@example.com',
-  date_of_birth: new Date(),
-  password: '',
-  created_at: new Date(),
-  updated_at: new Date(),
-  email_verify_token: '',
-  forgot_password_token: '',
-  verify: undefined,
-  twitter_circle: [],
-  bio: '',
-  location: '',
-  website: '',
-  username: '',
-  avatar: '',
-  cover_photo: ''
-})
+import DatabaseService from './config/database.service'
+import { envConfig } from './config/getEnvConfig'
+import { authRouter } from './modules'
+import { errorHandler } from './middleware/error-handler.middleware'
 
-app.listen(3000, () => {
-  console.log('success')
-})
+const main = async () => {
+  const app = express()
+  const PORT = envConfig.app.port || 3000
+
+  const databaseService = new DatabaseService()
+
+  try {
+    await databaseService.connect()
+    console.log('Database connected successfully')
+
+    // Sau khi kết nối DB xong thì mới khởi động app
+    app.use(express.json())
+    app.use('/auth', authRouter)
+    app.use(errorHandler)
+
+    app.listen(PORT, () => {
+      console.log(`Server is running on http://localhost:${PORT}`)
+    })
+  } catch (error) {
+    console.error('Error connecting to the database:', error)
+    process.exit(1) // thoát app, không chạy nữa
+  }
+}
+
+main()

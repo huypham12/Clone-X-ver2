@@ -1,8 +1,0 @@
-export { default as Bookmark } from './Bookmark.schema'
-export { default as Conversation } from './Conversation.schema'
-export { default as Follower } from './Follower.schema'
-export { default as Hashtag } from './Hashtag.schema'
-export { default as Like } from './Like.schema'
-export { default as RefreshToken } from './RefreshToken.schema'
-export { default as Tweet } from './Tweet.schema'
-export { default as User } from './User.schema'

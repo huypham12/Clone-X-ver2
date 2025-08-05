@@ -1,30 +1,30 @@
 // src/services/database.service.ts
 
 import { MongoClient, Db, Collection, ObjectId } from 'mongodb'
-import { config } from 'dotenv'
-import User from '~/models/schemas/User.schema'
-import RefreshToken from '~/models/schemas/RefreshToken.schema'
-import Follower from '~/models/schemas/Follower.schema'
-import Tweet from '~/models/schemas/Tweet.schema'
-import Hashtag from '~/models/schemas/Hashtag.schema'
-import Bookmark from '~/models/schemas/Bookmark.schema'
-import Like from '~/models/schemas/Like.schema'
-import Conversation from '~/models/schemas/Conversation.schema'
-import { getEnvConfig } from '~/config/getEnvConfig'
+import {
+  User,
+  RefreshToken,
+  Bookmark,
+  DirectConversation,
+  Follower,
+  GroupConversation,
+  Hashtag,
+  Like,
+  Message,
+  Tweet
+} from '~/schemas'
+import { envConfig } from './getEnvConfig'
 
-config()
-getEnvConfig()
+const uri = `mongodb+srv://${envConfig.db.username}:${envConfig.db.password}@clone-x-ver2.qhuiotw.mongodb.net/?retryWrites=true&w=majority&appName=Clone-X-ver2`
 
-const uri = `mongodb+srv://${process.env.DB_USERNAME}:${process.env.DB_PASSWORD}@clone-x-ver2.qhuiotw.mongodb.net/?retryWrites=true&w=majority&appName=Clone-X-ver2`
-
-class DatabaseService {
+export default class DatabaseService {
   private client: MongoClient
   private db: Db
   ObjectId = ObjectId
 
   constructor() {
     this.client = new MongoClient(uri)
-    this.db = this.client.db(process.env.DB_NAME)
+    this.db = this.client.db(envConfig.db.name)
   }
 
   async connect() {
@@ -84,41 +84,45 @@ class DatabaseService {
 
   // Collections Accessors
   get users(): Collection<User> {
-    return this.db.collection(process.env.DB_USERS_COLLECTION!)
+    return this.db.collection(envConfig.db.collections.users)
   }
 
   get refreshTokens(): Collection<RefreshToken> {
-    return this.db.collection(process.env.DB_REFRESH_TOKEN_COLLECTION!)
+    return this.db.collection(envConfig.db.collections.refreshToken)
   }
 
   get followers(): Collection<Follower> {
-    return this.db.collection(process.env.DB_FOLLOWERS_COLLECTION!)
+    return this.db.collection(envConfig.db.collections.followers)
   }
 
   get tweets(): Collection<Tweet> {
-    return this.db.collection(process.env.DB_TWEETS_COLLECTION!)
+    return this.db.collection(envConfig.db.collections.tweets)
   }
 
   get hashtags(): Collection<Hashtag> {
-    return this.db.collection(process.env.DB_HASHTAGS_COLLECTION!)
+    return this.db.collection(envConfig.db.collections.hashtags)
   }
 
   get bookmarks(): Collection<Bookmark> {
-    return this.db.collection(process.env.DB_BOOKMARKS_COLLECTION!)
+    return this.db.collection(envConfig.db.collections.bookmarks)
   }
 
   get likes(): Collection<Like> {
-    return this.db.collection(process.env.DB_LIKES_COLLECTION!)
+    return this.db.collection(envConfig.db.collections.likes)
   }
 
-  get conversations(): Collection<Conversation> {
-    return this.db.collection(process.env.DB_CONVERSATIONS_COLLECTION!)
+  get messages(): Collection<Message> {
+    return this.db.collection(envConfig.db.collections.messages)
+  }
+
+  get directConversations(): Collection<DirectConversation> {
+    return this.db.collection(envConfig.db.collections.directConversations)
+  }
+  get groupConversations(): Collection<GroupConversation> {
+    return this.db.collection(envConfig.db.collections.groupConversations)
   }
 
   get test() {
     return this.db.collection('test')
   }
 }
-
-const databaseService = new DatabaseService()
-export default databaseService

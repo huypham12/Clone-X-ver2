@@ -7,69 +7,143 @@ export const isProduction = args.env === 'production'
 
 console.log(`[ENV] Loaded: ${args.env || 'default'} | isProduction: ${isProduction}`)
 
-// Load the appropriate .env file
+// Load environment variables from .env file
 config({
   path: args.env ? `.env.${args.env}` : '.env'
 })
 
-// Helper to safely get env vars
-const getEnvVar = (key: string, required = true): string => {
-  const value = process.env[key]
+// Interface for configuration structure
+interface EnvConfig {
+  app: {
+    port: number
+    host: string
+  }
+  db: {
+    username: string
+    password: string
+    name: string
+    collections: {
+      users: string
+      refreshToken: string
+      followers: string
+      tweets: string
+      hashtags: string
+      bookmarks: string
+      likes: string
+      messages: string
+      directConversations: string
+      groupConversations: string
+    }
+  }
+  google: {
+    clientId: string
+    clientSecret: string
+    redirectUri: string
+  }
+  clientRedirectUri: string
+  secrets: {
+    password: string
+    jwt: {
+      access: string
+      refresh: string
+      emailVerify: string
+      forgotPassword: string
+    }
+  }
+  tokenExpires: {
+    access: string
+    refresh: string
+    emailVerify: string
+    forgotPassword: string
+  }
+  sendGrid: {
+    apiKey: string
+  }
+  resendApiKey: string
+}
+
+// Utility function to get environment variable with validation
+const getEnvVar = (key: string, required = true, defaultValue?: string): string => {
+  const value = process.env[key] || defaultValue
   if (!value && required) {
     throw new Error(`Missing required environment variable: ${key}`)
   }
   return value || ''
 }
 
-// Group of env keys to auto-map (optional – DRY)
-const dbCollections = [
-  'USERS',
-  'REFRESH_TOKEN',
-  'FOLLOWERS',
-  'TWEETS',
-  'HASHTAGS',
-  'BOOKMARKS',
-  'LIKES',
-  'CONVERSATIONS'
-]
-
-// Export config object
-export const getEnvConfig = () => {
-  const DB_COLLECTIONS = Object.fromEntries(
-    dbCollections.map((name) => [name + '_COLLECTION', getEnvVar(`DB_${name}_COLLECTION`)])
-  )
-
-  return {
-    APP: {
-      PORT: parseInt(getEnvVar('PORT')),
-      HOST: getEnvVar('HOST')
-    },
-    DB: {
-      USERNAME: getEnvVar('DB_USERNAME'),
-      PASSWORD: getEnvVar('DB_PASSWORD'),
-      NAME: getEnvVar('DB_NAME'),
-      ...DB_COLLECTIONS
-    },
-    GOOGLE: {
-      CLIENT_ID: getEnvVar('GOOGLE_CLIENT_ID'),
-      CLIENT_SECRET: getEnvVar('GOOGLE_CLIENT_SECRET'),
-      REDIRECT_URI: getEnvVar('GOOGLE_REDIRECT_URI')
-    },
-    CLIENT_REDIRECT_URI: getEnvVar('CLIENT_REDIRECT_URI'),
-    SECRETS: {
-      PASSWORD: getEnvVar('PASSWORD_SECRET'),
-      JWT: {
-        ACCESS: getEnvVar('JWT_SECRET_ACCESS_TOKEN'),
-        REFRESH: getEnvVar('JWT_SECRET_REFRESH_TOKEN'),
-        EMAIL_VERIFY: getEnvVar('JWT_SECRET_EMAIL_VERIFY_TOKEN'),
-        FORGOT_PASSWORD: getEnvVar('JWT_SECRET_FORGOT_PASSWORD_TOKEN')
-      }
-    },
-    TOKEN_EXPIRES: {
-      ACCESS: getEnvVar('ACCESS_TOKEN_EXPIRES_IN'),
-      REFRESH: getEnvVar('REFRESH_TOKEN_EXPIRES_IN'),
-      EMAIL_VERIFY: getEnvVar('EMAIL_VERIFY_TOKEN_EXIPIRES_IN'),
-      FORGOT_PASSWORD: getEnvVar('FORGOT_PASSWORD_TOKEN_EXIPIRES_IN')
-    }
-  }
+// Database collections configuration
+const dbCollections = {
+  USERS: 'DB_USERS_COLLECTION',
+  REFRESH_TOKEN: 'DB_REFRESH_TOKEN_COLLECTION',
+  FOLLOWERS: 'DB_FOLLOWERS_COLLECTION',
+  TWEETS: 'DB_TWEETS_COLLECTION',
+  HASHTAGS: 'DB_HASHTAGS_COLLECTION',
+  BOOKMARKS: 'DB_BOOKMARKS_COLLECTION',
+  LIKES: 'DB_LIKES_COLLECTION',
+  MESSAGES: 'DB_MESSAGES_COLLECTION',
+  DIRECT_CONVERSATIONS: 'DB_DIRECT_CONVERSATIONS_COLLECTION',
+  GROUP_CONVERSATIONS: 'DB_GROUP_CONVERSATIONS_COLLECTION'
 }
+
+// Export configuration
+export const envConfig: EnvConfig = {
+  app: {
+    port: parseInt(getEnvVar('PORT', true, '3000')),
+    host: getEnvVar('HOST', true, 'http://localhost:3000')
+  },
+  db: {
+    username: getEnvVar('DB_USERNAME'),
+    password: getEnvVar('DB_PASSWORD'),
+    name: getEnvVar('DB_NAME'),
+    collections: {
+      users: getEnvVar(dbCollections.USERS),
+      refreshToken: getEnvVar(dbCollections.REFRESH_TOKEN),
+      followers: getEnvVar(dbCollections.FOLLOWERS),
+      tweets: getEnvVar(dbCollections.TWEETS),
+      hashtags: getEnvVar(dbCollections.HASHTAGS),
+      bookmarks: getEnvVar(dbCollections.BOOKMARKS),
+      likes: getEnvVar(dbCollections.LIKES),
+      messages: getEnvVar(dbCollections.MESSAGES),
+      directConversations: getEnvVar(dbCollections.DIRECT_CONVERSATIONS),
+      groupConversations: getEnvVar(dbCollections.GROUP_CONVERSATIONS)
+    }
+  },
+  google: {
+    clientId: getEnvVar('GOOGLE_CLIENT_ID'),
+    clientSecret: getEnvVar('GOOGLE_CLIENT_SECRET'),
+    redirectUri: getEnvVar('GOOGLE_REDIRECT_URI')
+  },
+  clientRedirectUri: getEnvVar('CLIENT_REDIRECT_URI'),
+  secrets: {
+    password: getEnvVar('PASSWORD_SECRET'),
+    jwt: {
+      access: getEnvVar('JWT_SECRET_ACCESS_TOKEN'),
+      refresh: getEnvVar('JWT_SECRET_REFRESH_TOKEN'),
+      emailVerify: getEnvVar('JWT_SECRET_EMAIL_VERIFY_TOKEN'),
+      forgotPassword: getEnvVar('JWT_SECRET_FORGOT_PASSWORD_TOKEN')
+    }
+  },
+  tokenExpires: {
+    access: getEnvVar('ACCESS_TOKEN_EXPIRES_IN'),
+    refresh: getEnvVar('REFRESH_TOKEN_EXPIRES_IN'),
+    emailVerify: getEnvVar('EMAIL_VERIFY_TOKEN_EXPIRES_IN'),
+    forgotPassword: getEnvVar('FORGOT_PASSWORD_TOKEN_EXPIRES_IN')
+  },
+  sendGrid: {
+    apiKey: getEnvVar('SENDGRID_API_KEY')
+  },
+  resendApiKey: getEnvVar('RESEND_API_KEY')
+}
+
+// Optional: Validate critical configurations on initialization
+;(() => {
+  try {
+    // Ensure critical environment variables are present
+    const criticalVars = ['PORT', 'HOST', 'DB_NAME', 'DB_USERNAME', 'DB_PASSWORD']
+    criticalVars.forEach((key) => getEnvVar(key))
+    console.log('[ENV] All critical environment variables loaded successfully.')
+  } catch (error) {
+    console.error('[ENV] Configuration validation failed:', error)
+    process.exit(1)
+  }
+})()

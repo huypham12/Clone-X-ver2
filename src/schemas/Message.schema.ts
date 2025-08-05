@@ -1,5 +1,5 @@
 import { ObjectId } from 'mongodb'
-import { Media } from '~/enums'
+import { Media } from '~/constants/enums'
 
 type ConversationType = 'direct' | 'group'
 
@@ -16,14 +16,14 @@ interface MessageType {
 }
 
 export default class Message {
-  _id: ObjectId
+  _id?: ObjectId
   conversation_id: ObjectId
   conversation_type: ConversationType
   sender_id: ObjectId
   content: string
   media: Media[]
-  send_at: Date
-  read_by: ObjectId[]
+  send_at?: Date
+  read_by?: ObjectId[]
   reply_to_message_id?: ObjectId
 
   constructor(data: MessageType) {
