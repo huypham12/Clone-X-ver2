@@ -9,7 +9,7 @@
 - `POST /api/auth/resend-verify-email` - Gửi lại link xác nhận đăng kí
 - `POST /api/auth/forgot-password` - Tạo token và gửi link xác thực tới email tài khoản muốn đổi mật khẩu
 - `POST /api/auth/verify-forgot-password` - Xác thực token mà người dùng click từ link được gửi
-- `POST /api/auth/reset-password` - Đổi mật khẩu mới
+- `POST /api/auth/reset-password` - Xác thực token và đổi mật khẩu mới
 
 # User API
 

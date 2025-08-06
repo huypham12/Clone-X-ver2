@@ -1,11 +1,10 @@
-import { createHash } from 'crypto'
+import bcrypt from 'bcrypt'
 
-import { envConfig } from '~/config/getEnvConfig'
-
-export function sha256(content: string) {
-  return createHash('sha256').update(content).digest('hex')
+export async function hashPassword(password: string) {
+  const saltRounds = 10
+  return await bcrypt.hash(password, saltRounds)
 }
 
-export function hashPassword(password: string) {
-  return sha256(password + envConfig.secrets.password)
+export async function comparePassword(password: string, hashedPassword: string) {
+  return await bcrypt.compare(password, hashedPassword)
 }

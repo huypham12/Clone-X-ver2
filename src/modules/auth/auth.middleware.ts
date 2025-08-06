@@ -7,6 +7,7 @@ import DatabaseService from '~/config/database.service'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import { envConfig } from '~/config/getEnvConfig'
 import { TokenPayload } from '~/types/token-payload.type'
+import { ObjectId } from 'mongodb'
 
 const databaseService = new DatabaseService()
 
@@ -40,18 +41,44 @@ export const authenticateAccessToken = async (req: Request, res: Response, next:
 // Middleware xác thực email verify token
 export const authenticateEmailVerifyToken = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { token } = req.query
+    const { token } = req.body
     if (typeof token !== 'string') {
       return next(new HttpError(MESSAGES.TOKEN_INVALID_FORMAT, 400))
     }
 
     const decodedToken = await verifyToken({
       token,
-      secretKey: process.env.JWT_SECRET_EMAIL_VERIFY_TOKEN as string
+      secretKey: envConfig.secrets.jwt.emailVerify as string
     })
 
     // Gắn decoded token vào request object thông qua global property
     req.decoded_email_verify_token = decodedToken as TokenPayload
+    next()
+  } catch (error) {
+    return next(new HttpError(MESSAGES.UNAUTHORIZED, 401))
+  }
+}
+
+export const authenticateForgotPasswordToken = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { token } = req.body
+    if (typeof token !== 'string') {
+      return next(new HttpError(MESSAGES.TOKEN_INVALID_FORMAT, 400))
+    }
+
+    const decodedToken = await verifyToken({
+      token,
+      secretKey: envConfig.secrets.jwt.forgotPassword as string
+    })
+
+    const user = await databaseService.users.findOne({ _id: new ObjectId(decodedToken.user_id) })
+    const forgot_password_token = user?.forgot_password_token
+    if (forgot_password_token === '') {
+      return next(new HttpError(MESSAGES.FORGOT_PASSWORD_TOKEN_INVALID, HTTP_STATUS.UNAUTHORIZED))
+    }
+
+    // Gắn decoded token vào request object thông qua global property
+    req.decoded_forgot_password_token = decodedToken as TokenPayload
     next()
   } catch (error) {
     return next(new HttpError(MESSAGES.UNAUTHORIZED, 401))

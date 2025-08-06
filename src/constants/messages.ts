@@ -13,8 +13,11 @@ export const MESSAGES = {
   INVALID_PASSWORD: 'Invalid password',
   USER_ALREADY_VERIFIED: 'User already verified',
   EMAIL_ALREADY_VERIFIED: 'Email already verified',
+  FORGOT_PASSWORD_TOKEN_INVALID: 'Forgot password token is invalid',
 
   // success messages
+  PASSWORD_RESET_SUCCESS: 'Password reset success',
+  FORGOT_PASSWORD_SUCCESS: 'Forgot password success, please check your email to reset your password',
   RESEND_VERIFY_EMAIL_SUCCESS: 'Resend verify email success',
   VERIFY_EMAIL_SUCCESS: 'Verify email success',
   REFRESH_TOKEN_SUCCESS: 'Refresh token success',

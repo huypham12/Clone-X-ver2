@@ -7,7 +7,8 @@ import {
   RegisterResponseDto,
   LogoutResponseDto,
   RefreshTokenResponseDto,
-  VerifyEmailResponseDto
+  VerifyEmailResponseDto,
+  ResetPasswordResponseDto
 } from '../dto'
 import { ObjectId } from 'mongodb'
 import { RefreshToken, User } from '~/schemas'
@@ -15,11 +16,12 @@ import { HTTP_STATUS } from '~/constants/httpStatus'
 import { MESSAGES } from '~/constants/messages'
 import { TokenType, UserVerifyStatus } from '~/constants/enums'
 import { signToken, verifyToken } from '~/utils/jwt'
-import { hashPassword } from '~/utils/crypto'
+import { comparePassword, hashPassword } from '~/utils/crypto'
 import { envConfig } from '~/config/getEnvConfig'
 import { HttpError } from '~/common/http-error'
 import { getVerifyEmailTemplate } from '~/utils/email-templete'
 import { EmailService } from './email.service'
+import { TokenPayload } from '~/types/token-payload.type'
 
 export class AuthService {
   constructor(
@@ -81,6 +83,22 @@ export class AuthService {
     })
   }
 
+  private signForgotPasswordToken({ user_id, verify }: { user_id: string; verify: UserVerifyStatus }) {
+    return signToken({
+      payload: {
+        user_id,
+        token_type: TokenType.ForgotPasswordToken,
+        verify: UserVerifyStatus.Unverified
+      },
+      secretKey: envConfig.secrets.jwt.forgotPassword as string,
+      options: {
+        algorithm: 'HS256',
+        // cái này nó là dạng chuỗi đặc biệt để định dạng Date
+        expiresIn: envConfig.tokenExpires.forgotPassword as `${number}${'ms' | 's' | 'm' | 'h' | 'd' | 'w' | 'y'}`
+      }
+    })
+  }
+
   private signAccessAndRefreshToken({
     user_id,
     verify,
@@ -93,10 +111,10 @@ export class AuthService {
     return Promise.all([this.signAccessToken({ user_id, verify }), this.signRefreshToken({ user_id, verify, exp })])
   }
 
-  private decodeRefreshToken(token: string) {
+  private decodeToken(token: string, secretKey: string) {
     return verifyToken({
       token,
-      secretKey: envConfig.secrets.jwt.refresh as string
+      secretKey
     })
   }
 
@@ -116,9 +134,35 @@ export class AuthService {
       user_id: user._id.toString(),
       verify: UserVerifyStatus.Unverified
     })
-    await this.databaseService.users.updateOne({ _id: user._id }, { email_verify_token })
+    await this.databaseService.users.updateOne(
+      { _id: user._id },
+      { email_verify_token, $currentDate: { updated_at: true } }
+    )
 
     return email_verify_token
+  }
+
+  forgotPassword = async (email: string) => {
+    const user = await this.databaseService.users.findOne({ email })
+
+    if (!user) {
+      throw new HttpError(MESSAGES.USER_DOES_NOT_EXIST, 401)
+    }
+
+    // tạo forgot password token, cập nhật lại db
+    const forgot_password_token = await this.signForgotPasswordToken({
+      user_id: user._id.toString(),
+      verify: UserVerifyStatus.Unverified
+    })
+    await this.databaseService.users.updateOne(
+      { _id: user._id },
+      {
+        $set: { forgot_password_token },
+        $currentDate: { updated_at: true }
+      }
+    )
+
+    return forgot_password_token
   }
 
   checkEmailExists = async (email: string) => {
@@ -139,12 +183,15 @@ export class AuthService {
     })
 
     // send email verify token cho người dùng chờ tạo được aws thì làm
-    await this.emailService.sendEmail({
-      to: payload.email,
-      subject: 'Xác minh địa chỉ email của bạn',
-      text: `Chào bạn, vui lòng xác minh địa chỉ email của bạn bằng cách nhấn vào liên kết sau: http://localhost:3000/verify-email?token=${email_verify_token}`,
-      html: getVerifyEmailTemplate(email_verify_token)
-    })
+    const html = getVerifyEmailTemplate(email_verify_token)
+    await this.emailService.sendEmail(
+      {
+        to: payload.email,
+        subject: 'Xác nhận địa chỉ email của bạn',
+        html
+      },
+      MESSAGES.VERIFY_EMAIL_SUCCESS
+    )
 
     // tạo token trả về
     const [access_token, refresh_token] = await this.signAccessAndRefreshToken({
@@ -153,7 +200,7 @@ export class AuthService {
     })
 
     // lưu refresh token vào db
-    const { exp } = await this.decodeRefreshToken(refresh_token)
+    const { exp } = await this.decodeToken(refresh_token, envConfig.secrets.jwt.refresh as string)
     if (!exp) {
       throw new HttpError(MESSAGES.INVALID_REFRESH_TOKEN, HTTP_STATUS.BAD_REQUEST)
     }
@@ -172,7 +219,7 @@ export class AuthService {
         ...payload,
         _id: user_id,
         date_of_birth: new Date(payload.date_of_birth),
-        password: hashPassword(payload.password),
+        password: await hashPassword(payload.password),
         username: `user${user_id.toString()}`,
         email_verify_token: email_verify_token
       })
@@ -196,8 +243,9 @@ export class AuthService {
       throw new HttpError(MESSAGES.USER_NOT_FOUND, HTTP_STATUS.NOT_FOUND)
     }
 
+    const isMatch = await comparePassword(payload.password, user.password)
     // kiểm tra mật khẩu
-    if (user.password !== hashPassword(payload.password)) {
+    if (!isMatch) {
       throw new HttpError(MESSAGES.INVALID_PASSWORD, HTTP_STATUS.UNAUTHORIZED)
     }
 
@@ -213,7 +261,7 @@ export class AuthService {
     })
 
     // lưu refresh token vào db
-    const { user_id, exp } = await this.decodeRefreshToken(refresh_token)
+    const { user_id, exp } = await this.decodeToken(refresh_token, envConfig.secrets.jwt.refresh as string)
 
     if (!exp) {
       throw new HttpError(MESSAGES.INVALID_REFRESH_TOKEN, HTTP_STATUS.BAD_REQUEST)
@@ -300,5 +348,36 @@ export class AuthService {
       }
     )
     return new VerifyEmailResponseDto(MESSAGES.VERIFY_EMAIL_SUCCESS)
+  }
+
+  resetPassword = async ({
+    token,
+    new_password
+  }: {
+    token: string
+    new_password: string
+  }): Promise<ResetPasswordResponseDto> => {
+    const hashedPassword = await hashPassword(new_password)
+    console.log(token)
+    const { user_id, verify } = (await this.decodeToken(
+      token,
+      envConfig.secrets.jwt.forgotPassword as string
+    )) as TokenPayload
+    await this.databaseService.users.updateOne(
+      { forgot_password_token: token },
+      {
+        $set: {
+          password: hashedPassword,
+          forgot_password_token: ''
+        },
+        $currentDate: { updated_at: true }
+      }
+    )
+
+    const [access_token, refresh_token] = await this.signAccessAndRefreshToken({
+      user_id: user_id.toString(),
+      verify: verify || UserVerifyStatus.Unverified
+    })
+    return new ResetPasswordResponseDto({ access_token, refresh_token })
   }
 }

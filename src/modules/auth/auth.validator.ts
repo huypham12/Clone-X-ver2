@@ -197,7 +197,7 @@ export const refreshTokenValidator = validate(
 // Validator cho endpoint /verify-email
 export const verifyEmailValidator = validate(
   z.object({
-    query: z.object({
+    body: z.object({
       token: z
         .string({
           message: MESSAGES.TOKEN_MUST_BE_STRING
