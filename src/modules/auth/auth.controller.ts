@@ -11,7 +11,7 @@ import {
   ResetPasswordBodyDto,
   VerifyEmailBodyDto
 } from './dto'
-import { PostHandler, GetHandler } from '~/types/controller-handler.type'
+import { PostHandler } from '~/types/controller-handler.type'
 import { LogoutBodyDto, LogoutResponseDto } from './dto/logout.dto'
 import { RefreshTokenBodyDto, RefreshTokenResponseDto } from './dto/refresh-token.dto'
 import { EmailService } from './services/email.service'

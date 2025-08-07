@@ -1,7 +1,7 @@
 import express from 'express'
 import DatabaseService from './config/database.service'
 import { envConfig } from './config/getEnvConfig'
-import { authRouter } from './modules'
+import { authRouter, userRouter } from './modules'
 import { errorHandler } from './middleware/error-handler.middleware'
 
 const main = async () => {
@@ -17,6 +17,7 @@ const main = async () => {
     // Sau khi kết nối DB xong thì mới khởi động app
     app.use(express.json())
     app.use('/auth', authRouter)
+    app.use('/user', userRouter)
     app.use(errorHandler)
 
     app.listen(PORT, () => {

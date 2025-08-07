@@ -5,6 +5,7 @@ import { MESSAGES } from '~/constants/messages'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import { TokenPayload } from '~/types/token-payload.type'
 import { z } from 'zod'
+import { TokenType, UserVerifyStatus } from '~/constants/enums'
 
 // Promisify jwt.sign và jwt.verify để tránh callback
 const signAsync = promisify<string | Buffer | object, string, SignOptions | undefined, string>(jwt.sign)
@@ -37,6 +38,47 @@ export const signToken = async ({
   } catch (error) {
     throw new HttpError(MESSAGES.JWT_SIGN_FAILED, HTTP_STATUS.INTERNAL_SERVER_ERROR)
   }
+}
+
+export const signTokenByType = async ({
+  user_id,
+  verify,
+  token_type,
+  secretKey,
+  expiresIn,
+  exp
+}: {
+  user_id: string
+  verify: UserVerifyStatus
+  token_type: TokenType
+  secretKey: string
+  expiresIn?: string
+  exp?: number
+}): Promise<string> => {
+  if (!secretKey) {
+    throw new HttpError(`Missing secret key for ${token_type}`, HTTP_STATUS.INTERNAL_SERVER_ERROR)
+  }
+  if (expiresIn && !/^\d+(ms|s|m|h|d|w|y)$/.test(expiresIn)) {
+    throw new HttpError(`Invalid expiresIn format for ${token_type}`, HTTP_STATUS.INTERNAL_SERVER_ERROR)
+  }
+
+  const payload: TokenPayload = {
+    user_id,
+    token_type,
+    verify,
+    ...(exp && { exp })
+  }
+
+  const options: SignOptions = { algorithm: 'HS256' }
+  if (!exp && expiresIn) {
+    options.expiresIn = expiresIn as `${number}${'ms' | 's' | 'm' | 'h' | 'd' | 'w' | 'y'}`
+  }
+
+  return signToken({
+    payload,
+    secretKey,
+    options
+  })
 }
 
 // Hàm verifyToken

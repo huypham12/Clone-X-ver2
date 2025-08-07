@@ -15,7 +15,7 @@ import { RefreshToken, User } from '~/schemas'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import { MESSAGES } from '~/constants/messages'
 import { TokenType, UserVerifyStatus } from '~/constants/enums'
-import { signToken, verifyToken } from '~/utils/jwt'
+import { signTokenByType, verifyToken } from '~/utils/jwt'
 import { comparePassword, hashPassword } from '~/utils/crypto'
 import { envConfig } from '~/config/getEnvConfig'
 import { HttpError } from '~/common/http-error'
@@ -29,73 +29,52 @@ export class AuthService {
     private readonly emailService: EmailService
   ) {}
 
-  private signAccessToken({ user_id, verify }: { user_id: string; verify: UserVerifyStatus }) {
-    return signToken({
-      payload: {
-        user_id,
-        token_type: TokenType.AccessToken,
-        verify
-      },
-      secretKey: envConfig.secrets.jwt.access as string,
-      options: {
-        algorithm: 'HS256',
-        // cái này nó là dạng chuỗi đặc biệt để định dạng Date
-        expiresIn: envConfig.tokenExpires.access as `${number}${'ms' | 's' | 'm' | 'h' | 'd' | 'w' | 'y'}`
-      }
-    })
-  }
-
-  private signRefreshToken({ user_id, verify, exp }: { user_id: string; verify: UserVerifyStatus; exp?: number }) {
-    const payload = {
+  private signAccessToken({ user_id, verify }: { user_id: string; verify: UserVerifyStatus }): Promise<string> {
+    return signTokenByType({
       user_id,
-      token_type: TokenType.RefreshToken,
       verify,
-      ...(exp && { exp }) // chỉ nhận giây
-    }
+      token_type: TokenType.AccessToken,
+      secretKey: envConfig.secrets.jwt.access as string,
+      expiresIn: envConfig.tokenExpires.access
+    })
+  }
 
-    return signToken({
-      payload,
+  private signRefreshToken({
+    user_id,
+    verify,
+    exp
+  }: {
+    user_id: string
+    verify: UserVerifyStatus
+    exp?: number
+  }): Promise<string> {
+    return signTokenByType({
+      user_id,
+      verify,
+      token_type: TokenType.RefreshToken,
       secretKey: envConfig.secrets.jwt.refresh as string,
-      options: {
-        algorithm: 'HS256',
-        ...(exp
-          ? {}
-          : {
-              expiresIn: process.env.REFRESH_TOKEN_EXPIRES_IN as `${number}${'ms' | 's' | 'm' | 'h' | 'd' | 'w' | 'y'}`
-            }) // khi tạo mới thì cần có exp, còn khi refresh thì không cần
-      }
+      expiresIn: exp ? undefined : envConfig.tokenExpires.refresh,
+      exp
     })
   }
 
-  private signEmailVerifyToken({ user_id, verify }: { user_id: string; verify: UserVerifyStatus }) {
-    return signToken({
-      payload: {
-        user_id,
-        token_type: TokenType.EmailVerifyToken,
-        verify: UserVerifyStatus.Unverified
-      },
+  private signEmailVerifyToken({ user_id, verify }: { user_id: string; verify: UserVerifyStatus }): Promise<string> {
+    return signTokenByType({
+      user_id,
+      verify,
+      token_type: TokenType.EmailVerifyToken,
       secretKey: envConfig.secrets.jwt.emailVerify as string,
-      options: {
-        algorithm: 'HS256',
-        // cái này nó là dạng chuỗi đặc biệt để định dạng Date
-        expiresIn: envConfig.tokenExpires.emailVerify as `${number}${'ms' | 's' | 'm' | 'h' | 'd' | 'w' | 'y'}`
-      }
+      expiresIn: envConfig.tokenExpires.emailVerify
     })
   }
 
-  private signForgotPasswordToken({ user_id, verify }: { user_id: string; verify: UserVerifyStatus }) {
-    return signToken({
-      payload: {
-        user_id,
-        token_type: TokenType.ForgotPasswordToken,
-        verify: UserVerifyStatus.Unverified
-      },
+  private signForgotPasswordToken({ user_id, verify }: { user_id: string; verify: UserVerifyStatus }): Promise<string> {
+    return signTokenByType({
+      user_id,
+      verify,
+      token_type: TokenType.ForgotPasswordToken,
       secretKey: envConfig.secrets.jwt.forgotPassword as string,
-      options: {
-        algorithm: 'HS256',
-        // cái này nó là dạng chuỗi đặc biệt để định dạng Date
-        expiresIn: envConfig.tokenExpires.forgotPassword as `${number}${'ms' | 's' | 'm' | 'h' | 'd' | 'w' | 'y'}`
-      }
+      expiresIn: envConfig.tokenExpires.forgotPassword
     })
   }
 
@@ -107,7 +86,7 @@ export class AuthService {
     user_id: string
     verify: UserVerifyStatus
     exp?: number
-  }) {
+  }): Promise<[string, string]> {
     return Promise.all([this.signAccessToken({ user_id, verify }), this.signRefreshToken({ user_id, verify, exp })])
   }
 
@@ -172,6 +151,7 @@ export class AuthService {
     }
   }
 
+  // hiện tại thì đăng ký chưa cho nhập luôn username, chờ làm được cái search nhanh thì mới cho nhập được vì check username đã tồn tại chưa khá lâu
   register = async (payload: RegisterBodyDto): Promise<RegisterResponseDto> => {
     // sau khi đăng ký thì thêm vào db và tạo các token gửi về cho người dùng
     const user_id = new ObjectId()
@@ -302,7 +282,7 @@ export class AuthService {
     exp: number
   }): Promise<RefreshTokenResponseDto> => {
     //tạo token mới để trả về
-    const [refreshToken, accesToken] = await Promise.all([
+    const [refreshToken, accessToken] = await Promise.all([
       this.signRefreshToken({ user_id, verify, exp }), // vẫn cùng exp với refresh_token cũ
       this.signAccessToken({ user_id, verify }),
       this.databaseService.refreshTokens.deleteOne({ token: refresh_token })
@@ -311,7 +291,7 @@ export class AuthService {
     await this.databaseService.refreshTokens.insertOne(
       new RefreshToken({ user_id: new ObjectId(user_id), token: refreshToken, exp })
     )
-    return new RefreshTokenResponseDto({ access_token: accesToken, refresh_token: refreshToken })
+    return new RefreshTokenResponseDto({ access_token: accessToken, refresh_token: refreshToken })
   }
 
   verifyEmail = async ({

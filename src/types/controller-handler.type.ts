@@ -2,6 +2,7 @@ import { Request, Response } from 'express'
 import { ParamsDictionary } from 'express-serve-static-core'
 
 /**
+ * Mấy cái này sau build ra js thì bay hết, có để code chặt hơn thôi:)
  * ControllerHandler là generic type dành cho các controller (route handler).
  * Giúp định nghĩa rõ ràng kiểu cho request và response của từng endpoint.
  *

@@ -1,7 +1,7 @@
 import { TokenPayload } from './types/token-payload.type'
-import { User } from '~/schemas/user.schema'
-import { Tweet } from '~/schemas/tweet.schema'
+import { User, Tweet } from './schemas'
 
+// mở rộng interface Request của express để thêm các trường tùy chỉnh, không ví dụ nếu dùng req.body.decoded_email_verify_token sẽ báo lỗi
 declare module 'express' {
   interface Request {
     user?: User

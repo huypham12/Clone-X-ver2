@@ -4,7 +4,7 @@
     "moduleResolution": "NodeNext",
     "target": "ES2023", // Target output cho code
     "outDir": "dist", // Đường dẫn output cho thư mục build
-    "esModuleInterop": true,
+    "esModuleInterop": true, // cho phép sử dụng import/export với CommonJS
     "strict": true /* Enable all strict type-checking options. */,
     "skipLibCheck": true /* Skip type checking all .d.ts files. */,
     "baseUrl": ".", // Đường dẫn base cho các import
@@ -13,5 +13,5 @@
     }
   },
   "files": ["src/type.d.ts"], // Các file dùng để defined global type cho dự án
-  "include": ["src/**/*", "docs/documentation.js"] // Đường dẫn include cho các file cần build
+  "include": ["src/**/*", "docs/documentation.js"] // Chỉ định các file cần build
 }
