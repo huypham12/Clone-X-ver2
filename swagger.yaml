@@ -1,0 +1,655 @@
+openapi: 3.0.4
+info:
+  title: Clone X API
+  description: |-
+    API documentation for Clone X - A Twitter-like social media platform.
+
+    This API provides endpoints for authentication, user management, tweets, and messaging functionality.
+  termsOfService: https://swagger.io/terms/
+  contact:
+    email: apiteam@swagger.io
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+  version: 1.0.0
+externalDocs:
+  description: Find out more about Swagger
+  url: https://swagger.io
+servers:
+  - url: http://localhost:3000
+    description: Development server
+  - url: https://your-production-url.com
+    description: Production server
+tags:
+  - name: auth
+    description: Authentication operations
+  - name: user
+    description: User management operations
+  - name: tweet
+    description: Tweet operations
+  - name: media
+    description: Media upload operations
+  - name: conversation
+    description: Conversation operations
+  - name: message
+    description: Message operations
+
+paths:
+  /api/auth/register:
+    post:
+      tags:
+        - auth
+      summary: Register a new user account
+      description: Register a new user account and send email verification
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/AuthTokenResponse"
+                  - type: object
+                    properties:
+                      statusCode:
+                        example: 201
+                      message:
+                        example: "Register success, please check your email to verify your account"
+        "400":
+          description: Bad request - Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: User already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/login:
+    post:
+      tags:
+        - auth
+      summary: User login
+      description: Authenticate user with email/username and password
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/AuthTokenResponse"
+                  - type: object
+                    properties:
+                      statusCode:
+                        example: 201
+                      message:
+                        example: "Login success"
+        "400":
+          description: Bad request - Validation error or user does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/logout:
+    post:
+      tags:
+        - auth
+      summary: User logout
+      description: Logout user and invalidate tokens
+      operationId: logout
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshTokenRequest"
+      responses:
+        "200":
+          description: Logout successful
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      message:
+                        example: "Logout success"
+        "400":
+          description: Bad request - Invalid refresh token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized - Invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/auth/refresh-token:
+    post:
+      tags:
+        - auth
+      summary: Refresh access token
+      description: Get new access token using refresh token
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshTokenRequest"
+      responses:
+        "201":
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/AuthTokenResponse"
+                  - type: object
+                    properties:
+                      statusCode:
+                        example: 201
+                      message:
+                        example: "Refresh token success"
+        "400":
+          description: Invalid refresh token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized - Token expired or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/verify-email:
+    post:
+      tags:
+        - auth
+      summary: Verify email address
+      description: Verify user email using verification token
+      operationId: verifyEmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenRequest"
+      responses:
+        "200":
+          description: Email verified successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      message:
+                        example: "Verify email success"
+        "400":
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/resend-verify-email:
+    post:
+      tags:
+        - auth
+      summary: Resend email verification
+      description: Resend email verification link
+      operationId: resendVerifyEmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailRequest"
+      responses:
+        "200":
+          description: Verification email sent
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      message:
+                        example: "Resend verify email success"
+        "400":
+          description: Bad request - Invalid email or user not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Email does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/forgot-password:
+    post:
+      tags:
+        - auth
+      summary: Request password reset
+      description: Send password reset link to user email
+      operationId: forgotPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailRequest"
+      responses:
+        "200":
+          description: Password reset email sent
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      message:
+                        example: "Forgot password success, please check your email to reset your password"
+        "400":
+          description: Bad request - Invalid email
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/verify-forgot-password:
+    post:
+      tags:
+        - auth
+      summary: Verify password reset token
+      description: Verify password reset token from email link
+      operationId: verifyForgotPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenRequest"
+      responses:
+        "200":
+          description: Token verified successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      message:
+                        example: "Verify forgot password token success"
+        "400":
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized - Token invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/reset-password:
+    post:
+      tags:
+        - auth
+      summary: Reset password
+      description: Reset user password using verified token
+      operationId: resetPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResetPasswordRequest"
+      responses:
+        "200":
+          description: Password reset successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/AuthTokenResponse"
+                  - type: object
+                    properties:
+                      statusCode:
+                        example: 200
+                      message:
+                        example: "Password reset success"
+        "400":
+          description: Invalid token or password validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized - Token invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/change-password:
+    patch:
+      tags:
+        - auth
+      summary: Change password
+      description: Change user password (requires authentication)
+      operationId: changePassword
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordRequest"
+      responses:
+        "200":
+          description: Password changed successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      message:
+                        example: "Change password success"
+        "400":
+          description: Bad request - Validation error or incorrect old password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized - Invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Forbidden - User not verified
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  schemas:
+    User:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: 507f1f77bcf86cd799439011
+        name:
+          type: string
+          example: John Doe
+        email:
+          type: string
+          format: email
+          example: user@example.com
+        username:
+          type: string
+          example: johndoe
+        bio:
+          type: string
+          example: Software developer
+        avatar:
+          type: string
+          example: https://example.com/avatar.jpg
+        cover_photo:
+          type: string
+          example: https://example.com/cover.jpg
+        date_of_birth:
+          type: string
+          format: date-time
+          example: 1990-01-01T00:00:00.000Z
+        location:
+          type: string
+          example: New York, USA
+        website:
+          type: string
+          example: https://johndoe.com
+        verify:
+          type: integer
+          example: 1
+          description: User verification status (0=Unverified, 1=Verified, 2=Banned)
+        created_at:
+          type: string
+          format: date-time
+          example: 2023-01-01T00:00:00.000Z
+        updated_at:
+          type: string
+          format: date-time
+          example: 2023-01-01T00:00:00.000Z
+
+    # Base response schemas
+    SuccessResponse:
+      type: object
+      properties:
+        statusCode:
+          type: integer
+          example: 200
+        message:
+          type: string
+          example: "Operation successful"
+      required:
+        - statusCode
+        - message
+
+    # Token related schemas
+    TokenData:
+      type: object
+      properties:
+        access_token:
+          type: string
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjc2MDU5NGRjMzQ4YzIzMzEwMzQ2YjkwIiwidG9rZW5fdHlwZSI6ImFjY2Vzc190b2tlbiIsInZlcmlmeSI6MSwiaWF0IjoxNzM0Mzc0ODA1LCJleHAiOjE3MzQzNzU3MDV9.xyz123"
+        refresh_token:
+          type: string
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjc2MDU5NGRjMzQ4YzIzMzEwMzQ2YjkwIiwidG9rZW5fdHlwZSI6InJlZnJlc2hfdG9rZW4iLCJ2ZXJpZnkiOjEsImlhdCI6MTczNDM3NDgwNSwiZXhwIjoxNzM3MDUzMjA1fQ.abc456"
+      required:
+        - access_token
+        - refresh_token
+
+    AuthTokenResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/TokenData"
+
+    # Request schemas
+    RegisterRequest:
+      type: object
+      required:
+        - name
+        - email
+        - password
+        - confirm_password
+        - date_of_birth
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: "John Doe"
+          description: "User's full name"
+        email:
+          type: string
+          format: email
+          example: "user@example.com"
+          description: "User's email address"
+        password:
+          type: string
+          minLength: 6
+          example: "P@ssw0rd123"
+          description: "Password must contain at least 6 characters with uppercase, lowercase, number and special character"
+        confirm_password:
+          type: string
+          minLength: 6
+          example: "P@ssw0rd123"
+          description: "Must match the password field"
+        date_of_birth:
+          type: string
+          pattern: '^\d{4}-\d{2}-\d{2}$'
+          example: "1990-01-01"
+          description: "Date of birth in YYYY-MM-DD format"
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          example: "user@example.com"
+        password:
+          type: string
+          example: "P@ssw0rd123"
+
+    RefreshTokenRequest:
+      type: object
+      required:
+        - refresh_token
+      properties:
+        refresh_token:
+          type: string
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjc2MDU5NGRjMzQ4YzIzMzEwMzQ2YjkwIiwidG9rZW5fdHlwZSI6InJlZnJlc2hfdG9rZW4iLCJ2ZXJpZnkiOjEsImlhdCI6MTczNDM3NDgwNSwiZXhwIjoxNzM3MDUzMjA1fQ.abc456"
+
+    EmailRequest:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+          example: "user@example.com"
+
+    TokenRequest:
+      type: object
+      required:
+        - token
+      properties:
+        token:
+          type: string
+          example: "verification-token-here"
+
+    ChangePasswordRequest:
+      type: object
+      required:
+        - old_password
+        - new_password
+        - confirm_password
+      properties:
+        old_password:
+          type: string
+          example: "P@ssw0rd123"
+          description: "Current password"
+        new_password:
+          type: string
+          minLength: 6
+          example: "P@ssw0rd1234"
+          description: "New password must contain at least 6 characters with uppercase, lowercase, number and special character"
+        confirm_password:
+          type: string
+          minLength: 6
+          example: "P@ssw0rd1234"
+          description: "Must match the new password field"
+
+    ResetPasswordRequest:
+      type: object
+      required:
+        - token
+        - new_password
+      properties:
+        token:
+          type: string
+          example: "verified-reset-token"
+          description: "The verified reset token from verify-forgot-password endpoint"
+        new_password:
+          type: string
+          minLength: 6
+          example: "P@ssw0rd1234"
+          description: "New password must contain at least 6 characters with uppercase, lowercase, number and special character"
+
+    Error:
+      type: object
+      properties:
+        statusCode:
+          type: integer
+          example: 400
+          description: HTTP status code
+        message:
+          type: string
+          example: "Validation failed"
+          description: Error message describing what went wrong
+        error:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+          example:
+            "body.email": ["Email must be valid"]
+            "body.password": ["Password is required"]
+          description: Detailed validation errors (optional, only present for validation failures)
+      required:
+        - statusCode
+        - message
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

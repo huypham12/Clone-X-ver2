@@ -18,6 +18,6 @@ export interface LoginData {
 
 export class LoginResponseDto extends SuccessResponseDto<LoginData> {
   constructor(data: LoginData) {
-    super(HTTP_STATUS.CREATED, MESSAGES.LOGIN_SUCCESS, data)
+    super(HTTP_STATUS.OK, MESSAGES.LOGIN_SUCCESS, data)
   }
 }

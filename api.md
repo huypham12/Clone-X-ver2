@@ -10,13 +10,13 @@
 - `POST /api/auth/forgot-password` - Tạo token và gửi link xác thực tới email tài khoản muốn đổi mật khẩu
 - `POST /api/auth/verify-forgot-password` - Xác thực token mà người dùng click từ link được gửi
 - `POST /api/auth/reset-password` - Xác thực token và đổi mật khẩu mới
+- `PATCH /api/auth/change-password` - Đổi mật khẩu
 
 # User API
 
 - `GET /api/users/me` - Lấy thông tin user hiện tại
 - `GET /api/users/:username` - Lấy thông tin user qua username
 - `PATCH /api/users/me` - Cập nhật thông tin user hiện tại
-- `PATCH /api/users/change-password` - Đổi mật khẩu
 - `POST /api/users/:username/block` - Chặn một user
 - `DELETE /api/users/:user_id/block/:blocked_id` - Bỏ chặn một user
 - `GET /api/blocked-users/:blocker_id` - Lấy danh sách người dùng bị chặn

@@ -11,6 +11,7 @@ export const MESSAGES = {
   USER_DOES_NOT_EXIST: 'Email does not exist or password is incorrect',
   USER_NOT_FOUND: 'User not found',
   INVALID_PASSWORD: 'Invalid password',
+  INVALID_OLD_PASSWORD: 'Invalid old password',
   USER_ALREADY_VERIFIED: 'User already verified',
   EMAIL_ALREADY_VERIFIED: 'Email already verified',
   FORGOT_PASSWORD_TOKEN_INVALID: 'Forgot password token is invalid',

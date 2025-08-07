@@ -5,6 +5,7 @@ import { AuthService } from './services/auth.service'
 import { wrapController } from '~/utils/wrap-controller'
 import {
   accessTokenValidator,
+  changePasswordValidator,
   loginValidator,
   refreshTokenValidator,
   registerValidator,
@@ -15,7 +16,8 @@ import {
   authenticateAccessToken,
   authenticateEmailVerifyToken,
   authenticateForgotPasswordToken,
-  authenticateRefreshToken
+  authenticateRefreshToken,
+  verifiedUserValidator
 } from './auth.middleware'
 
 const authRouter = Router()
@@ -62,5 +64,14 @@ authRouter.post(
 )
 // khi xác thực thành công thì sẽ tạo form cho người dùng nhập mật khẩu và gọi đến api reset-password để đổi mật khẩu mới
 authRouter.post('/reset-password', authenticateForgotPasswordToken, wrapController(authController.resetPassword))
+
+authRouter.patch(
+  '/change-password',
+  accessTokenValidator,
+  authenticateAccessToken,
+  verifiedUserValidator,
+  changePasswordValidator,
+  wrapController(authController.changePassword)
+)
 
 export default authRouter

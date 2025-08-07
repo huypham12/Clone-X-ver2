@@ -8,7 +8,8 @@ import {
   LogoutResponseDto,
   RefreshTokenResponseDto,
   VerifyEmailResponseDto,
-  ResetPasswordResponseDto
+  ResetPasswordResponseDto,
+  ChangePasswordResponseDto
 } from '../dto'
 import { ObjectId } from 'mongodb'
 import { RefreshToken, User } from '~/schemas'
@@ -223,15 +224,15 @@ export class AuthService {
       throw new HttpError(MESSAGES.USER_NOT_FOUND, HTTP_STATUS.NOT_FOUND)
     }
 
+    // nếu user chưa verify thì trả về lỗi
+    if (user.verify === UserVerifyStatus.Unverified) {
+      throw new HttpError(MESSAGES.USER_NOT_VERIFIED, HTTP_STATUS.FORBIDDEN)
+    }
+
     const isMatch = await comparePassword(payload.password, user.password)
     // kiểm tra mật khẩu
     if (!isMatch) {
       throw new HttpError(MESSAGES.INVALID_PASSWORD, HTTP_STATUS.UNAUTHORIZED)
-    }
-
-    // nếu user chưa verify thì trả về lỗi
-    if (user.verify === UserVerifyStatus.Unverified) {
-      throw new HttpError(MESSAGES.USER_NOT_VERIFIED, HTTP_STATUS.FORBIDDEN)
     }
 
     // tạo access token và refresh token
@@ -359,5 +360,38 @@ export class AuthService {
       verify: verify || UserVerifyStatus.Unverified
     })
     return new ResetPasswordResponseDto({ access_token, refresh_token })
+  }
+
+  changePassword = async ({
+    old_password,
+    new_password,
+    user_id
+  }: {
+    old_password: string
+    new_password: string
+    user_id: string
+  }): Promise<ChangePasswordResponseDto> => {
+    const user = await this.databaseService.users.findOne({ _id: new ObjectId(user_id) })
+    if (!user) {
+      throw new HttpError(MESSAGES.USER_NOT_FOUND, HTTP_STATUS.NOT_FOUND)
+    }
+
+    const isMatch = await comparePassword(old_password, user.password)
+    if (!isMatch) {
+      throw new HttpError(MESSAGES.INVALID_OLD_PASSWORD, HTTP_STATUS.BAD_REQUEST)
+    }
+
+    const hashedPassword = await hashPassword(new_password)
+    await this.databaseService.users.updateOne(
+      { _id: new ObjectId(user_id) },
+      {
+        $set: {
+          password: hashedPassword
+        },
+        $currentDate: { updated_at: true }
+      }
+    )
+
+    return new ChangePasswordResponseDto()
   }
 }

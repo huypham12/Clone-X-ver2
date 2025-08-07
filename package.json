@@ -74,6 +74,7 @@
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
     "yaml": "^2.8.0",
+    "yamljs": "^0.3.0",
     "zod": "^4.0.14",
     "zx": "^8.5.5"
   },

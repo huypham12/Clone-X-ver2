@@ -18,6 +18,9 @@ interface EnvConfig {
     port: number
     host: string
   }
+  cors: {
+    origin: string[]
+  }
   db: {
     username: string
     password: string
@@ -90,6 +93,9 @@ export const envConfig: EnvConfig = {
   app: {
     port: parseInt(getEnvVar('PORT', true, '3000')),
     host: getEnvVar('HOST', true, 'http://localhost:3000')
+  },
+  cors: {
+    origin: getEnvVar('CORS_ORIGIN', false, 'http://localhost:3001,http://localhost:5173').split(',')
   },
   db: {
     username: getEnvVar('DB_USERNAME'),

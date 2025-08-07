@@ -10,5 +10,6 @@ declare module 'express' {
     decoded_forgot_password_token?: TokenPayload
     decoded_refresh_token?: TokenPayload
     tweet?: Tweet
+    validatedData?: unknown
   }
 }

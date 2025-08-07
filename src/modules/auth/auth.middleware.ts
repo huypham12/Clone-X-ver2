@@ -8,6 +8,7 @@ import { HTTP_STATUS } from '~/constants/httpStatus'
 import { envConfig } from '~/config/getEnvConfig'
 import { TokenPayload } from '~/types/token-payload.type'
 import { ObjectId } from 'mongodb'
+import { UserVerifyStatus } from '~/constants/enums'
 
 const databaseService = new DatabaseService()
 
@@ -111,4 +112,17 @@ export const authenticateRefreshToken = async (req: Request, res: Response, next
     const message = error instanceof TokenExpiredError ? MESSAGES.TOKEN_EXPIRED : MESSAGES.UNAUTHORIZED
     return next(new HttpError(message, 401))
   }
+}
+
+export const verifiedUserValidator = (req: Request, res: Response, next: NextFunction) => {
+  const { verify } = req.decoded_authorization as TokenPayload
+  if (verify !== UserVerifyStatus.Verified) {
+    next(
+      new HttpError(MESSAGES.USER_NOT_VERIFIED, HTTP_STATUS.FORBIDDEN, {
+        verify: [MESSAGES.USER_NOT_VERIFIED]
+      })
+    )
+    return
+  }
+  next()
 }

@@ -13,5 +13,5 @@
     }
   },
   "files": ["src/type.d.ts"], // Các file dùng để defined global type cho dự án
-  "include": ["src/**/*", "docs/documentation.js"] // Chỉ định các file cần build
+  "include": ["src/**/*"] // Chỉ định các file cần build
 }

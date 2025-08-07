@@ -9,9 +9,11 @@ import {
   VerifyEmailResponseDto,
   ResetPasswordResponseDto,
   ResetPasswordBodyDto,
-  VerifyEmailBodyDto
+  VerifyEmailBodyDto,
+  ChangePasswordResponseDto,
+  ChangePasswordBodyDto
 } from './dto'
-import { PostHandler } from '~/types/controller-handler.type'
+import { PatchHandler, PostHandler } from '~/types/controller-handler.type'
 import { LogoutBodyDto, LogoutResponseDto } from './dto/logout.dto'
 import { RefreshTokenBodyDto, RefreshTokenResponseDto } from './dto/refresh-token.dto'
 import { EmailService } from './services/email.service'
@@ -33,6 +35,7 @@ export class AuthController {
 
   // dùng đúng loại handler cho từng method, ở đây register là post nên dùng PostHandler
   register: PostHandler<RegisterBodyDto, RegisterResponseDto> = async (req, res) => {
+    await this.authService.checkEmailExists(req.body.email)
     const result = await this.authService.register(req.body)
     res.status(result.statusCode).json(result)
   }
@@ -118,6 +121,17 @@ export class AuthController {
   resetPassword: PostHandler<ResetPasswordBodyDto, ResetPasswordResponseDto> = async (req, res) => {
     const { token, new_password } = req.body
     const result = await this.authService.resetPassword({ token, new_password })
+    res.json(result)
+  }
+
+  changePassword: PatchHandler<ChangePasswordBodyDto, ChangePasswordResponseDto> = async (req, res) => {
+    const { old_password, new_password } = req.body
+    const { user_id } = req.decoded_authorization as TokenPayload
+    const result = await this.authService.changePassword({
+      old_password,
+      new_password,
+      user_id
+    })
     res.json(result)
   }
 }
