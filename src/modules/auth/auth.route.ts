@@ -18,7 +18,7 @@ import {
   authenticateForgotPasswordToken,
   authenticateRefreshToken,
   verifiedUserValidator
-} from './auth.middleware'
+} from '../../middleware/verify.middleware'
 
 const authRouter = Router()
 const databaseService = new DatabaseService() // vì export bằng class nên phải khởi tạo

@@ -3,13 +3,12 @@ import {
   LoginData,
   LoginResponseDto,
   RegisterBodyDto,
-  RegisterData,
-  RegisterResponseDto,
   LogoutResponseDto,
   RefreshTokenResponseDto,
   VerifyEmailResponseDto,
   ResetPasswordResponseDto,
-  ChangePasswordResponseDto
+  ChangePasswordResponseDto,
+  RegisterResponseData
 } from '../dto'
 import { ObjectId } from 'mongodb'
 import { RefreshToken, User } from '~/schemas'
@@ -153,17 +152,15 @@ export class AuthService {
   }
 
   // hiện tại thì đăng ký chưa cho nhập luôn username, chờ làm được cái search nhanh thì mới cho nhập được vì check username đã tồn tại chưa khá lâu
-  register = async (payload: RegisterBodyDto): Promise<RegisterResponseDto> => {
+  register = async (payload: RegisterBodyDto): Promise<RegisterResponseData> => {
     // sau khi đăng ký thì thêm vào db và tạo các token gửi về cho người dùng
     const user_id = new ObjectId()
-
     //tạo token để gửi kèm trong link xác minh
     const email_verify_token = await this.signEmailVerifyToken({
       user_id: user_id.toString(),
       verify: UserVerifyStatus.Unverified
     })
-
-    // send email verify token cho người dùng chờ tạo được aws thì làm
+    // send email verify token cho người dùng
     const html = getVerifyEmailTemplate(email_verify_token)
     await this.emailService.sendEmail(
       {
@@ -173,13 +170,11 @@ export class AuthService {
       },
       MESSAGES.VERIFY_EMAIL_SUCCESS
     )
-
     // tạo token trả về
     const [access_token, refresh_token] = await this.signAccessAndRefreshToken({
       user_id: user_id.toString(),
       verify: UserVerifyStatus.Unverified
     })
-
     // lưu refresh token vào db
     const { exp } = await this.decodeToken(refresh_token, envConfig.secrets.jwt.refresh as string)
     if (!exp) {
@@ -193,9 +188,8 @@ export class AuthService {
         exp // Convert seconds to milliseconds if exp exists
       })
     )
-
     // insert user
-    const result = await this.databaseService.users.insertOne(
+    await this.databaseService.users.insertOne(
       new User({
         ...payload,
         _id: user_id,
@@ -205,16 +199,13 @@ export class AuthService {
         email_verify_token: email_verify_token
       })
     )
-    // nên trả về kết quả của việc insert để sau này có thể lấy insertedId dùng cho việc tạo token gì đó (tạm thời chưa biết)
-
-    // Tạo RegisterData từ user insert
-    const registerData: RegisterData = {
+    // Tạo RegisterResponseData để trả về
+    const registerResponseData: RegisterResponseData = {
       access_token,
       refresh_token
     }
-
     // Trả về RegisterResponseDto
-    return new RegisterResponseDto(registerData)
+    return registerResponseData
   }
 
   login = async (payload: { email: string; password: string }): Promise<LoginResponseDto> => {

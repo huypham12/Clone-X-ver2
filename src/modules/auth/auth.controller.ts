@@ -20,6 +20,7 @@ import { EmailService } from './services/email.service'
 import { getForgotPasswordTemplate, getVerifyEmailTemplate } from '~/utils/email-templete'
 import { TokenPayload } from '~/types/token-payload.type'
 import { MESSAGES } from '~/constants/messages'
+import { HTTP_STATUS } from '~/constants/httpStatus'
 
 export class AuthController {
   constructor(
@@ -36,8 +37,9 @@ export class AuthController {
   // dùng đúng loại handler cho từng method, ở đây register là post nên dùng PostHandler
   register: PostHandler<RegisterBodyDto, RegisterResponseDto> = async (req, res) => {
     await this.authService.checkEmailExists(req.body.email)
-    const result = await this.authService.register(req.body)
-    res.status(result.statusCode).json(result)
+    const registerResponseData = await this.authService.register(req.body)
+    const response = new RegisterResponseDto(HTTP_STATUS.CREATED, MESSAGES.REGISTER_SUCCESS, registerResponseData)
+    res.status(response.statusCode).json(response)
   }
 
   login: PostHandler<LoginBodyDto, LoginResponseDto> = async (req, res) => {

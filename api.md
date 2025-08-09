@@ -26,6 +26,10 @@
 - `GET /api/users/:username/followers` - Ds người đang follow username này
 - `GET /api/users/:username/follow-status` - Kiểm tra user hiện tại có follow user trên không
 
+# Media
+
+- `POST /api/media/upload` - Upload file (video, img, sticker)
+
 # Search API
 
 - `GET /api/search/users` - Tìm kiếm user
@@ -42,10 +46,6 @@
 - `DELETE /api/tweets/:tweet_id/likes` - Unlike
 - `GET /api/tweets/:tweet_id` -Lấy thông tin 1 tweet bao gồm cả số lượng like, comment, retweet, quote tweet
 - `GET /api/tweets/:tweet_id/children` - Lấy thông tin tweet con của tweet_id kia
-
-# Media
-
-- `POST /api/media/upload` - Upload file (video, img, sticker)
 
 # Chat API
 
