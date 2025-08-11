@@ -18,13 +18,12 @@
 - `GET /api/users/:username` - Lấy thông tin user qua username
 - `PATCH /api/users/me` - Cập nhật thông tin user hiện tại
 - `POST /api/users/:username/block` - Chặn một user
-- `DELETE /api/users/:user_id/block/:blocked_id` - Bỏ chặn một user
-- `GET /api/blocked-users/:blocker_id` - Lấy danh sách người dùng bị chặn
+- `DELETE /api/users/:username/block` - Bỏ chặn một user
+- `GET /api/users/blocked-users/` - Lấy danh sách người dùng bị chặn
 - `POST /api/users/:username/follow` - Follow một ai đó
 - `DELETE /api/users/:username/unfollow` - Unfollow một ai đó
 - `GET /api/users/:username/following` - Ds người username này đang follow
 - `GET /api/users/:username/followers` - Ds người đang follow username này
-- `GET /api/users/:username/follow-status` - Kiểm tra user hiện tại có follow user trên không
 
 # Media
 

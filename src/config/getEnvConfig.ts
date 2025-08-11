@@ -36,6 +36,7 @@ interface EnvConfig {
       messages: string
       directConversations: string
       groupConversations: string
+      userBlocks: string
     }
   }
   google: {
@@ -85,7 +86,8 @@ const dbCollections = {
   LIKES: 'DB_LIKES_COLLECTION',
   MESSAGES: 'DB_MESSAGES_COLLECTION',
   DIRECT_CONVERSATIONS: 'DB_DIRECT_CONVERSATIONS_COLLECTION',
-  GROUP_CONVERSATIONS: 'DB_GROUP_CONVERSATIONS_COLLECTION'
+  GROUP_CONVERSATIONS: 'DB_GROUP_CONVERSATIONS_COLLECTION',
+  USER_BLOCKS: 'DB_USER_BLOCKS_COLLECTION'
 }
 
 // Export configuration
@@ -111,7 +113,8 @@ export const envConfig: EnvConfig = {
       likes: getEnvVar(dbCollections.LIKES),
       messages: getEnvVar(dbCollections.MESSAGES),
       directConversations: getEnvVar(dbCollections.DIRECT_CONVERSATIONS),
-      groupConversations: getEnvVar(dbCollections.GROUP_CONVERSATIONS)
+      groupConversations: getEnvVar(dbCollections.GROUP_CONVERSATIONS),
+      userBlocks: getEnvVar(dbCollections.USER_BLOCKS)
     }
   },
   google: {

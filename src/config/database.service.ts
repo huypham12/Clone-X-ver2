@@ -11,7 +11,8 @@ import {
   Hashtag,
   Like,
   Message,
-  Tweet
+  Tweet,
+  UserBlock
 } from '~/schemas'
 import { envConfig } from './getEnvConfig'
 
@@ -89,6 +90,10 @@ export default class DatabaseService {
 
   get refreshTokens(): Collection<RefreshToken> {
     return this.db.collection(envConfig.db.collections.refreshToken)
+  }
+
+  get userBlocks(): Collection<UserBlock> {
+    return this.db.collection(envConfig.db.collections.userBlocks)
   }
 
   get followers(): Collection<Follower> {

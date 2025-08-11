@@ -37,6 +37,7 @@ export const validate = <T extends ZodTypeAny>(schema: T) => {
     }
   }
 }
+
 const updateMeSchema = z.object({
   name: z
     .string({ message: MESSAGES.NAME_MUST_BE_STRING })
@@ -46,13 +47,7 @@ const updateMeSchema = z.object({
 
   date_of_birth: z
     .string({ message: MESSAGES.DATE_OF_BIRTH_MUST_BE_YYYY_MM_DD })
-    .refine(
-      (value) => {
-        const iso8601Regex = /^\d{4}-\d{2}-\d{2}$/
-        return iso8601Regex.test(value)
-      },
-      { message: MESSAGES.DATE_OF_BIRTH_MUST_BE_YYYY_MM_DD }
-    )
+    .refine((value) => /^\d{4}-\d{2}-\d{2}$/.test(value), { message: MESSAGES.DATE_OF_BIRTH_MUST_BE_YYYY_MM_DD })
     .optional(),
 
   bio: z
@@ -70,16 +65,11 @@ const updateMeSchema = z.object({
     .string({ message: MESSAGES.USERNAME_MUST_BE_STRING })
     .min(1, { message: MESSAGES.USERNAME_LENGTH_MUST_BE_FROM_1_TO_100 })
     .max(100, { message: MESSAGES.USERNAME_LENGTH_MUST_BE_FROM_1_TO_100 })
-    .refine((value) => {
-      if (REGEX_USERNAME && !REGEX_USERNAME.test(value)) {
-        throw new HttpError(MESSAGES.USERNAME_MUST_BE_ALPHANUMERIC, HTTP_STATUS.BAD_REQUEST)
-      }
-      return true
-    })
     .refine(
       async (value) => {
         const existing = await databaseService.users.findOne({ username: value })
-        return !existing
+        // Không trùng hoặc trùng nhưng là của chính mình => hợp lệ
+        return !existing || existing.username.toString() === value
       },
       { message: MESSAGES.USERNAME_ALREADY_EXISTS }
     )
