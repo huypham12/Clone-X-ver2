@@ -1,2 +1,7 @@
 export { default as authRouter } from './auth/auth.route'
 export { default as userRouter } from './user/user.route'
+export { default as mediaRouter } from './media/media.route'
+export { default as tweetRouter } from './tweet/tweet.route'
+export { default as conversationRouter } from './conversation/conversation.route'
+export { default as searchRouter } from './search/search.route'
+export { default as notificationRouter } from './notification/notification.route'

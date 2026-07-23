@@ -155,25 +155,26 @@ export class AuthService {
   register = async (payload: RegisterBodyDto): Promise<RegisterResponseData> => {
     // sau khi đăng ký thì thêm vào db và tạo các token gửi về cho người dùng
     const user_id = new ObjectId()
-    //tạo token để gửi kèm trong link xác minh
-    const email_verify_token = await this.signEmailVerifyToken({
-      user_id: user_id.toString(),
-      verify: UserVerifyStatus.Unverified
-    })
-    // send email verify token cho người dùng
-    const html = getVerifyEmailTemplate(email_verify_token)
-    await this.emailService.sendEmail(
-      {
-        to: payload.email,
-        subject: 'Xác nhận địa chỉ email của bạn',
-        html
-      },
-      MESSAGES.VERIFY_EMAIL_SUCCESS
-    )
-    // tạo token trả về
+    // --- TẠM THỜI BỎ QUA GỬI EMAIL VERIFY ĐỂ TRÁNH LIMIT SES/GMAIL ---
+    // const email_verify_token = await this.signEmailVerifyToken({
+    //   user_id: user_id.toString(),
+    //   verify: UserVerifyStatus.Unverified
+    // })
+    // const html = getVerifyEmailTemplate(email_verify_token)
+    // await this.emailService.sendEmail(
+    //   {
+    //     to: payload.email,
+    //     subject: 'Xác nhận địa chỉ email của bạn',
+    //     html
+    //   },
+    //   MESSAGES.VERIFY_EMAIL_SUCCESS
+    // )
+    // -------------------------------------------------------------------
+
+    // tạo token trả về (TẠM THỜI SET TRỰC TIẾP LÀ Verified)
     const [access_token, refresh_token] = await this.signAccessAndRefreshToken({
       user_id: user_id.toString(),
-      verify: UserVerifyStatus.Unverified
+      verify: UserVerifyStatus.Verified
     })
     // lưu refresh token vào db
     const { exp } = await this.decodeToken(refresh_token, envConfig.secrets.jwt.refresh as string)
@@ -192,11 +193,12 @@ export class AuthService {
     await this.databaseService.users.insertOne(
       new User({
         ...payload,
-        _id: user_id,
         date_of_birth: new Date(payload.date_of_birth),
+        _id: user_id,
         password: await hashPassword(payload.password),
         username: `user${user_id.toString()}`,
-        email_verify_token: email_verify_token
+        email_verify_token: '', // Không cần token nữa vì đã verify sẵn
+        verify: UserVerifyStatus.Verified // Tạm thời set trạng thái đã xác minh
       })
     )
     // Tạo RegisterResponseData để trả về

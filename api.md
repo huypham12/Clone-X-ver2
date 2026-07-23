@@ -27,7 +27,11 @@
 
 # Media
 
-- `POST /api/media/upload` - Upload file (video, img, sticker)
+- `POST /api/media/upload` - Upload image
+- `POST /api/media/upload/video` - Upload video
+- `POST /api/media/upload/audio` - Upload audio
+- `GET /api/media/{id}` - Lấy thông tin chi tiết
+- `DELETE /api/media/{id}` - Xóa file
 
 # Search API
 

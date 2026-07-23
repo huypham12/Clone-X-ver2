@@ -12,6 +12,9 @@ type DirectConversationType = {
   user2_id: ObjectId
   last_message_at: Date
   last_message_preview: MessagePreview
+  hidden_by?: ObjectId[] // users who have deleted/hidden this conversation
+  pinned_by?: ObjectId[] // users who pinned this conversation
+  muted_by?: { user_id: ObjectId; until: Date | null }[] // users who muted this conversation
   created_at?: Date
   updated_at?: Date
 }
@@ -22,6 +25,9 @@ export default class DirectConversation {
   user2_id: ObjectId
   last_message_at: Date
   last_message_preview: MessagePreview
+  hidden_by: ObjectId[]
+  pinned_by: ObjectId[]
+  muted_by: { user_id: ObjectId; until: Date | null }[]
   created_at?: Date
   updated_at?: Date
   constructor(data: DirectConversationType) {
@@ -30,6 +36,9 @@ export default class DirectConversation {
     this.user2_id = data.user2_id
     this.last_message_at = data.last_message_at
     this.last_message_preview = data.last_message_preview
+    this.hidden_by = data.hidden_by || []
+    this.pinned_by = data.pinned_by || []
+    this.muted_by = data.muted_by || []
     this.created_at = data.created_at || new Date()
     this.updated_at = data.updated_at || new Date()
   }

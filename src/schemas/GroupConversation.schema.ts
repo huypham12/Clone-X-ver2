@@ -23,6 +23,9 @@ interface GroupConversationType {
   admin_only_messaging: boolean
   last_message_at: Date
   last_message_preview: MessagePreview
+  hidden_by?: ObjectId[]
+  pinned_by?: ObjectId[]
+  muted_by?: { user_id: ObjectId; until: Date | null }[]
   created_at: Date
   updated_at: Date
 }
@@ -36,6 +39,9 @@ export default class GroupConversation {
   admin_only_messaging: boolean
   last_message_at: Date
   last_message_preview: MessagePreview
+  hidden_by: ObjectId[]
+  pinned_by: ObjectId[]
+  muted_by: { user_id: ObjectId; until: Date | null }[]
   created_at: Date
   updated_at: Date
 
@@ -48,6 +54,9 @@ export default class GroupConversation {
     this.admin_only_messaging = data.admin_only_messaging
     this.last_message_at = data.last_message_at
     this.last_message_preview = data.last_message_preview
+    this.hidden_by = data.hidden_by || []
+    this.pinned_by = data.pinned_by || []
+    this.muted_by = data.muted_by || []
     this.created_at = data.created_at || new Date()
     this.updated_at = data.updated_at || new Date()
   }

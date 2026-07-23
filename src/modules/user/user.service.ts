@@ -5,6 +5,8 @@ import { HttpError } from '~/common/http-error'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import { MESSAGES } from '~/constants/messages'
 import { Follower, User, UserBlock } from '~/schemas'
+import { NotificationType } from '~/constants/enums'
+import notificationService from '../notification/notification.service'
 
 export class UserService {
   constructor(private readonly databaseService: DatabaseService) {}
@@ -188,11 +190,18 @@ export class UserService {
       throw new HttpError(MESSAGES.USER_ALREADY_FOLLOWED, HTTP_STATUS.CONFLICT)
     }
 
-    const follow = new Follower({
+    const follower = new Follower({
       follow_user_id: new ObjectId(user_id),
       followed_user_id: user._id
     })
-    await this.databaseService.followers.insertOne(follow)
+    await this.databaseService.followers.insertOne(follower)
+
+    // Notification
+    await notificationService.createNotification(
+      followed_user_id,
+      user_id,
+      NotificationType.Follow
+    )
   }
 
   unfollowUser = async (follow_user_id: string, followed_user_id: string) => {

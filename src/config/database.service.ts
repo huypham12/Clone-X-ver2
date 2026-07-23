@@ -12,7 +12,10 @@ import {
   Like,
   Message,
   Tweet,
-  UserBlock
+  UserBlock,
+  MediaMetadata,
+  NewsFeed,
+  Notification
 } from '~/schemas'
 import { envConfig } from './getEnvConfig'
 
@@ -45,7 +48,19 @@ export default class DatabaseService {
 
   /** Index collections — should be called once during bootstrap */
   async createIndexes() {
-    await Promise.all([this.indexUsers(), this.indexRefreshTokens(), this.indexFollowers(), this.indexTweets()])
+    await Promise.all([
+      this.indexUsers(), 
+      this.indexRefreshTokens(), 
+      this.indexFollowers(), 
+      this.indexTweets(),
+      this.indexNewsFeeds(),
+      this.indexBookmarks(),
+      this.indexLikes(),
+      this.indexHashtags(),
+      this.indexUserBlocks(),
+      this.indexMessages(),
+      this.indexNotifications()
+    ])
   }
 
   private async indexUsers() {
@@ -81,6 +96,66 @@ export default class DatabaseService {
 
     console.log('Creating full-text index for tweets...')
     await this.tweets.createIndex({ content: 'text' }, { default_language: 'none' })
+    await this.tweets.createIndex({ parent_id: 1, created_at: -1 })
+  }
+
+  private async indexNewsFeeds() {
+    const exists = await this.newsFeeds.indexExists(['user_id_1_created_at_-1'])
+    if (exists) return
+
+    console.log('Creating indexes for newsFeeds...')
+    await this.newsFeeds.createIndex({ user_id: 1, created_at: -1 })
+  }
+
+  private async indexBookmarks() {
+    const exists = await this.bookmarks.indexExists(['user_id_1_tweet_id_1'])
+    if (exists) return
+
+    console.log('Creating indexes for bookmarks...')
+    await this.bookmarks.createIndex({ user_id: 1, tweet_id: 1 }, { unique: true })
+  }
+
+  private async indexLikes() {
+    const exists = await this.likes.indexExists(['user_id_1_tweet_id_1'])
+    if (exists) return
+
+    console.log('Creating indexes for likes...')
+    await this.likes.createIndex({ user_id: 1, tweet_id: 1 }, { unique: true })
+  }
+
+  private async indexHashtags() {
+    const exists = await this.hashtags.indexExists(['normalized_name_1'])
+    if (exists) return
+
+    console.log('Creating indexes for hashtags...')
+    await this.hashtags.createIndex({ normalized_name: 1 }, { unique: true })
+  }
+
+  private async indexUserBlocks() {
+    const exists = await this.userBlocks.indexExists(['user_id_1_blocked_user_id_1'])
+    if (exists) return
+
+    console.log('Creating indexes for userBlocks...')
+    await this.userBlocks.createIndex({ user_id: 1, blocked_user_id: 1 }, { unique: true })
+  }
+
+  private async indexMessages() {
+    const exists = await this.messages.indexExists(['conversation_id_1_content_text'])
+    if (exists) return
+
+    console.log('Creating compound text index for messages...')
+    await this.messages.createIndex({ conversation_id: 1, content: 'text' }, { default_language: 'none' })
+    // Index for retrieving media messages efficiently
+    await this.messages.createIndex({ conversation_id: 1, send_at: -1 })
+  }
+
+  private async indexNotifications() {
+    const exists = await this.notifications.indexExists(['recipient_id_1_created_at_-1'])
+    if (exists) return
+
+    console.log('Creating indexes for notifications...')
+    await this.notifications.createIndex({ recipient_id: 1, created_at: -1 })
+    await this.notifications.createIndex({ recipient_id: 1, is_read: 1 })
   }
 
   // Collections Accessors
@@ -129,5 +204,17 @@ export default class DatabaseService {
 
   get test() {
     return this.db.collection('test')
+  }
+
+  get medias(): Collection<MediaMetadata> {
+    return this.db.collection(envConfig.db.collections.medias)
+  }
+
+  get newsFeeds(): Collection<NewsFeed> {
+    return this.db.collection(envConfig.db.collections.newsFeeds)
+  }
+
+  get notifications(): Collection<Notification> {
+    return this.db.collection(envConfig.db.collections.notifications || 'notifications')
   }
 }

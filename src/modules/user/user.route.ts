@@ -54,13 +54,7 @@ userRouter.post(
   wrapController(userController.followUserController)
 )
 
-userRouter.post(
-  '/:followed_user_id/follow',
-  accessTokenValidator,
-  authenticateAccessToken,
-  verifiedUserValidator,
-  wrapController(userController.followUserController)
-)
+
 
 userRouter.delete(
   '/:followed_user_id/follow',

@@ -37,6 +37,9 @@ interface EnvConfig {
       directConversations: string
       groupConversations: string
       userBlocks: string
+      medias: string
+      newsFeeds: string
+      notifications: string
     }
   }
   google: {
@@ -64,6 +67,9 @@ interface EnvConfig {
     apiKey: string
   }
   resendApiKey: string
+  redis: {
+    url: string
+  }
 }
 
 // Utility function to get environment variable with validation
@@ -87,7 +93,10 @@ const dbCollections = {
   MESSAGES: 'DB_MESSAGES_COLLECTION',
   DIRECT_CONVERSATIONS: 'DB_DIRECT_CONVERSATIONS_COLLECTION',
   GROUP_CONVERSATIONS: 'DB_GROUP_CONVERSATIONS_COLLECTION',
-  USER_BLOCKS: 'DB_USER_BLOCKS_COLLECTION'
+  USER_BLOCKS: 'DB_USER_BLOCKS_COLLECTION',
+  MEDIAS: 'DB_MEDIAS_COLLECTION',
+  NEWSFEEDS: 'DB_NEWSFEEDS_COLLECTION',
+  NOTIFICATIONS: 'DB_NOTIFICATIONS_COLLECTION'
 }
 
 // Export configuration
@@ -114,7 +123,10 @@ export const envConfig: EnvConfig = {
       messages: getEnvVar(dbCollections.MESSAGES),
       directConversations: getEnvVar(dbCollections.DIRECT_CONVERSATIONS),
       groupConversations: getEnvVar(dbCollections.GROUP_CONVERSATIONS),
-      userBlocks: getEnvVar(dbCollections.USER_BLOCKS)
+      userBlocks: getEnvVar(dbCollections.USER_BLOCKS),
+      medias: getEnvVar(dbCollections.MEDIAS, false, 'medias'),
+      newsFeeds: getEnvVar(dbCollections.NEWSFEEDS, false, 'newsFeeds'),
+      notifications: getEnvVar(dbCollections.NOTIFICATIONS, false, 'notifications')
     }
   },
   google: {
@@ -141,7 +153,10 @@ export const envConfig: EnvConfig = {
   sendGrid: {
     apiKey: getEnvVar('SENDGRID_API_KEY')
   },
-  resendApiKey: getEnvVar('RESEND_API_KEY')
+  resendApiKey: getEnvVar('RESEND_API_KEY'),
+  redis: {
+    url: getEnvVar('REDIS_URL', false, 'redis://localhost:6379')
+  }
 }
 
 // Optional: Validate critical configurations on initialization
