@@ -5,7 +5,7 @@ import { HttpError } from '~/common/http-error'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import { MESSAGES } from '~/constants/messages'
 import { Follower, User, UserBlock } from '~/schemas'
-import { NotificationType } from '~/constants/enums'
+import { NotificationType, TweetType } from '~/constants/enums'
 import notificationService from '../notification/notification.service'
 
 export class UserService {
@@ -268,7 +268,7 @@ export class UserService {
       return []
     }
 
-    const userIds = following.map((follow) => follow.followed_user_id)
+    const userIds = following.map((f) => f.followed_user_id)
     const users = await this.databaseService.users
       .find(
         {
@@ -288,7 +288,116 @@ export class UserService {
         }
       )
       .toArray()
-
     return users
+  }
+
+  getUserTweets = async (username: string, cursor: string | undefined, limit: number) => {
+    const user = await this.databaseService.users.findOne({ username })
+    if (!user) throw new HttpError(MESSAGES.USER_NOT_FOUND, HTTP_STATUS.NOT_FOUND)
+
+    const matchStage: any = {
+      user_id: user._id,
+      type: { $in: [TweetType.Tweet, TweetType.Retweet, TweetType.QuoteTweet] }
+    }
+    if (cursor) {
+      matchStage._id = { $lt: new ObjectId(cursor) }
+    }
+
+    const tweets = await this.databaseService.tweets
+      .find(matchStage)
+      .sort({ _id: -1 })
+      .limit(limit)
+      .toArray()
+
+    const has_next_page = tweets.length === limit
+    const next_cursor = has_next_page ? tweets[tweets.length - 1]._id.toString() : null
+
+    return { tweets, next_cursor, has_next_page }
+  }
+
+  getUserReplies = async (username: string, cursor: string | undefined, limit: number) => {
+    const user = await this.databaseService.users.findOne({ username })
+    if (!user) throw new HttpError(MESSAGES.USER_NOT_FOUND, HTTP_STATUS.NOT_FOUND)
+
+    const matchStage: any = {
+      user_id: user._id,
+      type: TweetType.Comment
+    }
+    if (cursor) {
+      matchStage._id = { $lt: new ObjectId(cursor) }
+    }
+
+    const replies = await this.databaseService.tweets
+      .find(matchStage)
+      .sort({ _id: -1 })
+      .limit(limit)
+      .toArray()
+
+    const has_next_page = replies.length === limit
+    const next_cursor = has_next_page ? replies[replies.length - 1]._id.toString() : null
+
+    return { replies, next_cursor, has_next_page }
+  }
+
+  getUserLikes = async (username: string, cursor: string | undefined, limit: number) => {
+    const user = await this.databaseService.users.findOne({ username })
+    if (!user) throw new HttpError(MESSAGES.USER_NOT_FOUND, HTTP_STATUS.NOT_FOUND)
+
+    const matchStage: any = { user_id: user._id }
+    if (cursor) {
+      matchStage._id = { $lt: new ObjectId(cursor) }
+    }
+
+    const likes = await this.databaseService.likes
+      .aggregate([
+        { $match: matchStage },
+        { $sort: { _id: -1 } },
+        { $limit: limit },
+        {
+          $lookup: {
+            from: 'tweets',
+            localField: 'tweet_id',
+            foreignField: '_id',
+            as: 'tweet'
+          }
+        },
+        { $unwind: '$tweet' },
+        { $replaceRoot: { newRoot: { $mergeObjects: ['$tweet', { likeId: '$_id' }] } } }
+      ])
+      .toArray()
+
+    const has_next_page = likes.length === limit
+    const next_cursor = has_next_page ? likes[likes.length - 1].likeId?.toString() : null
+
+    const tweets = likes.map(l => {
+      const { likeId, ...rest } = l
+      return rest
+    })
+
+    return { tweets, next_cursor, has_next_page }
+  }
+
+  getUserMedia = async (username: string, cursor: string | undefined, limit: number) => {
+    const user = await this.databaseService.users.findOne({ username })
+    if (!user) throw new HttpError(MESSAGES.USER_NOT_FOUND, HTTP_STATUS.NOT_FOUND)
+
+    const matchStage: any = {
+      user_id: user._id,
+      media_ids: { $exists: true, $not: { $size: 0 } }
+    }
+    if (cursor) {
+      matchStage._id = { $lt: new ObjectId(cursor) }
+    }
+
+    const media = await this.databaseService.tweets
+      .find(matchStage)
+      .sort({ _id: -1 })
+      .limit(limit)
+      .toArray()
+
+    const has_next_page = media.length === limit
+    const next_cursor = has_next_page ? media[media.length - 1]._id.toString() : null
+
+    return { media, next_cursor, has_next_page }
   }
 }

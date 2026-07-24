@@ -33,7 +33,7 @@ export class LikeTweetResponseDto extends SuccessResponseDto<any> {
 }
 export class PaginationQueryDto {
   constructor(
-    public page: number,
+    public cursor: string | undefined,
     public limit: number
   ) {}
 }

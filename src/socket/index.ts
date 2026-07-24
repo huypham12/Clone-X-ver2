@@ -5,6 +5,7 @@ import { envConfig } from '~/config/getEnvConfig'
 import DatabaseService from '~/config/database.service'
 import { TokenPayload } from '~/types/token-payload.type'
 import { chatHandler } from './chat.handler'
+import redisService from '~/config/redis.service'
 
 // Mở rộng kiểu Socket để có thể gắn user_id vào
 declare module 'socket.io' {
@@ -70,12 +71,30 @@ export const initSocket = (httpServer: HttpServer) => {
         socket.join(conv._id?.toString() as string)
       })
     })
-    
+
+    // Lưu socket_id vào Redis để track Online Status
+    redisService.clientInstance.sAdd(`user_sockets:${socket.user_id}`, socket.id).then(async () => {
+      // Broadcast online status to friends/followers could be done here
+      // io.emit('user_online', { user_id: socket.user_id })
+    })
+
     // Handle chat events
     chatHandler(io, socket)
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => {
       console.log(`User disconnected: ${socket.user_id}`)
+      
+      // Xóa socket_id khỏi Redis
+      await redisService.clientInstance.sRem(`user_sockets:${socket.user_id}`, socket.id)
+      
+      // Kiểm tra xem user còn thiết bị nào online không
+      const activeSockets = await redisService.clientInstance.sCard(`user_sockets:${socket.user_id}`)
+      if (activeSockets === 0) {
+        // Cập nhật last seen nếu cần
+        await redisService.clientInstance.hSet('user_last_seen', socket.user_id as string, Date.now().toString())
+        // Broadcast offline status
+        // io.emit('user_offline', { user_id: socket.user_id })
+      }
     })
   })
 

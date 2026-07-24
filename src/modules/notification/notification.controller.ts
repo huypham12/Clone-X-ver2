@@ -10,9 +10,9 @@ export const getNotificationsController: GetHandler<GetNotificationsResponseDto,
   res
 ) => {
   const user_id = (req as any).decoded_authorization.user_id
-  const { page, limit } = req.query as any
+  const { cursor, limit } = req.query as any
 
-  const result = await notificationService.getNotifications(user_id, Number(page), Number(limit))
+  const result = await notificationService.getNotifications(user_id, cursor, Number(limit))
 
   const response = new GetNotificationsResponseDto(HTTP_STATUS.OK, 'Get notifications successfully', result)
   res.status(response.statusCode).json(response)

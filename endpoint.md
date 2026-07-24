@@ -27,6 +27,10 @@ Dưới đây là danh sách tất cả các API Endpoints được trích xuấ
 - `DELETE /:followed_user_id/follow`: Bỏ theo dõi một người dùng.
 - `GET /:target_user_id/followers`: Lấy danh sách những người theo dõi người dùng này (Followers).
 - `GET /:target_user_id/following`: Lấy danh sách những người mà người dùng này đang theo dõi (Following).
+- `GET /:username/tweets`: Lấy danh sách các bài viết (Timeline) của người dùng.
+- `GET /:username/replies`: Lấy danh sách các bình luận (Replies) của người dùng.
+- `GET /:username/likes`: Lấy danh sách các bài viết đã thích (Likes) của người dùng.
+- `GET /:username/media`: Lấy danh sách các ảnh/video (Media) của người dùng.
 
 ## 3. Tweet Module (`/tweets`)
 *Quản lý các thao tác liên quan đến đăng bài viết (Tweet) và các hoạt động tương tác.*
@@ -36,8 +40,11 @@ Dưới đây là danh sách tất cả các API Endpoints được trích xuấ
 - `GET /:tweet_id/children`: Lấy danh sách các Tweet con (Bao gồm comment, quote tweet, retweet) của một Tweet.
 - `POST /:tweet_id/like`: Thích (Like) một Tweet.
 - `DELETE /:tweet_id/like`: Bỏ thích (Unlike) một Tweet.
+- `GET /:tweet_id/likes`: Lấy danh sách những người dùng đã thích một Tweet cụ thể.
+- `GET /bookmarks`: Lấy danh sách các Tweet đã lưu (Bookmarks) của bản thân.
 - `POST /:tweet_id/bookmark`: Lưu (Bookmark) một Tweet.
 - `DELETE /:tweet_id/bookmark`: Bỏ lưu (Unbookmark) một Tweet.
+- `DELETE /:tweet_id`: Xóa một Tweet (chỉ chủ sở hữu mới có quyền xóa).
 
 ## 4. Conversation Module (`/conversations`)
 *Quản lý tính năng trò chuyện, bao gồm Chat 1-1 và Chat Group, cùng với tin nhắn.*
@@ -45,6 +52,11 @@ Dưới đây là danh sách tất cả các API Endpoints được trích xuấ
 - `POST /direct/:receiver_id`: Mở hoặc tạo một hội thoại nhắn tin trực tiếp 1-1 với người dùng khác.
 - `POST /group`: Tạo một hội thoại nhóm (Group Conversation).
 - `DELETE /:conversation_id`: Xóa toàn bộ hội thoại.
+- `PATCH /:conversation_id`: Cập nhật thông tin nhóm (đổi tên nhóm, thay đổi ảnh đại diện nhóm) hoặc đổi biệt danh (nickname).
+- `GET /:conversation_id/members`: Lấy danh sách thành viên trong nhóm.
+- `POST /:conversation_id/members`: Thêm thành viên mới vào nhóm.
+- `DELETE /:conversation_id/members/:user_id`: Kích/Xóa một thành viên khỏi nhóm (dành cho trưởng nhóm).
+- `DELETE /:conversation_id/leave`: Rời khỏi nhóm chat (tự chủ động rời).
 - `POST /:conversation_id/pin`: Ghim một hội thoại lên đầu danh sách.
 - `DELETE /:conversation_id/pin`: Bỏ ghim một hội thoại.
 - `GET /:conversation_id/messages`: Lấy danh sách các tin nhắn trong một hội thoại.
@@ -53,7 +65,11 @@ Dưới đây là danh sách tất cả các API Endpoints được trích xuấ
 - `POST /:conversation_id/read`: Đánh dấu đã đọc các tin nhắn mới trong hội thoại.
 - `POST /messages/:message_id/revoke`: Thu hồi (gỡ bỏ đối với mọi người) một tin nhắn.
 - `DELETE /messages/:message_id`: Xóa tin nhắn (chỉ gỡ bỏ từ phía người xóa).
+- `PATCH /messages/:message_id`: Chỉnh sửa nội dung tin nhắn đã gửi.
 - `POST /messages/:message_id/react`: Thả cảm xúc (React) vào một tin nhắn cụ thể.
+- `DELETE /messages/:message_id/react`: Gỡ bỏ cảm xúc (Reaction) đã thả khỏi tin nhắn.
+- `GET /messages/:message_id/reactions`: Lấy danh sách chi tiết những người đã thả cảm xúc vào tin nhắn này.
+- `POST /messages/:message_id/forward`: Chuyển tiếp (Forward) tin nhắn tới nhiều hội thoại khác.
 - `POST /:conversation_id/mute`: Tắt thông báo cho một hội thoại (Mute).
 - `DELETE /:conversation_id/mute`: Bật lại thông báo cho hội thoại đã tắt.
 
@@ -62,6 +78,9 @@ Dưới đây là danh sách tất cả các API Endpoints được trích xuấ
 - `GET /users`: Tìm kiếm người dùng bằng từ khóa.
 - `GET /tweets`: Tìm kiếm Tweet bằng từ khóa.
 - `GET /hashtags`: Tìm kiếm và trả về danh sách các Hashtag thịnh hành/liên quan.
+- `GET /hashtags/:tag/tweets`: Lấy danh sách các Tweet chứa một hashtag cụ thể.
+- `GET /history`: Lấy lịch sử tìm kiếm gần đây của người dùng.
+- `DELETE /history`: Xóa lịch sử tìm kiếm của người dùng.
 
 ## 6. Notification Module (`/notifications`)
 *Trung tâm thông báo (Notification center).*
@@ -73,3 +92,6 @@ Dưới đây là danh sách tất cả các API Endpoints được trích xuấ
 *Xử lý tải lên đa phương tiện.*
 - `POST /upload-image`: Upload tệp hình ảnh.
 - `POST /upload-video`: Upload tệp video (Sẽ đưa vào queue chờ xử lý).
+- `POST /upload-audio`: Upload tệp âm thanh (Voice message, audio).
+- `GET /:media_id`: Lấy thông tin chi tiết về một file media.
+- `DELETE /:media_id`: Xóa file media khỏi hệ thống lưu trữ (Cloudinary và Database).

@@ -19,7 +19,7 @@ export class ReactMessageBodyDto {
 
 export class PaginationQueryDto {
   constructor(
-    public page: number,
+    public cursor: string | undefined,
     public limit: number
   ) {}
 }

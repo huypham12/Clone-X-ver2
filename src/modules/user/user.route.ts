@@ -6,6 +6,7 @@ import { wrapController } from '~/utils/wrap-controller'
 import { authenticateAccessToken, verifiedUserValidator } from '~/middleware/verify.middleware'
 import { accessTokenValidator } from '../auth/auth.validator'
 import { updateMeValidator } from './user.validator'
+import { paginationValidator } from '../tweet/tweet.validator'
 
 const userRouter = Router()
 const databaseService = new DatabaseService()
@@ -76,6 +77,30 @@ userRouter.get(
   accessTokenValidator,
   authenticateAccessToken,
   wrapController(userController.getFollowingController)
+)
+
+userRouter.get(
+  '/:username/tweets',
+  paginationValidator,
+  wrapController(userController.getUserTweetsController)
+)
+
+userRouter.get(
+  '/:username/replies',
+  paginationValidator,
+  wrapController(userController.getUserRepliesController)
+)
+
+userRouter.get(
+  '/:username/likes',
+  paginationValidator,
+  wrapController(userController.getUserLikesController)
+)
+
+userRouter.get(
+  '/:username/media',
+  paginationValidator,
+  wrapController(userController.getUserMediaController)
 )
 
 export default userRouter

@@ -39,14 +39,16 @@ class NotificationService {
     return notification
   }
 
-  async getNotifications(userId: string, page: number, limit: number) {
-    const skip = (page - 1) * limit
+  async getNotifications(userId: string, cursor: string | undefined, limit: number) {
     const recipientId = new this.databaseService.ObjectId(userId)
+    const matchStage: any = { recipient_id: recipientId }
+    if (cursor) {
+      matchStage._id = { $lt: new this.databaseService.ObjectId(cursor) }
+    }
 
     const notifications = await this.databaseService.notifications
-      .find({ recipient_id: recipientId })
-      .sort({ created_at: -1 })
-      .skip(skip)
+      .find(matchStage)
+      .sort({ _id: -1 })
       .limit(limit)
       .toArray()
 
@@ -55,11 +57,10 @@ class NotificationService {
       is_read: false
     })
 
-    const total = await this.databaseService.notifications.countDocuments({
-      recipient_id: recipientId
-    })
+    const has_next_page = notifications.length === limit
+    const next_cursor = has_next_page ? notifications[notifications.length - 1]._id.toString() : null
 
-    return { notifications, unreadCount, total, page, totalPages: Math.ceil(total / limit) }
+    return { notifications, unreadCount, next_cursor, has_next_page }
   }
 
   async markAllAsRead(userId: string) {

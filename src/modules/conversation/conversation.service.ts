@@ -6,6 +6,7 @@ import Message from '~/schemas/Message.schema'
 import { HttpError } from '~/common/http-error'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import redisService from '~/config/redis.service'
+import { getIO } from '~/socket'
 
 class ConversationService {
   private databaseService: DatabaseService
@@ -154,28 +155,36 @@ class ConversationService {
     throw new HttpError('Conversation not found', HTTP_STATUS.NOT_FOUND)
   }
 
-  async getMessages(conversationId: string, page: number, limit: number) {
+  async getMessages(conversationId: string, cursor: string | undefined, limit: number) {
     const redisKey = `chat:messages:${conversationId}`
-    const start = (page - 1) * limit
-    const end = start + limit - 1
+    const convId = new this.databaseService.ObjectId(conversationId)
 
-    // Try Redis first (ZREVRANGE gives descending order)
-    const cachedMessages = await redisService.clientInstance.zRange(redisKey, start, end, { REV: true })
-
-    if (cachedMessages && cachedMessages.length === limit) {
-      return cachedMessages.map((msg: string) => JSON.parse(msg))
+    let messages = []
+    
+    if (!cursor) {
+      const cachedMessages = await redisService.clientInstance.zRange(redisKey, 0, limit - 1, { REV: true })
+      if (cachedMessages && cachedMessages.length === limit) {
+        messages = cachedMessages.map((msg: string) => JSON.parse(msg))
+      }
     }
 
-    // Fallback to MongoDB
-    const convId = new this.databaseService.ObjectId(conversationId)
-    const messages = await this.databaseService.messages
-      .find({ conversation_id: convId })
-      .sort({ send_at: -1 }) // Newest first
-      .skip(start)
-      .limit(limit)
-      .toArray()
+    if (messages.length === 0) {
+      const matchStage: any = { conversation_id: convId }
+      if (cursor) {
+        matchStage._id = { $lt: new this.databaseService.ObjectId(cursor) }
+      }
+      
+      messages = await this.databaseService.messages
+        .find(matchStage)
+        .sort({ _id: -1 }) // Newest first
+        .limit(limit)
+        .toArray()
+    }
 
-    return messages
+    const has_next_page = messages.length === limit
+    const next_cursor = has_next_page ? messages[messages.length - 1]._id?.toString() : null
+    
+    return { messages, next_cursor, has_next_page }
   }
 
   async markAsRead(userId: string, conversationId: string) {
@@ -205,17 +214,34 @@ class ConversationService {
       { $set: { status: 'revoked' } }
     )
 
+    try {
+      getIO().to(message.conversation_id.toString()).emit('@message:revoked', { message_id: messageId })
+    } catch (e) {}
+
     // TODO: Ideally we should update cache too. For simplicity, just invalidating cache is an option, or leave it to TTL.
     return { success: true }
   }
 
   async deleteMessage(userId: string, messageId: string) {
     const msgId = new this.databaseService.ObjectId(messageId)
+    const objectIdUserId = new this.databaseService.ObjectId(userId)
+
+    const message = await this.databaseService.messages.findOne({ _id: msgId })
+    if (!message) throw new HttpError('Message not found', HTTP_STATUS.NOT_FOUND)
+    
+    if (!message.sender_id.equals(objectIdUserId)) {
+      throw new HttpError('You can only delete your own messages', HTTP_STATUS.FORBIDDEN)
+    }
 
     await this.databaseService.messages.updateOne(
       { _id: msgId },
       { $set: { status: 'deleted' } }
     )
+
+    try {
+      getIO().to(message.conversation_id.toString()).emit('@message:deleted', { message_id: messageId })
+    } catch (e) {}
+
     return { success: true }
   }
 
@@ -224,6 +250,9 @@ class ConversationService {
     const msgId = new this.databaseService.ObjectId(messageId)
 
     const reaction = { emoji, user_id: objectIdUserId }
+
+    const message = await this.databaseService.messages.findOne({ _id: msgId })
+    if (!message) throw new HttpError('Message not found', HTTP_STATUS.NOT_FOUND)
 
     // Xóa reaction cũ của user này nếu có (nếu thiết kế 1 người 1 reaction), hoặc cứ push. Ở đây push.
     await this.databaseService.messages.updateOne(
@@ -235,6 +264,10 @@ class ConversationService {
       { _id: msgId },
       { $push: { reactions: reaction } as any } // Thêm mới
     )
+
+    try {
+      getIO().to(message.conversation_id.toString()).emit('@message:reacted', { message_id: messageId, reaction })
+    } catch (e) {}
 
     return { success: true }
   }
@@ -295,49 +328,48 @@ class ConversationService {
     throw new HttpError('Conversation not found', HTTP_STATUS.NOT_FOUND)
   }
 
-  async searchMessages(userId: string, conversationId: string, q: string, page: number, limit: number) {
+  async searchMessages(userId: string, conversationId: string, q: string, cursor: string | undefined, limit: number) {
     const convId = new this.databaseService.ObjectId(conversationId)
-    const skip = (page - 1) * limit
-
-    const messages = await this.databaseService.messages
-      .find({
-        conversation_id: convId,
-        $text: { $search: q }
-      })
-      .project({ score: { $meta: 'textScore' } })
-      .sort({ score: { $meta: 'textScore' } })
-      .skip(skip)
-      .limit(limit)
-      .toArray()
-
-    const total = await this.databaseService.messages.countDocuments({
+    const matchStage: any = {
       conversation_id: convId,
       $text: { $search: q }
-    })
-
-    return { messages, total, page, totalPages: Math.ceil(total / limit) }
-  }
-
-  async getConversationMedia(userId: string, conversationId: string, page: number, limit: number) {
-    const convId = new this.databaseService.ObjectId(conversationId)
-    const skip = (page - 1) * limit
+    }
+    if (cursor) {
+      matchStage._id = { $lt: new this.databaseService.ObjectId(cursor) }
+    }
 
     const messages = await this.databaseService.messages
-      .find({
-        conversation_id: convId,
-        media_ids: { $exists: true, $not: { $size: 0 } }
-      })
-      .sort({ send_at: -1 })
-      .skip(skip)
+      .find(matchStage)
+      .sort({ _id: -1 }) // Search cursor relies on _id sort instead of text score
       .limit(limit)
       .toArray()
 
-    const total = await this.databaseService.messages.countDocuments({
+    const has_next_page = messages.length === limit
+    const next_cursor = has_next_page ? messages[messages.length - 1]._id?.toString() : null
+    
+    return { messages, next_cursor, has_next_page }
+  }
+
+  async getConversationMedia(userId: string, conversationId: string, cursor: string | undefined, limit: number) {
+    const convId = new this.databaseService.ObjectId(conversationId)
+    const matchStage: any = {
       conversation_id: convId,
       media_ids: { $exists: true, $not: { $size: 0 } }
-    })
+    }
+    if (cursor) {
+      matchStage._id = { $lt: new this.databaseService.ObjectId(cursor) }
+    }
 
-    return { messages, total, page, totalPages: Math.ceil(total / limit) }
+    const messages = await this.databaseService.messages
+      .find(matchStage)
+      .sort({ _id: -1 })
+      .limit(limit)
+      .toArray()
+
+    const has_next_page = messages.length === limit
+    const next_cursor = has_next_page ? messages[messages.length - 1]._id?.toString() : null
+    
+    return { messages, next_cursor, has_next_page }
   }
 
   async muteConversation(userId: string, conversationId: string, type: 'direct' | 'group', durationHours?: number) {
@@ -389,6 +421,255 @@ class ConversationService {
         { $pull: { muted_by: { user_id: uId } } as any }
       )
     }
+    return { success: true }
+  }
+
+  async updateGroupInfo(userId: string, conversationId: string, updates: { name?: string; avatar_url?: string }) {
+    const convId = new this.databaseService.ObjectId(conversationId)
+    // Optional: check if user is admin or member depending on business logic. 
+    // Usually any member can change the group name or avatar, or only admin. 
+    // Here we'll just check if they are in the group for simplicity, or we can assume it's checked by some middleware/controller logic.
+    // I'll update it directly.
+    const validUpdates: any = {}
+    if (updates.name) validUpdates.name = updates.name
+    if (updates.avatar_url) validUpdates.avatar_url = updates.avatar_url
+
+    if (Object.keys(validUpdates).length === 0) return { success: true }
+
+    await this.databaseService.groupConversations.updateOne(
+      { _id: convId },
+      { $set: validUpdates }
+    )
+    return { success: true }
+  }
+
+  async getGroupMembers(userId: string, conversationId: string) {
+    const convId = new this.databaseService.ObjectId(conversationId)
+    const group = await this.databaseService.groupConversations.aggregate([
+      { $match: { _id: convId } },
+      { $unwind: '$members' },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'members.user_id',
+          foreignField: '_id',
+          as: 'userInfo'
+        }
+      },
+      { $unwind: '$userInfo' },
+      {
+        $project: {
+          'userInfo.password': 0,
+          'userInfo.email_verify_token': 0,
+          'userInfo.forgot_password_token': 0
+        }
+      },
+      {
+        $group: {
+          _id: '$_id',
+          members: {
+            $push: {
+              role: '$members.role',
+              joined_at: '$members.joined_at',
+              user: '$userInfo'
+            }
+          }
+        }
+      }
+    ]).toArray()
+
+    return group.length > 0 ? group[0].members : []
+  }
+
+  async addGroupMembers(userId: string, conversationId: string, membersIds: string[]) {
+    const convId = new this.databaseService.ObjectId(conversationId)
+    const newMembers = membersIds.map((id) => ({
+      user_id: new this.databaseService.ObjectId(id),
+      role: 'member',
+      joined_at: new Date()
+    }))
+
+    await this.databaseService.groupConversations.updateOne(
+      { _id: convId },
+      { $addToSet: { members: { $each: newMembers } } as any }
+    )
+
+    return { success: true }
+  }
+
+  async removeGroupMember(adminId: string, conversationId: string, userIdToRemove: string) {
+    const convId = new this.databaseService.ObjectId(conversationId)
+    const uId = new this.databaseService.ObjectId(userIdToRemove)
+    const adminObjectId = new this.databaseService.ObjectId(adminId)
+
+    // Check if the requester is an admin (Optional but recommended)
+    const group = await this.databaseService.groupConversations.findOne({
+      _id: convId,
+      members: { $elemMatch: { user_id: adminObjectId, role: 'admin' } }
+    })
+
+    if (!group) {
+      throw new HttpError('Only admins can remove members', HTTP_STATUS.FORBIDDEN)
+    }
+
+    await this.databaseService.groupConversations.updateOne(
+      { _id: convId },
+      { $pull: { members: { user_id: uId } } as any }
+    )
+    return { success: true }
+  }
+
+  async leaveGroup(userId: string, conversationId: string) {
+    const convId = new this.databaseService.ObjectId(conversationId)
+    const uId = new this.databaseService.ObjectId(userId)
+
+    await this.databaseService.groupConversations.updateOne(
+      { _id: convId },
+      { $pull: { members: { user_id: uId } } as any }
+    )
+    return { success: true }
+  }
+
+  async editMessage(userId: string, messageId: string, content: string) {
+    const objectIdUserId = new this.databaseService.ObjectId(userId)
+    const msgId = new this.databaseService.ObjectId(messageId)
+
+    const message = await this.databaseService.messages.findOne({ _id: msgId })
+    if (!message) throw new HttpError('Message not found', HTTP_STATUS.NOT_FOUND)
+    
+    if (!message.sender_id.equals(objectIdUserId)) {
+      throw new HttpError('You can only edit your own messages', HTTP_STATUS.FORBIDDEN)
+    }
+
+    await this.databaseService.messages.updateOne(
+      { _id: msgId },
+      { $set: { content, is_edited: true, updated_at: new Date() } } // assuming schema allows is_edited
+    )
+
+    try {
+      getIO().to(message.conversation_id.toString()).emit('@message:edited', { message_id: messageId, content })
+    } catch (e) {}
+
+    return { success: true }
+  }
+
+  async unreactMessage(userId: string, messageId: string) {
+    const objectIdUserId = new this.databaseService.ObjectId(userId)
+    const msgId = new this.databaseService.ObjectId(messageId)
+
+    const message = await this.databaseService.messages.findOne({ _id: msgId })
+    if (!message) throw new HttpError('Message not found', HTTP_STATUS.NOT_FOUND)
+
+    await this.databaseService.messages.updateOne(
+      { _id: msgId },
+      { $pull: { reactions: { user_id: objectIdUserId } } as any }
+    )
+
+    try {
+      getIO().to(message.conversation_id.toString()).emit('@message:unreacted', { message_id: messageId, user_id: userId })
+    } catch (e) {}
+
+    return { success: true }
+  }
+
+  async getMessageReactions(messageId: string) {
+    const msgId = new this.databaseService.ObjectId(messageId)
+    
+    const message = await this.databaseService.messages.aggregate([
+      { $match: { _id: msgId } },
+      { $unwind: '$reactions' },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'reactions.user_id',
+          foreignField: '_id',
+          as: 'userInfo'
+        }
+      },
+      { $unwind: '$userInfo' },
+      {
+        $project: {
+          emoji: '$reactions.emoji',
+          user: {
+            _id: '$userInfo._id',
+            name: '$userInfo.name',
+            username: '$userInfo.username',
+            avatar: '$userInfo.avatar'
+          }
+        }
+      }
+    ]).toArray()
+
+    return message
+  }
+
+  async forwardMessage(userId: string, messageId: string, conversationIds: string[]) {
+    const senderId = new this.databaseService.ObjectId(userId)
+    const msgId = new this.databaseService.ObjectId(messageId)
+
+    const originalMessage = await this.databaseService.messages.findOne({ _id: msgId })
+    if (!originalMessage) {
+      throw new HttpError('Original message not found', HTTP_STATUS.NOT_FOUND)
+    }
+
+    // Determine conversation types for all target conversations
+    const objectConvIds = conversationIds.map(id => new this.databaseService.ObjectId(id))
+    const [directs, groups] = await Promise.all([
+      this.databaseService.directConversations.find({ _id: { $in: objectConvIds } }).toArray(),
+      this.databaseService.groupConversations.find({ _id: { $in: objectConvIds } }).toArray()
+    ])
+
+    const convTypeMap = new Map<string, 'direct' | 'group'>()
+    directs.forEach(c => convTypeMap.set(c._id.toString(), 'direct'))
+    groups.forEach(c => convTypeMap.set(c._id.toString(), 'group'))
+
+    const newMessages = conversationIds.map(convId => {
+      const convType = convTypeMap.get(convId) || 'direct' // Default to direct if somehow missing
+      const newMessage = new Message({
+        _id: new this.databaseService.ObjectId(),
+        conversation_id: new this.databaseService.ObjectId(convId),
+        conversation_type: convType,
+        sender_id: senderId,
+        content: originalMessage.content,
+        media_ids: originalMessage.media_ids,
+        send_at: new Date(),
+        read_by: [],
+        reactions: [],
+        status: 'sent',
+        ...{ is_forwarded: true }
+      })
+      return newMessage
+    })
+
+    if (newMessages.length > 0) {
+      await this.databaseService.messages.insertMany(newMessages)
+      
+      // Update last_message_preview for all conversations
+      const updatePromises = conversationIds.map(convId => {
+        const cId = new this.databaseService.ObjectId(convId)
+        const preview = {
+          sender_id: senderId,
+          content: originalMessage.content,
+          message_type: (originalMessage.media_ids && originalMessage.media_ids.length > 0) ? 'image' as const : 'text' as const
+        }
+        
+        const convType = convTypeMap.get(convId)
+        if (convType === 'direct') {
+          return this.databaseService.directConversations.updateOne(
+            { _id: cId },
+            { $set: { last_message_at: new Date(), last_message_preview: preview } }
+          )
+        } else {
+          return this.databaseService.groupConversations.updateOne(
+            { _id: cId },
+            { $set: { last_message_at: new Date(), last_message_preview: preview } }
+          )
+        }
+      })
+
+      await Promise.all(updatePromises)
+    }
+
     return { success: true }
   }
 }

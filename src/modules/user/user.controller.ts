@@ -78,4 +78,40 @@ export class UserController {
     const result = await this.userService.getFollowing(target_user_id)
     res.json({ following: result.map((user) => new UserResponseDto(user)) })
   }
+
+  getUserTweetsController: GetHandler<any> = async (req, res) => {
+    const { username } = req.params
+    const cursor = (req.query as any).cursor as string | undefined
+    const limit = Number((req.query as any).limit)
+    
+    const result = await this.userService.getUserTweets(username, cursor, limit)
+    res.json({ message: 'Get user tweets successfully', result })
+  }
+
+  getUserRepliesController: GetHandler<any> = async (req, res) => {
+    const { username } = req.params
+    const cursor = (req.query as any).cursor as string | undefined
+    const limit = Number((req.query as any).limit)
+    
+    const result = await this.userService.getUserReplies(username, cursor, limit)
+    res.json({ message: 'Get user replies successfully', result })
+  }
+
+  getUserLikesController: GetHandler<any> = async (req, res) => {
+    const { username } = req.params
+    const cursor = (req.query as any).cursor as string | undefined
+    const limit = Number((req.query as any).limit)
+    
+    const result = await this.userService.getUserLikes(username, cursor, limit)
+    res.json({ message: 'Get user likes successfully', result })
+  }
+
+  getUserMediaController: GetHandler<any> = async (req, res) => {
+    const { username } = req.params
+    const cursor = (req.query as any).cursor as string | undefined
+    const limit = Number((req.query as any).limit)
+    
+    const result = await this.userService.getUserMedia(username, cursor, limit)
+    res.json({ message: 'Get user media successfully', result })
+  }
 }

@@ -5,7 +5,10 @@ import { accessTokenValidator } from '../auth/auth.validator'
 import {
   searchUsersController,
   searchTweetsController,
-  searchHashtagsController
+  searchHashtagsController,
+  getSearchHistoryController,
+  deleteSearchHistoryController,
+  getHashtagTweetsController
 } from './search.controller'
 import { searchQueryValidator, searchTweetsQueryValidator } from './search.validator'
 
@@ -27,8 +30,23 @@ searchRouter.get(
 )
 
 searchRouter.get(
+  '/history',
+  wrapController(getSearchHistoryController)
+)
+
+searchRouter.delete(
+  '/history',
+  wrapController(deleteSearchHistoryController)
+)
+
+searchRouter.get(
   '/hashtags',
   wrapController(searchHashtagsController) // Basic query check is handled inside or by generic validator
+)
+
+searchRouter.get(
+  '/hashtags/:tag/tweets',
+  wrapController(getHashtagTweetsController)
 )
 
 export default searchRouter

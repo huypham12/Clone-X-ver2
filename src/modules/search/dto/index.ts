@@ -3,7 +3,7 @@ import { SuccessResponseDto } from '~/common/success-response.dto'
 export class SearchQueryDto {
   constructor(
     public q: string,
-    public page: number,
+    public cursor: string | undefined,
     public limit: number
   ) {}
 }
@@ -11,11 +11,11 @@ export class SearchQueryDto {
 export class SearchTweetsQueryDto extends SearchQueryDto {
   constructor(
     q: string,
-    page: number,
+    cursor: string | undefined,
     limit: number,
     public type?: 'all' | 'media'
   ) {
-    super(q, page, limit)
+    super(q, cursor, limit)
   }
 }
 

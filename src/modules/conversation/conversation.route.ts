@@ -17,13 +17,27 @@ import {
   searchMessagesController,
   getConversationMediaController,
   muteConversationController,
-  unmuteConversationController
+  unmuteConversationController,
+  updateGroupController,
+  getGroupMembersController,
+  addGroupMembersController,
+  removeGroupMemberController,
+  leaveGroupController,
+  editMessageController,
+  unreactMessageController,
+  getMessageReactionsController,
+  forwardMessageController
 } from './conversation.controller'
 import { 
   paginationValidator, 
   createGroupValidator, 
   conversationIdParamValidator, 
-  reactMessageValidator 
+  reactMessageValidator,
+  updateGroupValidator,
+  addMembersValidator,
+  messageIdParamValidator,
+  editMessageValidator,
+  forwardMessageValidator
 } from './conversation.validator'
 import { searchQueryValidator } from '../search/search.validator'
 
@@ -68,6 +82,36 @@ conversationRouter.delete(
   wrapController(unpinConversationController)
 )
 
+conversationRouter.patch(
+  '/:conversation_id',
+  updateGroupValidator,
+  wrapController(updateGroupController)
+)
+
+conversationRouter.get(
+  '/:conversation_id/members',
+  conversationIdParamValidator,
+  wrapController(getGroupMembersController)
+)
+
+conversationRouter.post(
+  '/:conversation_id/members',
+  addMembersValidator,
+  wrapController(addGroupMembersController)
+)
+
+conversationRouter.delete(
+  '/:conversation_id/members/:user_id',
+  conversationIdParamValidator, // We can reuse this or create a specific one for both params, this is fine for basic validation of conversation_id
+  wrapController(removeGroupMemberController)
+)
+
+conversationRouter.delete(
+  '/:conversation_id/leave',
+  conversationIdParamValidator,
+  wrapController(leaveGroupController)
+)
+
 // 2. Quản lý Tin nhắn trong một hội thoại
 conversationRouter.get(
   '/:conversation_id/messages',
@@ -110,6 +154,30 @@ conversationRouter.post(
   '/messages/:message_id/react',
   reactMessageValidator,
   wrapController(reactMessageController)
+)
+
+conversationRouter.delete(
+  '/messages/:message_id/react',
+  messageIdParamValidator,
+  wrapController(unreactMessageController)
+)
+
+conversationRouter.get(
+  '/messages/:message_id/reactions',
+  messageIdParamValidator,
+  wrapController(getMessageReactionsController)
+)
+
+conversationRouter.patch(
+  '/messages/:message_id',
+  editMessageValidator,
+  wrapController(editMessageController)
+)
+
+conversationRouter.post(
+  '/messages/:message_id/forward',
+  forwardMessageValidator,
+  wrapController(forwardMessageController)
 )
 
 conversationRouter.post(

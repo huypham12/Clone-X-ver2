@@ -53,8 +53,16 @@ export const createTweetValidator = validate(
 export const paginationValidator = validate(
   z.object({
     query: z.object({
-      page: z.coerce.number().min(1, 'Page must be greater than or equal to 1').default(1),
+      cursor: z.string().optional(),
       limit: z.coerce.number().min(1, 'Limit must be greater than or equal to 1').max(100).default(10)
+    })
+  })
+)
+
+export const tweetIdValidator = validate(
+  z.object({
+    params: z.object({
+      tweet_id: z.string().refine((val) => ObjectId.isValid(val), { message: 'Invalid tweet_id' })
     })
   })
 )

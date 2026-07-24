@@ -7,12 +7,15 @@ import {
   bookmarkTweetController, 
   unbookmarkTweetController,
   getTweetChildrenController,
-  getNewFeedsController
+  getNewFeedsController,
+  deleteTweetController,
+  getBookmarksController,
+  getTweetLikesController
 } from './tweet.controller'
 import { wrapController } from '~/utils/wrap-controller'
 import { authenticateAccessToken, isUserLoggedInValidator } from '~/middleware/verify.middleware'
 import { accessTokenValidator } from '../auth/auth.validator'
-import { createTweetValidator, paginationValidator } from './tweet.validator'
+import { createTweetValidator, paginationValidator, tweetIdValidator } from './tweet.validator'
 
 const tweetRouter = Router()
 
@@ -22,6 +25,14 @@ tweetRouter.get(
   authenticateAccessToken,
   paginationValidator,
   wrapController(getNewFeedsController)
+)
+
+tweetRouter.get(
+  '/bookmarks',
+  accessTokenValidator,
+  authenticateAccessToken,
+  paginationValidator,
+  wrapController(getBookmarksController)
 )
 
 tweetRouter.post(
@@ -45,6 +56,12 @@ tweetRouter.get(
   isUserLoggedInValidator(authenticateAccessToken),
   paginationValidator,
   wrapController(getTweetChildrenController)
+)
+
+tweetRouter.get(
+  '/:tweet_id/likes',
+  paginationValidator,
+  wrapController(getTweetLikesController)
 )
 
 tweetRouter.post(
@@ -73,6 +90,14 @@ tweetRouter.delete(
   accessTokenValidator,
   authenticateAccessToken,
   wrapController(unbookmarkTweetController)
+)
+
+tweetRouter.delete(
+  '/:tweet_id',
+  accessTokenValidator,
+  authenticateAccessToken,
+  tweetIdValidator,
+  wrapController(deleteTweetController)
 )
 
 export default tweetRouter

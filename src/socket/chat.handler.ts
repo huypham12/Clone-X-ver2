@@ -124,4 +124,24 @@ export const chatHandler = (io: Server, socket: Socket) => {
       socket.emit('error', { message: 'Internal server error while sending message' })
     }
   })
+
+  socket.on('@conversation:typing_on', (payload) => {
+    const { conversation_id } = payload
+    if (conversation_id) {
+      socket.to(conversation_id).emit('@conversation:typing_on', {
+        conversation_id,
+        user_id: socket.user_id
+      })
+    }
+  })
+
+  socket.on('@conversation:typing_off', (payload) => {
+    const { conversation_id } = payload
+    if (conversation_id) {
+      socket.to(conversation_id).emit('@conversation:typing_off', {
+        conversation_id,
+        user_id: socket.user_id
+      })
+    }
+  })
 }

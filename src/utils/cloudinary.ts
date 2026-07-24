@@ -52,3 +52,32 @@ export const uploadVideoToCloudinary = async (filepath: string) => {
     throw error
   }
 }
+
+export const uploadAudioToCloudinary = async (filepath: string) => {
+  try {
+    const result = await cloudinary.uploader.upload(filepath, {
+      folder: 'clone-x/audios',
+      resource_type: 'video', // Cloudinary uses 'video' for audio files as well
+      use_filename: true,
+      unique_filename: true,
+    })
+    
+    fs.unlinkSync(filepath)
+    
+    return result
+  } catch (error) {
+    if (fs.existsSync(filepath)) {
+      fs.unlinkSync(filepath)
+    }
+    throw error
+  }
+}
+
+export const deleteFromCloudinary = async (public_id: string, resource_type: 'image' | 'video' | 'raw' = 'image') => {
+  try {
+    const result = await cloudinary.uploader.destroy(public_id, { resource_type })
+    return result
+  } catch (error) {
+    throw error
+  }
+}

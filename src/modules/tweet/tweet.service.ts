@@ -247,22 +247,124 @@ class TweetService {
     return result
   }
 
+  async getBookmarks(user_id: string, cursor: string | undefined, limit: number) {
+    const matchStage: any = { user_id: new ObjectId(user_id) }
+    if (cursor) {
+      matchStage._id = { $lt: new ObjectId(cursor) }
+    }
+
+    const bookmarks = await databaseService.bookmarks
+      .aggregate([
+        { $match: matchStage },
+        { $sort: { _id: -1 } },
+        { $limit: limit },
+        {
+          $lookup: {
+            from: 'tweets',
+            localField: 'tweet_id',
+            foreignField: '_id',
+            as: 'tweet'
+          }
+        },
+        { $unwind: '$tweet' },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'tweet.user_id',
+            foreignField: '_id',
+            as: 'tweet.author'
+          }
+        },
+        {
+          $unwind: {
+            path: '$tweet.author',
+            preserveNullAndEmptyArrays: true
+          }
+        },
+        {
+          $project: {
+            'tweet.author.password': 0,
+            'tweet.author.email_verify_token': 0,
+            'tweet.author.forgot_password_token': 0
+          }
+        },
+        { $replaceRoot: { newRoot: { $mergeObjects: ['$tweet', { bookmarkId: '$_id' }] } } }
+      ])
+      .toArray()
+
+    const has_next_page = bookmarks.length === limit
+    const next_cursor = has_next_page ? bookmarks[bookmarks.length - 1].bookmarkId?.toString() : null
+
+    const tweets = bookmarks.map(b => {
+      const { bookmarkId, ...rest } = b
+      return rest
+    })
+
+    return { tweets, next_cursor, has_next_page }
+  }
+
+  async getTweetLikes(tweet_id: string, cursor: string | undefined, limit: number) {
+    const matchStage: any = { tweet_id: new ObjectId(tweet_id) }
+    if (cursor) {
+      matchStage._id = { $lt: new ObjectId(cursor) }
+    }
+
+    const likes = await databaseService.likes
+      .aggregate([
+        { $match: matchStage },
+        { $sort: { _id: -1 } },
+        { $limit: limit },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'user_id',
+            foreignField: '_id',
+            as: 'user'
+          }
+        },
+        { $unwind: '$user' },
+        {
+          $project: {
+            'user.password': 0,
+            'user.email_verify_token': 0,
+            'user.forgot_password_token': 0
+          }
+        },
+        { $replaceRoot: { newRoot: { $mergeObjects: ['$user', { likeId: '$_id' }] } } }
+      ])
+      .toArray()
+
+    const has_next_page = likes.length === limit
+    const next_cursor = has_next_page ? likes[likes.length - 1].likeId?.toString() : null
+
+    const users = likes.map(l => {
+      const { likeId, ...rest } = l
+      return rest
+    })
+
+    return { users, next_cursor, has_next_page }
+  }
+
   async getTweetChildren({
     tweet_id,
-    page,
+    cursor,
     limit,
     user_id
   }: {
     tweet_id: string
-    page: number
+    cursor?: string
     limit: number
     user_id?: string
   }) {
     const blockedUserIds = await this.getBlockedUserIds(user_id)
+    const matchStage: any = { parent_id: new ObjectId(tweet_id) }
+    if (cursor) {
+      matchStage._id = { $lt: new ObjectId(cursor) }
+    }
     
     const tweets = await databaseService.tweets
       .aggregate([
-        { $match: { parent_id: new ObjectId(tweet_id) } },
+        { $match: matchStage },
         {
           $lookup: {
             from: 'users',
@@ -287,27 +389,32 @@ class TweetService {
             'author.forgot_password_token': 0
           }
         },
-        { $sort: { created_at: -1 } },
-        { $skip: limit * (page - 1) },
+        { $sort: { _id: -1 } },
         { $limit: limit }
       ])
       .toArray()
       
-    const total = await databaseService.tweets.countDocuments({ parent_id: new ObjectId(tweet_id) })
+    const has_next_page = tweets.length === limit
+    const next_cursor = has_next_page ? tweets[tweets.length - 1]._id?.toString() : null
+    
     return {
       tweets,
-      total_page: Math.ceil(total / limit)
+      next_cursor,
+      has_next_page
     }
   }
 
-  async getNewFeeds({ user_id, page, limit }: { user_id: string; page: number; limit: number }) {
+  async getNewFeeds({ user_id, cursor, limit }: { user_id: string; cursor?: string; limit: number }) {
     const blockedUserIds = await this.getBlockedUserIds(user_id)
+    const matchStage: any = { user_id: new ObjectId(user_id) }
+    if (cursor) {
+      matchStage._id = { $lt: new ObjectId(cursor) }
+    }
     
     const feeds = await databaseService.newsFeeds
       .aggregate([
-        { $match: { user_id: new ObjectId(user_id) } },
-        { $sort: { created_at: -1 } },
-        { $skip: limit * (page - 1) },
+        { $match: matchStage },
+        { $sort: { _id: -1 } },
         { $limit: limit },
         {
           $lookup: {
@@ -346,14 +453,20 @@ class TweetService {
             'tweet.author.forgot_password_token': 0
           }
         },
-        { $replaceRoot: { newRoot: '$tweet' } } // Đưa tweet ra ngoài
+        { $replaceRoot: { newRoot: { $mergeObjects: ['$tweet', { newsFeedId: '$_id' }] } } }
       ])
       .toArray()
       
-    const total = await databaseService.newsFeeds.countDocuments({ user_id: new ObjectId(user_id) })
+    const has_next_page = feeds.length === limit
+    const next_cursor = has_next_page ? feeds[feeds.length - 1].newsFeedId?.toString() : null
+    
     return {
-      tweets: feeds,
-      total_page: Math.ceil(total / limit)
+      tweets: feeds.map(feed => {
+        const { newsFeedId, ...rest } = feed
+        return rest
+      }),
+      next_cursor,
+      has_next_page
     }
   }
 
@@ -407,6 +520,39 @@ class TweetService {
     }
 
     return hashtagObjectIds
+  }
+
+  async deleteTweet(user_id: string, tweet_id: string) {
+    const tweet = await databaseService.tweets.findOne({ _id: new ObjectId(tweet_id) })
+    if (!tweet) {
+      throw new Error('Tweet not found') // Ideal to throw custom Error with HTTP status here, assuming generic error handler catches it
+    }
+
+    if (tweet.user_id.toString() !== user_id) {
+      throw new Error('You do not have permission to delete this tweet')
+    }
+
+    // Xóa Tweet
+    await databaseService.tweets.deleteOne({ _id: new ObjectId(tweet_id) })
+
+    // Xóa các dữ liệu liên quan (Likes, Bookmarks, NewsFeeds)
+    await Promise.all([
+      databaseService.likes.deleteMany({ tweet_id: new ObjectId(tweet_id) }),
+      databaseService.bookmarks.deleteMany({ tweet_id: new ObjectId(tweet_id) }),
+      databaseService.newsFeeds.deleteMany({ tweet_id: new ObjectId(tweet_id) }),
+      redisService.del(`tweet:${tweet_id}`)
+    ])
+
+    // Giảm đếm của tweet cha nếu có
+    if (tweet.parent_id) {
+      const incField =
+        tweet.type === TweetType.Retweet ? 'retweet_count' : tweet.type === TweetType.Comment ? 'reply_count' : 'quote_count'
+      
+      await databaseService.tweets.updateOne({ _id: tweet.parent_id }, { $inc: { [incField]: -1 } })
+      await redisService.del(`tweet:${tweet.parent_id}`)
+    }
+
+    return true
   }
 }
 
