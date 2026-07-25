@@ -4,6 +4,7 @@ import redisService from '~/config/redis.service'
 import { Tweet, Hashtag, Like, Bookmark, NewsFeed } from '~/schemas'
 import { TweetType, NotificationType, TweetAudience } from '~/constants/enums'
 import notificationService from '../notification/notification.service'
+import { getParentTweetLookupStages, getIsRetweetedLookupStages } from '~/utils/aggregation'
 
 const databaseService = new DatabaseService()
 
@@ -157,7 +158,8 @@ class TweetService {
             'author.email_verify_token': 0,
             'author.forgot_password_token': 0
           }
-        }
+        },
+        ...getParentTweetLookupStages()
       ]).toArray()
 
       tweetDetail = tweet[0] || null
@@ -175,6 +177,12 @@ class TweetService {
       ])
       tweetDetail.is_bookmarked = Boolean(bookmark)
       tweetDetail.is_liked = Boolean(like)
+    }
+
+    if (tweetDetail?.audience === 1) {
+      if (!user_id || tweetDetail.user_id.toString() !== user_id) {
+        return null
+      }
     }
 
     return tweetDetail
@@ -220,6 +228,30 @@ class TweetService {
         { $inc: { like_count: -1 } }
       )
       await redisService.del(`tweet:${tweet_id}`)
+    }
+    return result
+  }
+
+  async unretweet(user_id: string, tweet_id: string) {
+    const result = await databaseService.tweets.findOneAndDelete({
+      user_id: new ObjectId(user_id),
+      parent_id: new ObjectId(tweet_id),
+      type: TweetType.Retweet
+    })
+    
+    if (result) {
+      await databaseService.tweets.updateOne(
+        { _id: new ObjectId(tweet_id) },
+        { $inc: { retweet_count: -1 } }
+      )
+      
+      // Clear cache of the parent tweet
+      await redisService.del(`tweet:${tweet_id}`)
+      
+      // Remove from NewsFeed
+      await databaseService.newsFeeds.deleteMany({
+        tweet_id: result._id
+      })
     }
     return result
   }
@@ -374,7 +406,13 @@ class TweetService {
     user_id?: string
   }) {
     const blockedUserIds = await this.getBlockedUserIds(user_id)
-    const matchStage: any = { parent_id: new ObjectId(tweet_id) }
+    const matchStage: any = { 
+      parent_id: new ObjectId(tweet_id),
+      $or: [
+        { audience: 0 },
+        { $and: [{ audience: 1 }, { user_id: user_id ? new ObjectId(user_id) : null }] }
+      ]
+    }
     if (cursor) {
       matchStage._id = { $lt: new ObjectId(cursor) }
     }
@@ -414,6 +452,7 @@ class TweetService {
             'author.forgot_password_token': 0
           }
         },
+        ...getParentTweetLookupStages(),
         { $sort: { _id: -1 } },
         { $limit: limit }
       ])
@@ -447,6 +486,14 @@ class TweetService {
             localField: 'tweet_id',
             foreignField: '_id',
             as: 'tweet'
+          }
+        },
+        {
+          $match: {
+            $or: [
+              { 'tweet.audience': 0 },
+              { $and: [{ 'tweet.audience': 1 }, { 'tweet.user_id': new ObjectId(user_id) }] }
+            ]
           }
         },
         {
@@ -486,6 +533,8 @@ class TweetService {
             'tweet.author.forgot_password_token': 0
           }
         },
+        ...getParentTweetLookupStages('tweet'),
+        ...getIsRetweetedLookupStages(user_id, 'tweet'),
         {
           $lookup: {
             from: 'bookmarks',
@@ -613,6 +662,8 @@ class TweetService {
             'author.forgot_password_token': 0
           }
         },
+        ...getParentTweetLookupStages(),
+        ...getIsRetweetedLookupStages(user_id),
         {
           $lookup: {
             from: 'bookmarks',
@@ -738,6 +789,64 @@ class TweetService {
     }
 
     return hashtagObjectIds
+  }
+
+  async updateTweet(user_id: string, tweet_id: string, body: any) {
+    const tweet = await databaseService.tweets.findOne({ _id: new ObjectId(tweet_id) })
+    if (!tweet) {
+      throw new Error('Tweet not found')
+    }
+
+    if (tweet.user_id.toString() !== user_id) {
+      throw new Error('You do not have permission to edit this tweet')
+    }
+
+    const updateData: any = {
+      updated_at: new Date()
+    }
+
+    if (body.audience !== undefined) {
+      updateData.audience = body.audience
+    }
+
+    if (body.content !== undefined) {
+      if (tweet.type === TweetType.Retweet) {
+        throw new Error('Retweet cannot have content')
+      }
+      updateData.content = body.content
+    }
+
+    if (body.hashtags !== undefined) {
+      updateData.hashtags = await this.processHashtags(body.hashtags)
+    }
+
+    if (body.mentions !== undefined) {
+      // Parse Mentions from content if content is provided
+      const content = body.content !== undefined ? body.content : tweet.content
+      const parsedUsernames = content?.match(/@(\w+)/g)?.map((m: string) => m.slice(1)) || []
+      
+      let finalMentions = [...body.mentions]
+      if (parsedUsernames.length > 0) {
+        const mentionedUsers = await databaseService.users
+          .find({ username: { $in: parsedUsernames } })
+          .toArray()
+        finalMentions = [...new Set([...finalMentions, ...mentionedUsers.map(u => u._id)])]
+      }
+      updateData.mentions = finalMentions
+    }
+
+    if (body.medias !== undefined) {
+      updateData.medias = body.medias
+    }
+
+    await databaseService.tweets.updateOne(
+      { _id: new ObjectId(tweet_id) },
+      { $set: updateData }
+    )
+
+    await redisService.del(`tweet:${tweet_id}`)
+    
+    return this.getTweet(tweet_id, user_id)
   }
 
   async deleteTweet(user_id: string, tweet_id: string) {

@@ -84,8 +84,9 @@ export class UserController {
     const { username } = req.params
     const cursor = (req.query as any).cursor as string | undefined
     const limit = Number((req.query as any).limit)
+    const current_user_id = req.decoded_authorization?.user_id
     
-    const result = await this.userService.getUserTweets(username, cursor, limit)
+    const result = await this.userService.getUserTweets(username, cursor, limit, current_user_id)
     res.json({ message: 'Get user tweets successfully', result })
   }
 
@@ -93,8 +94,9 @@ export class UserController {
     const { username } = req.params
     const cursor = (req.query as any).cursor as string | undefined
     const limit = Number((req.query as any).limit)
+    const current_user_id = req.decoded_authorization?.user_id
     
-    const result = await this.userService.getUserReplies(username, cursor, limit)
+    const result = await this.userService.getUserReplies(username, cursor, limit, current_user_id)
     res.json({ message: 'Get user replies successfully', result })
   }
 
@@ -102,8 +104,9 @@ export class UserController {
     const { username } = req.params
     const cursor = (req.query as any).cursor as string | undefined
     const limit = Number((req.query as any).limit)
+    const current_user_id = req.decoded_authorization?.user_id
     
-    const result = await this.userService.getUserLikes(username, cursor, limit)
+    const result = await this.userService.getUserLikes(username, cursor, limit, current_user_id)
     res.json({ message: 'Get user likes successfully', result })
   }
 
@@ -111,8 +114,9 @@ export class UserController {
     const { username } = req.params
     const cursor = (req.query as any).cursor as string | undefined
     const limit = Number((req.query as any).limit)
+    const current_user_id = req.decoded_authorization?.user_id
     
-    const result = await this.userService.getUserMedia(username, cursor, limit)
+    const result = await this.userService.getUserMedia(username, cursor, limit, current_user_id)
     res.json({ message: 'Get user media successfully', result })
   }
 }

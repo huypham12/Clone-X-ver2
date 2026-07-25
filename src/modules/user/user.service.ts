@@ -7,6 +7,7 @@ import { MESSAGES } from '~/constants/messages'
 import { Follower, User, UserBlock } from '~/schemas'
 import { NotificationType, TweetType } from '~/constants/enums'
 import notificationService from '../notification/notification.service'
+import { getParentTweetLookupStages, getIsRetweetedLookupStages } from '~/utils/aggregation'
 
 export class UserService {
   constructor(private readonly databaseService: DatabaseService) {}
@@ -335,7 +336,128 @@ export class UserService {
     return users
   }
 
-  getUserTweets = async (username: string, cursor: string | undefined, limit: number) => {
+  private async aggregateTweets(matchStage: any, current_user_id: string | undefined, limit: number) {
+    const finalMatchStage = {
+      ...matchStage,
+      $or: [
+        { audience: 0 },
+        { $and: [{ audience: 1 }, { user_id: current_user_id ? new ObjectId(current_user_id) : null }] }
+      ]
+    }
+
+    const pipeline: any[] = [
+      { $match: finalMatchStage },
+      { $sort: { _id: -1 } },
+      { $limit: limit },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'user_id',
+          foreignField: '_id',
+          as: 'author'
+        }
+      },
+      {
+        $lookup: {
+          from: 'medias',
+          localField: 'medias',
+          foreignField: '_id',
+          as: 'medias_info'
+        }
+      },
+      {
+        $unwind: {
+          path: '$author',
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $project: {
+          'author.password': 0,
+          'author.email_verify_token': 0,
+          'author.forgot_password_token': 0
+        }
+      },
+      ...getParentTweetLookupStages()
+    ]
+
+    if (current_user_id) {
+      pipeline.push(
+        ...getIsRetweetedLookupStages(current_user_id),
+        {
+          $lookup: {
+            from: 'bookmarks',
+            let: { tweet_id: '$_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$tweet_id', '$$tweet_id'] },
+                      { $eq: ['$user_id', new ObjectId(current_user_id)] }
+                    ]
+                  }
+                }
+              }
+            ],
+            as: 'bookmarks'
+          }
+        },
+        {
+          $lookup: {
+            from: 'likes',
+            let: { tweet_id: '$_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$tweet_id', '$$tweet_id'] },
+                      { $eq: ['$user_id', new ObjectId(current_user_id)] }
+                    ]
+                  }
+                }
+              }
+            ],
+            as: 'likes'
+          }
+        },
+        {
+          $addFields: {
+            is_bookmarked: {
+              $cond: {
+                if: { $gt: [{ $size: '$bookmarks' }, 0] },
+                then: true,
+                else: false
+              }
+            },
+            is_liked: {
+              $cond: {
+                if: { $gt: [{ $size: '$likes' }, 0] },
+                then: true,
+                else: false
+              }
+            }
+          }
+        },
+        {
+          $project: {
+            bookmarks: 0,
+            likes: 0
+          }
+        }
+      )
+    }
+
+    const tweets = await this.databaseService.tweets.aggregate(pipeline).toArray()
+    
+    const has_next_page = tweets.length === limit
+    const next_cursor = has_next_page ? tweets[tweets.length - 1]._id?.toString() : null
+    
+    return { tweets, next_cursor, has_next_page }
+  }
+
+  getUserTweets = async (username: string, cursor: string | undefined, limit: number, current_user_id?: string) => {
     const user = await this.databaseService.users.findOne({ username })
     if (!user) throw new HttpError(MESSAGES.USER_NOT_FOUND, HTTP_STATUS.NOT_FOUND)
 
@@ -347,19 +469,11 @@ export class UserService {
       matchStage._id = { $lt: new ObjectId(cursor) }
     }
 
-    const tweets = await this.databaseService.tweets
-      .find(matchStage)
-      .sort({ _id: -1 })
-      .limit(limit)
-      .toArray()
-
-    const has_next_page = tweets.length === limit
-    const next_cursor = has_next_page ? tweets[tweets.length - 1]._id.toString() : null
-
-    return { tweets, next_cursor, has_next_page }
+    return this.aggregateTweets(matchStage, current_user_id, limit)
   }
 
-  getUserReplies = async (username: string, cursor: string | undefined, limit: number) => {
+
+  getUserReplies = async (username: string, cursor: string | undefined, limit: number, current_user_id?: string) => {
     const user = await this.databaseService.users.findOne({ username })
     if (!user) throw new HttpError(MESSAGES.USER_NOT_FOUND, HTTP_STATUS.NOT_FOUND)
 
@@ -371,19 +485,10 @@ export class UserService {
       matchStage._id = { $lt: new ObjectId(cursor) }
     }
 
-    const replies = await this.databaseService.tweets
-      .find(matchStage)
-      .sort({ _id: -1 })
-      .limit(limit)
-      .toArray()
-
-    const has_next_page = replies.length === limit
-    const next_cursor = has_next_page ? replies[replies.length - 1]._id.toString() : null
-
-    return { replies, next_cursor, has_next_page }
+    return this.aggregateTweets(matchStage, current_user_id, limit)
   }
 
-  getUserLikes = async (username: string, cursor: string | undefined, limit: number) => {
+  getUserLikes = async (username: string, cursor: string | undefined, limit: number, current_user_id?: string) => {
     const user = await this.databaseService.users.findOne({ username })
     if (!user) throw new HttpError(MESSAGES.USER_NOT_FOUND, HTTP_STATUS.NOT_FOUND)
 
@@ -410,38 +515,38 @@ export class UserService {
       ])
       .toArray()
 
+    const tweetIds = likes.map(l => l._id)
+
+    // Then use aggregateTweets with these specific tweet IDs
+    const aggregated = await this.aggregateTweets({ _id: { $in: tweetIds } }, current_user_id, limit)
+    
+    // Sort them back to the original order of likes
+    const tweets = likes.map(like => {
+      const aggTweet = aggregated.tweets.find(t => t._id.toString() === like._id.toString())
+      return { ...aggTweet, likeId: like.likeId }
+    }).filter((t: any) => t.author) // Filter out deleted tweets potentially
+
     const has_next_page = likes.length === limit
     const next_cursor = has_next_page ? likes[likes.length - 1].likeId?.toString() : null
 
-    const tweets = likes.map(l => {
-      const { likeId, ...rest } = l
-      return rest
-    })
-
-    return { tweets, next_cursor, has_next_page }
+    return { tweets: tweets.map((t: any) => {
+      const { likeId, ...rest } = t;
+      return rest;
+    }), next_cursor, has_next_page }
   }
 
-  getUserMedia = async (username: string, cursor: string | undefined, limit: number) => {
+  getUserMedia = async (username: string, cursor: string | undefined, limit: number, current_user_id?: string) => {
     const user = await this.databaseService.users.findOne({ username })
     if (!user) throw new HttpError(MESSAGES.USER_NOT_FOUND, HTTP_STATUS.NOT_FOUND)
 
     const matchStage: any = {
       user_id: user._id,
-      media_ids: { $exists: true, $not: { $size: 0 } }
+      medias: { $exists: true, $not: { $size: 0 } }
     }
     if (cursor) {
       matchStage._id = { $lt: new ObjectId(cursor) }
     }
 
-    const media = await this.databaseService.tweets
-      .find(matchStage)
-      .sort({ _id: -1 })
-      .limit(limit)
-      .toArray()
-
-    const has_next_page = media.length === limit
-    const next_cursor = has_next_page ? media[media.length - 1]._id.toString() : null
-
-    return { media, next_cursor, has_next_page }
+    return this.aggregateTweets(matchStage, current_user_id, limit)
   }
 }

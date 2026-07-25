@@ -66,3 +66,20 @@ export const tweetIdValidator = validate(
     })
   })
 )
+
+const updateTweetSchema = z.object({
+  audience: z.nativeEnum(TweetAudience).optional(),
+  content: z.string().max(1000, { message: 'Tweet content is too long' }).optional(),
+  hashtags: z.array(z.string()).optional(),
+  mentions: z.array(z.string().refine((val) => ObjectId.isValid(val), { message: 'Invalid mention id' })).transform((vals) => vals ? vals.map((val) => new ObjectId(val)) : []).optional(),
+  medias: z.array(z.string().refine((val) => ObjectId.isValid(val), { message: 'Invalid media id' })).transform((vals) => vals ? vals.map((val) => new ObjectId(val)) : []).optional()
+})
+
+export const updateTweetValidator = validate(
+  z.object({
+    params: z.object({
+      tweet_id: z.string().refine((val) => ObjectId.isValid(val), { message: 'Invalid tweet_id' })
+    }),
+    body: updateTweetSchema
+  })
+)

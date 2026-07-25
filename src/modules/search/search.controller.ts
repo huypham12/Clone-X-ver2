@@ -59,7 +59,8 @@ export const getHashtagTweetsController: GetHandler<any> = async (req, res) => {
   const { tag } = req.params
   const cursor = (req.query as any).cursor as string | undefined
   const limit = Number((req.query as any).limit)
+  const user_id = (req as any).decoded_authorization?.user_id
 
-  const result = await searchService.getHashtagTweets(tag, cursor, limit)
+  const result = await searchService.getHashtagTweets(tag, cursor, limit, user_id)
   res.json({ message: 'Get hashtag tweets successfully', result })
 }

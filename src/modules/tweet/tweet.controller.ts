@@ -22,6 +22,16 @@ export const createTweetController: PostHandler<CreateTweetBodyDto, CreateTweetR
   res.status(response.statusCode).json(response)
 }
 
+export const updateTweetController: PostHandler<any, any, { tweet_id: string }> = async (req, res) => {
+  const user_id = (req as any).decoded_authorization.user_id
+  const { tweet_id } = req.params
+  
+  const result = await tweetService.updateTweet(user_id, tweet_id, (req as any).validatedData.body)
+
+  const response = new SuccessResponseDto(HTTP_STATUS.OK, 'Tweet updated successfully', result as any)
+  res.status(response.statusCode).json(response)
+}
+
 export const getTweetController: GetHandler<GetTweetResponseDto, { tweet_id: string }> = async (req, res) => {
   const { tweet_id } = req.params
   const user_id = (req as any).decoded_authorization?.user_id
@@ -52,6 +62,15 @@ export const unlikeTweetController: DeleteHandler<LikeTweetResponseDto, { tweet_
   const result = await tweetService.unlikeTweet(user_id, tweet_id)
   
   const response = new LikeTweetResponseDto(HTTP_STATUS.OK, 'Unlike tweet successfully', result)
+  res.status(response.statusCode).json(response)
+}
+
+export const unretweetController: DeleteHandler<any, { tweet_id: string }> = async (req, res) => {
+  const user_id = (req as any).decoded_authorization.user_id
+  const { tweet_id } = req.params
+  const result = await tweetService.unretweet(user_id, tweet_id)
+  
+  const response = new SuccessResponseDto(HTTP_STATUS.OK, 'Undo retweet successfully', result as any)
   res.status(response.statusCode).json(response)
 }
 

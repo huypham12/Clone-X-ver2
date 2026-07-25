@@ -6,17 +6,19 @@ import {
   unlikeTweetController, 
   bookmarkTweetController, 
   unbookmarkTweetController,
+  unretweetController,
   getTweetChildrenController,
   getNewFeedsController,
   deleteTweetController,
   getBookmarksController,
   getTweetLikesController,
-  getForYouFeedsController
+  getForYouFeedsController,
+  updateTweetController
 } from './tweet.controller'
 import { wrapController } from '~/utils/wrap-controller'
 import { authenticateAccessToken, isUserLoggedInValidator } from '~/middleware/verify.middleware'
 import { accessTokenValidator } from '../auth/auth.validator'
-import { createTweetValidator, paginationValidator, tweetIdValidator } from './tweet.validator'
+import { createTweetValidator, paginationValidator, tweetIdValidator, updateTweetValidator } from './tweet.validator'
 
 const tweetRouter = Router()
 
@@ -50,6 +52,14 @@ tweetRouter.post(
   authenticateAccessToken,
   createTweetValidator,
   wrapController(createTweetController)
+)
+
+tweetRouter.patch(
+  '/:tweet_id',
+  accessTokenValidator,
+  authenticateAccessToken,
+  updateTweetValidator,
+  wrapController(updateTweetController)
 )
 
 tweetRouter.get(
@@ -99,6 +109,13 @@ tweetRouter.delete(
   accessTokenValidator,
   authenticateAccessToken,
   wrapController(unbookmarkTweetController)
+)
+
+tweetRouter.delete(
+  '/:tweet_id/retweet',
+  accessTokenValidator,
+  authenticateAccessToken,
+  wrapController(unretweetController)
 )
 
 tweetRouter.delete(

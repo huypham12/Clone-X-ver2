@@ -81,24 +81,32 @@ userRouter.get(
 
 userRouter.get(
   '/:username/tweets',
+  isUserLoggedInValidator(accessTokenValidator),
+  isUserLoggedInValidator(authenticateAccessToken),
   paginationValidator,
   wrapController(userController.getUserTweetsController)
 )
 
 userRouter.get(
   '/:username/replies',
+  isUserLoggedInValidator(accessTokenValidator),
+  isUserLoggedInValidator(authenticateAccessToken),
   paginationValidator,
   wrapController(userController.getUserRepliesController)
 )
 
 userRouter.get(
   '/:username/likes',
+  isUserLoggedInValidator(accessTokenValidator),
+  isUserLoggedInValidator(authenticateAccessToken),
   paginationValidator,
   wrapController(userController.getUserLikesController)
 )
 
 userRouter.get(
   '/:username/media',
+  isUserLoggedInValidator(accessTokenValidator),
+  isUserLoggedInValidator(authenticateAccessToken),
   paginationValidator,
   wrapController(userController.getUserMediaController)
 )

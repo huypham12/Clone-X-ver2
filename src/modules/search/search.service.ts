@@ -1,5 +1,6 @@
 import DatabaseService from '~/config/database.service'
 import redisService from '~/config/redis.service'
+import { getParentTweetLookupStages, getIsRetweetedLookupStages } from '~/utils/aggregation'
 
 class SearchService {
   private databaseService: DatabaseService
@@ -41,31 +42,142 @@ class SearchService {
     return result
   }
 
-  async searchTweets(q: string, type: 'all' | 'media', cursor: string | undefined, limit: number) {
-    const cacheKey = `search:tweets:${q}:type:${type}:cursor:${cursor || 'first'}:limit:${limit}`
+  private async aggregateTweets(matchStage: any, current_user_id: string | undefined, limit: number) {
+    const pipeline: any[] = [
+      { $match: matchStage },
+      { $sort: { _id: -1 } },
+      { $limit: limit },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'user_id',
+          foreignField: '_id',
+          as: 'author'
+        }
+      },
+      {
+        $lookup: {
+          from: 'medias',
+          localField: 'medias',
+          foreignField: '_id',
+          as: 'medias_info'
+        }
+      },
+      {
+        $unwind: {
+          path: '$author',
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $project: {
+          'author.password': 0,
+          'author.email_verify_token': 0,
+          'author.forgot_password_token': 0
+        }
+      },
+      ...getParentTweetLookupStages()
+    ]
+
+    if (current_user_id) {
+      pipeline.push(
+        ...getIsRetweetedLookupStages(current_user_id),
+        {
+          $lookup: {
+            from: 'bookmarks',
+            let: { tweet_id: '$_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$tweet_id', '$$tweet_id'] },
+                      { $eq: ['$user_id', new this.databaseService.ObjectId(current_user_id)] }
+                    ]
+                  }
+                }
+              }
+            ],
+            as: 'bookmarks'
+          }
+        },
+        {
+          $lookup: {
+            from: 'likes',
+            let: { tweet_id: '$_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$tweet_id', '$$tweet_id'] },
+                      { $eq: ['$user_id', new this.databaseService.ObjectId(current_user_id)] }
+                    ]
+                  }
+                }
+              }
+            ],
+            as: 'likes'
+          }
+        },
+        {
+          $addFields: {
+            is_bookmarked: {
+              $cond: {
+                if: { $gt: [{ $size: '$bookmarks' }, 0] },
+                then: true,
+                else: false
+              }
+            },
+            is_liked: {
+              $cond: {
+                if: { $gt: [{ $size: '$likes' }, 0] },
+                then: true,
+                else: false
+              }
+            }
+          }
+        },
+        {
+          $project: {
+            bookmarks: 0,
+            likes: 0
+          }
+        }
+      )
+    }
+
+    const tweets = await this.databaseService.tweets.aggregate(pipeline).toArray()
+    
+    const has_next_page = tweets.length === limit
+    const next_cursor = has_next_page ? tweets[tweets.length - 1]._id?.toString() : null
+    
+    return { tweets, next_cursor, has_next_page }
+  }
+
+  async searchTweets(q: string, type: 'all' | 'media', cursor: string | undefined, limit: number, user_id?: string) {
+    const cacheKey = `search:tweets:${q}:type:${type}:cursor:${cursor || 'first'}:limit:${limit}:user:${user_id || 'none'}`
     const cachedData = await redisService.clientInstance.get(cacheKey)
     if (cachedData) return JSON.parse(cachedData)
 
-    const filter: any = { $text: { $search: q } }
+    const regex = new RegExp(q, 'i')
+    const filter: any = { 
+      content: { $regex: regex },
+      $or: [
+        { audience: 0 },
+        { $and: [{ audience: 1 }, { user_id: user_id ? new this.databaseService.ObjectId(user_id) : null }] }
+      ]
+    }
 
     if (type === 'media') {
-      filter.media_ids = { $exists: true, $not: { $size: 0 } }
+      filter.medias = { $exists: true, $not: { $size: 0 } }
     }
     
     if (cursor) {
       filter._id = { $lt: new this.databaseService.ObjectId(cursor) }
     }
 
-    const tweets = await this.databaseService.tweets
-      .find(filter)
-      .sort({ _id: -1 })
-      .limit(limit)
-      .toArray()
-
-    const has_next_page = tweets.length === limit
-    const next_cursor = has_next_page ? tweets[tweets.length - 1]._id.toString() : null
-
-    const result = { tweets, next_cursor, has_next_page }
+    const result = await this.aggregateTweets(filter, user_id, limit)
     
     // Cache for 60 seconds
     await redisService.clientInstance.setEx(cacheKey, 60, JSON.stringify(result))
@@ -107,26 +219,23 @@ class SearchService {
     await redisService.clientInstance.del(key)
   }
 
-  async getHashtagTweets(tag: string, cursor: string | undefined, limit: number) {
+  async getHashtagTweets(tag: string, cursor: string | undefined, limit: number, user_id?: string) {
     const normalizedTag = tag.startsWith('#') ? tag.slice(1).toLowerCase() : tag.toLowerCase()
     const hashtag = await this.databaseService.hashtags.findOne({ normalized_name: normalizedTag })
     if (!hashtag) return { tweets: [], next_cursor: null, has_next_page: false }
 
-    const matchStage: any = { hashtags: hashtag._id }
+    const matchStage: any = { 
+      hashtags: hashtag._id,
+      $or: [
+        { audience: 0 },
+        { $and: [{ audience: 1 }, { user_id: user_id ? new this.databaseService.ObjectId(user_id) : null }] }
+      ]
+    }
     if (cursor) {
       matchStage._id = { $lt: new this.databaseService.ObjectId(cursor) }
     }
 
-    const tweets = await this.databaseService.tweets
-      .find(matchStage)
-      .sort({ _id: -1 })
-      .limit(limit)
-      .toArray()
-
-    const has_next_page = tweets.length === limit
-    const next_cursor = has_next_page ? tweets[tweets.length - 1]._id.toString() : null
-
-    return { tweets, next_cursor, has_next_page }
+    return await this.aggregateTweets(matchStage, user_id, limit)
   }
 }
 
