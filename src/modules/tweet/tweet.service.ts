@@ -2,7 +2,7 @@ import { ObjectId } from 'mongodb'
 import DatabaseService from '~/config/database.service'
 import redisService from '~/config/redis.service'
 import { Tweet, Hashtag, Like, Bookmark, NewsFeed } from '~/schemas'
-import { TweetType, NotificationType } from '~/constants/enums'
+import { TweetType, NotificationType, TweetAudience } from '~/constants/enums'
 import notificationService from '../notification/notification.service'
 
 const databaseService = new DatabaseService()
@@ -31,7 +31,7 @@ class TweetService {
       parent_id,
       hashtags: hashtagIds,
       mentions: finalMentions.map(id => new ObjectId(id)),
-      media_ids: medias
+      media_ids: (medias || []).map((id: string) => new ObjectId(id))
     })
 
     const result = await databaseService.tweets.insertOne(tweet)
@@ -113,59 +113,68 @@ class TweetService {
       { $inc: { [incField]: 1 } }
     ).catch(console.error)
 
-    // Kiểm tra cache Redis
+    let tweetDetail: any = null
     const cachedTweet = await redisService.get(`tweet:${tweet_id}`)
     if (cachedTweet) {
-      return cachedTweet
+      tweetDetail = cachedTweet
+    } else {
+      // Aggregate to get full details (author, hashtags, media)
+      const tweet = await databaseService.tweets.aggregate([
+        { $match: { _id: new ObjectId(tweet_id) } },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'user_id',
+            foreignField: '_id',
+            as: 'author'
+          }
+        },
+        {
+          $lookup: {
+            from: 'hashtags',
+            localField: 'hashtags',
+            foreignField: '_id',
+            as: 'hashtags_info'
+          }
+        },
+        {
+          $lookup: {
+            from: 'medias',
+            localField: 'medias',
+            foreignField: '_id',
+            as: 'medias_info'
+          }
+        },
+        {
+          $unwind: {
+            path: '$author',
+            preserveNullAndEmptyArrays: true
+          }
+        },
+        {
+          $project: {
+            'author.password': 0,
+            'author.email_verify_token': 0,
+            'author.forgot_password_token': 0
+          }
+        }
+      ]).toArray()
+
+      tweetDetail = tweet[0] || null
+
+      if (tweetDetail) {
+        // Lưu vào Redis (TTL 1 tiếng)
+        await redisService.set(`tweet:${tweet_id}`, tweetDetail, 3600)
+      }
     }
 
-    // Aggregate to get full details (author, hashtags, media)
-    const tweet = await databaseService.tweets.aggregate([
-      { $match: { _id: new ObjectId(tweet_id) } },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'user_id',
-          foreignField: '_id',
-          as: 'author'
-        }
-      },
-      {
-        $lookup: {
-          from: 'hashtags',
-          localField: 'hashtags',
-          foreignField: '_id',
-          as: 'hashtags_info'
-        }
-      },
-      {
-        $lookup: {
-          from: 'medias',
-          localField: 'media_ids',
-          foreignField: '_id',
-          as: 'medias_info'
-        }
-      },
-      {
-        $unwind: {
-          path: '$author',
-          preserveNullAndEmptyArrays: true
-        }
-      },
-      {
-        $project: {
-          'author.password': 0,
-          'author.email_verify_token': 0,
-          'author.forgot_password_token': 0
-        }
-      }
-    ]).toArray()
-
-    const tweetDetail = tweet[0] || null
-
-    if (tweetDetail) {
-      // Lưu vào Redis (TTL 1 tiếng)
-      await redisService.set(`tweet:${tweet_id}`, tweetDetail, 3600)
+    if (tweetDetail && user_id) {
+      const [bookmark, like] = await Promise.all([
+        databaseService.bookmarks.findOne({ user_id: new ObjectId(user_id), tweet_id: new ObjectId(tweet_id) }),
+        databaseService.likes.findOne({ user_id: new ObjectId(user_id), tweet_id: new ObjectId(tweet_id) })
+      ])
+      tweetDetail.is_bookmarked = Boolean(bookmark)
+      tweetDetail.is_liked = Boolean(like)
     }
 
     return tweetDetail
@@ -276,6 +285,14 @@ class TweetService {
           }
         },
         {
+          $lookup: {
+            from: 'medias',
+            localField: 'tweet.medias',
+            foreignField: '_id',
+            as: 'tweet.medias_info'
+          }
+        },
+        {
           $unwind: {
             path: '$tweet.author',
             preserveNullAndEmptyArrays: true
@@ -374,6 +391,14 @@ class TweetService {
           }
         },
         {
+          $lookup: {
+            from: 'medias',
+            localField: 'medias',
+            foreignField: '_id',
+            as: 'medias_info'
+          }
+        },
+        {
           $match: { 'user_id': { $nin: blockedUserIds } }
         },
         {
@@ -441,6 +466,14 @@ class TweetService {
           }
         },
         {
+          $lookup: {
+            from: 'medias',
+            localField: 'tweet.medias',
+            foreignField: '_id',
+            as: 'tweet.medias_info'
+          }
+        },
+        {
           $unwind: {
             path: '$tweet.author',
             preserveNullAndEmptyArrays: true
@@ -451,6 +484,68 @@ class TweetService {
             'tweet.author.password': 0,
             'tweet.author.email_verify_token': 0,
             'tweet.author.forgot_password_token': 0
+          }
+        },
+        {
+          $lookup: {
+            from: 'bookmarks',
+            let: { tweet_id: '$tweet._id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$tweet_id', '$$tweet_id'] },
+                      { $eq: ['$user_id', new ObjectId(user_id)] }
+                    ]
+                  }
+                }
+              }
+            ],
+            as: 'tweet.bookmarks'
+          }
+        },
+        {
+          $lookup: {
+            from: 'likes',
+            let: { tweet_id: '$tweet._id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$tweet_id', '$$tweet_id'] },
+                      { $eq: ['$user_id', new ObjectId(user_id)] }
+                    ]
+                  }
+                }
+              }
+            ],
+            as: 'tweet.likes'
+          }
+        },
+        {
+          $addFields: {
+            'tweet.is_bookmarked': {
+              $cond: {
+                if: { $gt: [{ $size: '$tweet.bookmarks' }, 0] },
+                then: true,
+                else: false
+              }
+            },
+            'tweet.is_liked': {
+              $cond: {
+                if: { $gt: [{ $size: '$tweet.likes' }, 0] },
+                then: true,
+                else: false
+              }
+            }
+          }
+        },
+        {
+          $project: {
+            'tweet.bookmarks': 0,
+            'tweet.likes': 0
           }
         },
         { $replaceRoot: { newRoot: { $mergeObjects: ['$tweet', { newsFeedId: '$_id' }] } } }
@@ -465,6 +560,129 @@ class TweetService {
         const { newsFeedId, ...rest } = feed
         return rest
       }),
+      next_cursor,
+      has_next_page
+    }
+  }
+
+  async getForYouFeeds({ user_id, cursor, limit }: { user_id: string; cursor?: string; limit: number }) {
+    const blockedUserIds = await this.getBlockedUserIds(user_id)
+    
+    // For You: Latest tweets globally, excluding retweets and comments, from users not blocked
+    const matchStage: any = { 
+      user_id: { $nin: blockedUserIds },
+      type: { $in: [TweetType.Tweet, TweetType.QuoteTweet] },
+      audience: TweetAudience.Everyone
+    }
+
+    if (cursor) {
+      matchStage._id = { $lt: new ObjectId(cursor) }
+    }
+    
+    const tweets = await databaseService.tweets
+      .aggregate([
+        { $match: matchStage },
+        { $sort: { _id: -1 } },
+        { $limit: limit },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'user_id',
+            foreignField: '_id',
+            as: 'author'
+          }
+        },
+        {
+          $lookup: {
+            from: 'medias',
+            localField: 'medias',
+            foreignField: '_id',
+            as: 'medias_info'
+          }
+        },
+        {
+          $unwind: {
+            path: '$author',
+            preserveNullAndEmptyArrays: true
+          }
+        },
+        {
+          $project: {
+            'author.password': 0,
+            'author.email_verify_token': 0,
+            'author.forgot_password_token': 0
+          }
+        },
+        {
+          $lookup: {
+            from: 'bookmarks',
+            let: { tweet_id: '$_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$tweet_id', '$$tweet_id'] },
+                      { $eq: ['$user_id', new ObjectId(user_id)] }
+                    ]
+                  }
+                }
+              }
+            ],
+            as: 'bookmarks'
+          }
+        },
+        {
+          $lookup: {
+            from: 'likes',
+            let: { tweet_id: '$_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$tweet_id', '$$tweet_id'] },
+                      { $eq: ['$user_id', new ObjectId(user_id)] }
+                    ]
+                  }
+                }
+              }
+            ],
+            as: 'likes'
+          }
+        },
+        {
+          $addFields: {
+            is_bookmarked: {
+              $cond: {
+                if: { $gt: [{ $size: '$bookmarks' }, 0] },
+                then: true,
+                else: false
+              }
+            },
+            is_liked: {
+              $cond: {
+                if: { $gt: [{ $size: '$likes' }, 0] },
+                then: true,
+                else: false
+              }
+            }
+          }
+        },
+        {
+          $project: {
+            bookmarks: 0,
+            likes: 0
+          }
+        }
+      ])
+      .toArray()
+      
+    const has_next_page = tweets.length === limit
+    const next_cursor = has_next_page ? tweets[tweets.length - 1]._id?.toString() : null
+    
+    return {
+      tweets,
       next_cursor,
       has_next_page
     }

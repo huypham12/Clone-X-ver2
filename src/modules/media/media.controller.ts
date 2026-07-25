@@ -74,11 +74,9 @@ export const uploadAudioController: PostHandler<any, UploadMediaResponseDto> = a
       const media = new MediaMetadata({
         url: uploadResult.secure_url,
         public_id: uploadResult.public_id,
-        type: MediaType.Video, // Note: You might want an Audio enum later, currently using Video or adding Audio to enum if it exists. Wait, MediaType enum only has Image and Video probably. Let's check schema. I'll use a string or check if Audio is in MediaType. Let's cast it as any if needed, but MediaType from schema was 'image' | 'video'. Wait, I'll just use 'audio' as any. Actually, better check if MediaType has Audio. Let's cast it as MediaType.Video for now if Audio is missing, but it's better to use 'audio' as any to be semantically correct.
+        type: MediaType.Audio,
         uploaded_by: user_id
       })
-      // Cập nhật type thành audio
-      media.type = 'audio' as any
       await databaseService.medias.insertOne(media)
       return media
     })

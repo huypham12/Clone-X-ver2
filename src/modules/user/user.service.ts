@@ -32,7 +32,7 @@ export class UserService {
     return user
   }
 
-  getUserInfoByUsername = async (username: string): Promise<UserPublicDTO> => {
+  getUserInfoByUsername = async (username: string, current_user_id?: string): Promise<UserPublicDTO> => {
     const user = await this.databaseService.users.findOne(
       { username },
       {
@@ -51,11 +51,31 @@ export class UserService {
     if (!user) {
       throw new HttpError(MESSAGES.USER_NOT_FOUND, HTTP_STATUS.NOT_FOUND)
     }
-    return user
+
+    let is_following = false
+    let is_blocked = false
+    
+    if (current_user_id) {
+       const [following, blocked] = await Promise.all([
+          this.databaseService.followers.findOne({ follow_user_id: new ObjectId(current_user_id), followed_user_id: user._id }),
+          this.databaseService.userBlocks.findOne({ user_id: new ObjectId(current_user_id), blocked_user_id: user._id })
+       ])
+       is_following = !!following
+       is_blocked = !!blocked
+    }
+
+    return { ...user, is_following, is_blocked }
   }
 
   // partial biến tất cả thuộc tính thành optional
   updateMeInfo = async (user_id: string, updateData: any): Promise<UserPrivateDTO> => {
+    if (updateData.username) {
+      const existing = await this.databaseService.users.findOne({ username: updateData.username })
+      if (existing && existing._id?.toString() !== user_id) {
+        throw new HttpError(MESSAGES.USERNAME_ALREADY_EXISTS, HTTP_STATUS.BAD_REQUEST)
+      }
+    }
+
     const user = await this.databaseService.users.findOneAndUpdate(
       { _id: new ObjectId(user_id) },
       { $set: updateData },
@@ -196,6 +216,18 @@ export class UserService {
     })
     await this.databaseService.followers.insertOne(follower)
 
+    // Update counts
+    await Promise.all([
+      this.databaseService.users.updateOne(
+        { _id: new ObjectId(user_id) },
+        { $inc: { following_count: 1 } }
+      ),
+      this.databaseService.users.updateOne(
+        { _id: user._id },
+        { $inc: { follower_count: 1 } }
+      )
+    ])
+
     // Notification
     await notificationService.createNotification(
       followed_user_id,
@@ -222,6 +254,18 @@ export class UserService {
     if (result.deletedCount === 0) {
       throw new HttpError(MESSAGES.FOLLOW_RELATION_NOT_FOUND, HTTP_STATUS.BAD_REQUEST)
     }
+
+    // Update counts
+    await Promise.all([
+      this.databaseService.users.updateOne(
+        { _id: new ObjectId(follow_user_id) },
+        { $inc: { following_count: -1 } }
+      ),
+      this.databaseService.users.updateOne(
+        { _id: followedUser._id },
+        { $inc: { follower_count: -1 } }
+      )
+    ])
   }
 
   // những người đang theo dõi target_user_id này

@@ -10,7 +10,8 @@ import {
   getNewFeedsController,
   deleteTweetController,
   getBookmarksController,
-  getTweetLikesController
+  getTweetLikesController,
+  getForYouFeedsController
 } from './tweet.controller'
 import { wrapController } from '~/utils/wrap-controller'
 import { authenticateAccessToken, isUserLoggedInValidator } from '~/middleware/verify.middleware'
@@ -25,6 +26,14 @@ tweetRouter.get(
   authenticateAccessToken,
   paginationValidator,
   wrapController(getNewFeedsController)
+)
+
+tweetRouter.get(
+  '/for-you',
+  accessTokenValidator,
+  authenticateAccessToken,
+  paginationValidator,
+  wrapController(getForYouFeedsController)
 )
 
 tweetRouter.get(

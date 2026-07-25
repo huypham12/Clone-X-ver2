@@ -52,7 +52,6 @@ const updateMeSchema = z.object({
 
   bio: z
     .string({ message: MESSAGES.BIO_MUST_BE_STRING })
-    .min(1, { message: MESSAGES.BIO_LENGTH_MUST_BE_FROM_1_TO_1000 })
     .max(1000, { message: MESSAGES.BIO_LENGTH_MUST_BE_FROM_1_TO_1000 })
     .optional(),
 
@@ -65,21 +64,14 @@ const updateMeSchema = z.object({
     .string({ message: MESSAGES.USERNAME_MUST_BE_STRING })
     .min(1, { message: MESSAGES.USERNAME_LENGTH_MUST_BE_FROM_1_TO_100 })
     .max(100, { message: MESSAGES.USERNAME_LENGTH_MUST_BE_FROM_1_TO_100 })
-    .refine(
-      async (value) => {
-        const existing = await databaseService.users.findOne({ username: value })
-        // Không trùng hoặc trùng nhưng là của chính mình => hợp lệ
-        return !existing || existing.username.toString() === value
-      },
-      { message: MESSAGES.USERNAME_ALREADY_EXISTS }
-    )
     .optional(),
 
-  avatar: z.string({ message: MESSAGES.AVATAR_MUST_BE_URL }).url({ message: MESSAGES.AVATAR_MUST_BE_URL }).optional(),
+  avatar: z.string({ message: MESSAGES.AVATAR_MUST_BE_URL }).url({ message: MESSAGES.AVATAR_MUST_BE_URL }).or(z.literal('')).optional(),
 
   cover_photo: z
     .string({ message: MESSAGES.COVER_PHOTO_MUST_BE_URL })
     .url({ message: MESSAGES.COVER_PHOTO_MUST_BE_URL })
+    .or(z.literal(''))
     .optional(),
 
   location: z

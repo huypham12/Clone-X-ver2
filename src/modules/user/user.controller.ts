@@ -17,7 +17,8 @@ export class UserController {
 
   getProfileController: GetHandler<UserResponseDto> = async (req, res) => {
     const { username } = req.params
-    const result = await this.userService.getUserInfoByUsername(username)
+    const current_user_id = req.decoded_authorization?.user_id
+    const result = await this.userService.getUserInfoByUsername(username, current_user_id)
     res.json(new UserResponseDto(result))
   }
 
@@ -67,16 +68,16 @@ export class UserController {
     })
   }
 
-  getFollowersController: GetHandler<{ followers: UserResponseDto[] }> = async (req, res) => {
+  getFollowersController: GetHandler<{ followers: any[] }> = async (req, res) => {
     const { target_user_id } = req.params
     const result = await this.userService.getFollowers(target_user_id)
-    res.json({ followers: result.map((user) => new UserResponseDto(user)) })
+    res.json({ followers: result })
   }
 
-  getFollowingController: GetHandler<{ following: UserResponseDto[] }> = async (req, res) => {
+  getFollowingController: GetHandler<{ following: any[] }> = async (req, res) => {
     const { target_user_id } = req.params
     const result = await this.userService.getFollowing(target_user_id)
-    res.json({ following: result.map((user) => new UserResponseDto(user)) })
+    res.json({ following: result })
   }
 
   getUserTweetsController: GetHandler<any> = async (req, res) => {

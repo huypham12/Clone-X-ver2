@@ -96,6 +96,17 @@ export const getNewFeedsController: GetHandler<GetNewFeedsResponseDto, any, Pagi
   res.status(response.statusCode).json(response)
 }
 
+export const getForYouFeedsController: GetHandler<GetNewFeedsResponseDto, any, PaginationQueryDto> = async (req, res) => {
+  const user_id = (req as any).decoded_authorization.user_id
+  const cursor = (req.query as any).cursor as string | undefined
+  const limit = Number((req.query as any).limit)
+  
+  const result = await tweetService.getForYouFeeds({ user_id, cursor, limit })
+  
+  const response = new GetNewFeedsResponseDto(HTTP_STATUS.OK, 'Get for you feeds successfully', result)
+  res.status(response.statusCode).json(response)
+}
+
 export const deleteTweetController: DeleteHandler<SuccessResponseDto, { tweet_id: string }> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { tweet_id } = req.params

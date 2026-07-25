@@ -3,7 +3,7 @@ import DatabaseService from '~/config/database.service'
 import { UserController } from './user.controller'
 import { UserService } from './user.service'
 import { wrapController } from '~/utils/wrap-controller'
-import { authenticateAccessToken, verifiedUserValidator } from '~/middleware/verify.middleware'
+import { authenticateAccessToken, verifiedUserValidator, isUserLoggedInValidator } from '~/middleware/verify.middleware'
 import { accessTokenValidator } from '../auth/auth.validator'
 import { updateMeValidator } from './user.validator'
 import { paginationValidator } from '../tweet/tweet.validator'
@@ -14,7 +14,7 @@ const userService = new UserService(databaseService)
 const userController = new UserController(userService)
 
 userRouter.get('/me', accessTokenValidator, authenticateAccessToken, wrapController(userController.getMeController))
-userRouter.get('/profile/:username', wrapController(userController.getProfileController))
+userRouter.get('/profile/:username', isUserLoggedInValidator(authenticateAccessToken), wrapController(userController.getProfileController))
 userRouter.patch(
   '/me',
   accessTokenValidator,

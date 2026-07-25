@@ -12,6 +12,10 @@ export interface UserPublicDTO {
   username?: string
   avatar?: string
   cover_photo?: string
+  follower_count?: number
+  following_count?: number
+  is_following?: boolean
+  is_blocked?: boolean
 }
 
 export interface UserPrivateDTO extends UserPublicDTO {
