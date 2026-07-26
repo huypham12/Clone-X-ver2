@@ -3,22 +3,35 @@ import { envConfig } from './getEnvConfig'
 
 class RedisService {
   private client: RedisClientType
+  public pubClient: RedisClientType
+  public subClient: RedisClientType
 
   constructor() {
     this.client = createClient({
       url: envConfig.redis.url
     })
+    
+    this.pubClient = this.client.duplicate() as RedisClientType
+    this.subClient = this.client.duplicate() as RedisClientType
 
     this.client.on('error', (err) => console.log('Redis Client Error', err))
     this.client.on('connect', () => console.log('Redis Connected Successfully'))
   }
 
   async connect() {
-    await this.client.connect()
+    await Promise.all([
+      this.client.connect(),
+      this.pubClient.connect(),
+      this.subClient.connect()
+    ])
   }
 
   async disconnect() {
-    await this.client.disconnect()
+    await Promise.all([
+      this.client.disconnect(),
+      this.pubClient.disconnect(),
+      this.subClient.disconnect()
+    ])
   }
 
   // Tiện ích lấy Cache

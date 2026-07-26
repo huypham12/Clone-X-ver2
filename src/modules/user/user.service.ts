@@ -336,6 +336,50 @@ export class UserService {
     return users
   }
 
+  getSuggestedUsers = async (user_id: string): Promise<UserPublicDTO[]> => {
+    const following = await this.databaseService.followers
+      .find({ follow_user_id: new ObjectId(user_id) })
+      .toArray()
+    const followingUserIds = following.map((f) => f.followed_user_id)
+    followingUserIds.push(new ObjectId(user_id))
+
+    const suggestedUsers = await this.databaseService.users
+      .find(
+        { _id: { $nin: followingUserIds } },
+        {
+          projection: { password: 0, email: 0, email_verify_token: 0, forgot_password_token: 0, refresh_token: 0, verify: 0, created_at: 0, updated_at: 0 },
+          limit: 5
+        }
+      )
+      .toArray()
+
+    return suggestedUsers
+  }
+
+  getFriends = async (user_id: string): Promise<UserPublicDTO[]> => {
+    const following = await this.databaseService.followers
+      .find({ follow_user_id: new ObjectId(user_id) })
+      .toArray()
+    const followingIds = following.map((f) => f.followed_user_id)
+
+    const followers = await this.databaseService.followers
+      .find({ followed_user_id: new ObjectId(user_id) })
+      .toArray()
+    const followerIds = followers.map((f) => f.follow_user_id.toString())
+
+    const mutualIds = followingIds.filter(id => followerIds.includes(id.toString()))
+
+    if (mutualIds.length === 0) return []
+
+    const users = await this.databaseService.users
+      .find(
+        { _id: { $in: mutualIds } },
+        { projection: { password: 0, email: 0, email_verify_token: 0, forgot_password_token: 0, refresh_token: 0, verify: 0, created_at: 0, updated_at: 0 } }
+      )
+      .toArray()
+    return users
+  }
+
   private async aggregateTweets(matchStage: any, current_user_id: string | undefined, limit: number) {
     const finalMatchStage = {
       ...matchStage,

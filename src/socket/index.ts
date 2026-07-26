@@ -2,10 +2,12 @@ import { Server } from 'socket.io'
 import { Server as HttpServer } from 'http'
 import { verifyToken } from '~/utils/jwt'
 import { envConfig } from '~/config/getEnvConfig'
-import DatabaseService from '~/config/database.service'
 import { TokenPayload } from '~/types/token-payload.type'
 import { chatHandler } from './chat.handler'
 import redisService from '~/config/redis.service'
+import { createAdapter } from '@socket.io/redis-adapter'
+import { UserService } from '~/modules/user/user.service'
+import DatabaseService from '~/config/database.service'
 
 // Mở rộng kiểu Socket để có thể gắn user_id vào
 declare module 'socket.io' {
@@ -19,9 +21,16 @@ let io: Server
 export const initSocket = (httpServer: HttpServer) => {
   io = new Server(httpServer, {
     cors: {
-      origin: envConfig.cors.origin
+      origin: true,
+      credentials: true
     }
   })
+
+  // Tích hợp Redis Adapter cho Horizontal Scaling
+  if (redisService.pubClient && redisService.subClient) {
+    io.adapter(createAdapter(redisService.pubClient, redisService.subClient))
+    console.log('Redis Adapter cho Socket.io đã được khởi tạo')
+  }
 
   // Middleware xác thực token
   io.use(async (socket, next) => {
@@ -44,57 +53,98 @@ export const initSocket = (httpServer: HttpServer) => {
     }
   })
 
-  io.on('connection', (socket) => {
+  const databaseService = new DatabaseService()
+  const userService = new UserService(databaseService)
+
+  io.on('connection', async (socket) => {
     console.log(`User connected: ${socket.user_id} with socket_id: ${socket.id}`)
+    
+    const userId = socket.user_id as string
 
-    // Join room với chính user_id để nhận notification direct
-    socket.join(socket.user_id as string)
+    // Chỉ join đúng 1 room duy nhất là ID của user
+    socket.join(userId)
 
-    // Truy vấn MongoDB lấy danh sách conversation_id mà user này tham gia và cho socket join
-    const databaseService = new DatabaseService()
-    const objectIdUserId = new databaseService.ObjectId(socket.user_id as string)
+    // Lấy danh sách bạn bè (từ Redis Cache hoặc Database)
+    let friendIds: string[] = []
+    const cachedFriends = await redisService.get(`friends:${userId}`)
+    if (cachedFriends) {
+      friendIds = cachedFriends
+    } else {
+      const friends = await userService.getFriends(userId)
+      friendIds = friends.map(f => f._id?.toString() as string)
+      await redisService.set(`friends:${userId}`, friendIds, 300) // Cache 5 phút
+    }
 
-    // Lấy Direct Conversations
-    databaseService.directConversations.find({
-      $or: [{ user1_id: objectIdUserId }, { user2_id: objectIdUserId }]
-    }).toArray().then(directs => {
-      directs.forEach(conv => {
-        socket.join(conv._id?.toString() as string)
-      })
-    })
+    // Kiểm tra xem đây có phải là thiết bị ĐẦU TIÊN của user kết nối không (bằng Redis Adapter)
+    const userSockets = await io.in(userId).allSockets()
+    if (userSockets.size === 1 && friendIds.length > 0) {
+      // Chỉ gửi trạng thái Online cho Bạn Bè
+      io.to(friendIds).emit('user:online', { user_id: userId })
+    }
 
-    // Lấy Group Conversations
-    databaseService.groupConversations.find({
-      'members.user_id': objectIdUserId
-    }).toArray().then(groups => {
-      groups.forEach(conv => {
-        socket.join(conv._id?.toString() as string)
-      })
-    })
-
-    // Lưu socket_id vào Redis để track Online Status
-    redisService.clientInstance.sAdd(`user_sockets:${socket.user_id}`, socket.id).then(async () => {
-      // Broadcast online status to friends/followers could be done here
-      // io.emit('user_online', { user_id: socket.user_id })
-    })
-
-    // Handle chat events
+    // Xử lý các sự kiện chat
     chatHandler(io, socket)
+
+    // API lấy trạng thái Online từ Frontend
+    socket.on('get:presence', async (userIds: string[], callback) => {
+      try {
+        if (!Array.isArray(userIds) || userIds.length === 0) {
+          if (callback) callback([])
+          return
+        }
+        
+        const presenceList = await Promise.all(userIds.map(async (id) => {
+          // Lấy tất cả socket id của user đó trên TOÀN BỘ cluster qua Redis Adapter
+          const sockets = await io.in(id).allSockets()
+          const isOnline = sockets.size > 0
+          let lastSeenAt = null
+          
+          if (!isOnline) {
+            lastSeenAt = await redisService.clientInstance.hGet('user_last_seen', id)
+          }
+          
+          return {
+            user_id: id,
+            isOnline,
+            lastSeenAt
+          }
+        }))
+        
+        if (callback) callback(presenceList)
+      } catch (error) {
+        console.error('Error getting presence:', error)
+        if (callback) callback([])
+      }
+    })
 
     socket.on('disconnect', async () => {
       console.log(`User disconnected: ${socket.user_id}`)
       
-      // Xóa socket_id khỏi Redis
-      await redisService.clientInstance.sRem(`user_sockets:${socket.user_id}`, socket.id)
-      
-      // Kiểm tra xem user còn thiết bị nào online không
-      const activeSockets = await redisService.clientInstance.sCard(`user_sockets:${socket.user_id}`)
-      if (activeSockets === 0) {
-        // Cập nhật last seen nếu cần
-        await redisService.clientInstance.hSet('user_last_seen', socket.user_id as string, Date.now().toString())
-        // Broadcast offline status
-        // io.emit('user_offline', { user_id: socket.user_id })
-      }
+      // Delay một chút để socket thực sự rời khỏi room trước khi fetchSockets
+      setTimeout(async () => {
+        const remainingSockets = await io.in(userId).allSockets()
+        
+        // Nếu user đã ngắt kết nối hoàn toàn trên TẤT CẢ thiết bị
+        if (remainingSockets.size === 0) {
+          const lastSeenAt = new Date().toISOString()
+          await redisService.clientInstance.hSet('user_last_seen', userId, lastSeenAt)
+          
+          // Phát sự kiện offline cho Bạn Bè
+          let fIds: string[] = []
+          const cFriends = await redisService.get(`friends:${userId}`)
+          if (cFriends) {
+            fIds = cFriends
+          } else {
+            const friends = await userService.getFriends(userId)
+            fIds = friends.map(f => f._id?.toString() as string)
+            await redisService.set(`friends:${userId}`, fIds, 300)
+          }
+          
+          if (fIds.length > 0) {
+            io.to(fIds).emit('user:offline', { user_id: userId, lastSeenAt })
+          }
+        }
+      }, 500)
     })
   })
 

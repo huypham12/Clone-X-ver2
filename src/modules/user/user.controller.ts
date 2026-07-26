@@ -75,6 +75,18 @@ export class UserController {
     res.json(new SuccessResponseDto(HTTP_STATUS.OK, 'Get following successfully', { following: result }))
   }
 
+  getSuggestedUsersController: GetHandler<any> = async (req, res) => {
+    const { user_id } = req.decoded_authorization as TokenPayload
+    const result = await this.userService.getSuggestedUsers(user_id)
+    res.json(new SuccessResponseDto(HTTP_STATUS.OK, 'Get suggested users successfully', result))
+  }
+
+  getFriendsController: GetHandler<any> = async (req, res) => {
+    const { user_id } = req.decoded_authorization as TokenPayload
+    const result = await this.userService.getFriends(user_id)
+    res.json(new SuccessResponseDto(HTTP_STATUS.OK, 'Get friends successfully', result))
+  }
+
   getUserTweetsController: GetHandler<any> = async (req, res) => {
     const { username } = req.params
     const cursor = (req.query as any).cursor as string | undefined

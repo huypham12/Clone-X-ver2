@@ -2,8 +2,10 @@ import { SuccessResponseDto } from '~/common/success-response.dto'
 import { UserVerifyStatus } from '~/constants/enums'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import { MESSAGES } from '~/constants/messages'
+import { ObjectId } from 'mongodb'
 
 export interface UserPublicDTO {
+  _id?: ObjectId
   name: string
   date_of_birth: Date
   bio?: string

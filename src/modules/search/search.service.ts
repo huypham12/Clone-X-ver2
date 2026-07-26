@@ -9,35 +9,50 @@ class SearchService {
     this.databaseService = new DatabaseService()
   }
 
-  async searchUsers(q: string, cursor: string | undefined, limit: number) {
+  async searchUsers(q: string, cursor: string | undefined, limit: number, user_id?: string) {
     const cacheKey = `search:users:${q}:cursor:${cursor || 'first'}:limit:${limit}`
     const cachedData = await redisService.clientInstance.get(cacheKey)
-    if (cachedData) return JSON.parse(cachedData)
+    
+    let result: any;
+    if (cachedData) {
+      result = JSON.parse(cachedData)
+    } else {
+      const regex = new RegExp(q, 'i')
 
-    const regex = new RegExp(q, 'i')
+      const filter: any = {
+        $or: [{ name: { $regex: regex } }, { username: { $regex: regex } }]
+      }
+      
+      if (cursor) {
+        filter._id = { $lt: new this.databaseService.ObjectId(cursor) }
+      }
 
-    const filter: any = {
-      $or: [{ name: { $regex: regex } }, { username: { $regex: regex } }]
+      const users = await this.databaseService.users
+        .find(filter)
+        .project({ password: 0, email_verify_token: 0, forgot_password_token: 0 })
+        .sort({ _id: -1 })
+        .limit(limit)
+        .toArray()
+
+      const has_next_page = users.length === limit
+      const next_cursor = has_next_page ? users[users.length - 1]._id.toString() : null
+      
+      result = { users, next_cursor, has_next_page }
+      
+      // Cache for 60 seconds
+      await redisService.clientInstance.setEx(cacheKey, 60, JSON.stringify(result))
     }
-    
-    if (cursor) {
-      filter._id = { $lt: new this.databaseService.ObjectId(cursor) }
+
+    if (user_id) {
+      const following = await this.databaseService.followers
+        .find({ follow_user_id: new this.databaseService.ObjectId(user_id) })
+        .toArray()
+      const followingIds = following.map((f: any) => f.followed_user_id.toString())
+      result.users = result.users.map((user: any) => ({
+        ...user,
+        is_following: followingIds.includes(user._id.toString())
+      }))
     }
-
-    const users = await this.databaseService.users
-      .find(filter)
-      .project({ password: 0, email_verify_token: 0, forgot_password_token: 0 })
-      .sort({ _id: -1 })
-      .limit(limit)
-      .toArray()
-
-    const has_next_page = users.length === limit
-    const next_cursor = has_next_page ? users[users.length - 1]._id.toString() : null
-    
-    const result = { users, next_cursor, has_next_page }
-    
-    // Cache for 60 seconds
-    await redisService.clientInstance.setEx(cacheKey, 60, JSON.stringify(result))
 
     return result
   }

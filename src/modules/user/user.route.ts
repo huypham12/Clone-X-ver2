@@ -14,6 +14,20 @@ const userService = new UserService(databaseService)
 const userController = new UserController(userService)
 
 userRouter.get('/me', accessTokenValidator, authenticateAccessToken, wrapController(userController.getMeController))
+
+userRouter.get(
+  '/suggested',
+  accessTokenValidator,
+  authenticateAccessToken,
+  wrapController(userController.getSuggestedUsersController)
+)
+
+userRouter.get(
+  '/friends',
+  accessTokenValidator,
+  authenticateAccessToken,
+  wrapController(userController.getFriendsController)
+)
 userRouter.get('/profile/:username', isUserLoggedInValidator(authenticateAccessToken), wrapController(userController.getProfileController))
 userRouter.patch(
   '/me',

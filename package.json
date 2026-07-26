@@ -46,6 +46,7 @@
   },
   "dependencies": {
     "@sendgrid/mail": "^8.1.5",
+    "@socket.io/redis-adapter": "^8.3.0",
     "@types/formidable": "^3.4.5",
     "@types/minimist": "^1.2.5",
     "@types/swagger-jsdoc": "^6.0.4",

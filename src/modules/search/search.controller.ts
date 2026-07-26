@@ -9,7 +9,7 @@ export const searchUsersController: GetHandler<SearchResponseDto, any, SearchQue
   const { q, cursor, limit } = req.query as any
   const user_id = (req as any).decoded_authorization.user_id
 
-  const result = await searchService.searchUsers(q, cursor, Number(limit))
+  const result = await searchService.searchUsers(q, cursor, Number(limit), user_id)
   if (q && user_id && !cursor) {
     await searchService.addSearchHistory(user_id, q)
   }
