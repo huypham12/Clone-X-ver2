@@ -2,15 +2,43 @@ import { ObjectId } from 'mongodb'
 import DatabaseService from '~/config/database.service'
 import redisService from '~/config/redis.service'
 import { Tweet, Hashtag, Like, Bookmark, NewsFeed } from '~/schemas'
-import { TweetType, NotificationType, TweetAudience } from '~/constants/enums'
+import { TweetType, NotificationType, TweetAudience, MediaStatus } from '~/constants/enums'
 import notificationService from '../notification/notification.service'
 import { getParentTweetLookupStages, getIsRetweetedLookupStages } from '~/utils/aggregation'
+import { HttpError } from '~/common/http-error'
+import { HTTP_STATUS } from '~/constants/httpStatus'
 
 const databaseService = new DatabaseService()
 
 class TweetService {
+  private async validateTweetMedia(user_id: string, medias: Array<string | ObjectId> = []) {
+    const mediaIds = medias.map((id) => new ObjectId(id))
+    if (mediaIds.length === 0) return mediaIds
+
+    const mediaDocuments = await databaseService.medias.find({ _id: { $in: mediaIds } }).toArray()
+
+    if (mediaDocuments.length !== mediaIds.length) {
+      throw new HttpError('MEDIA_NOT_FOUND', HTTP_STATUS.BAD_REQUEST)
+    }
+
+    if (mediaDocuments.some((media) => media.uploaded_by?.toString() !== user_id)) {
+      throw new HttpError('MEDIA_FORBIDDEN', HTTP_STATUS.FORBIDDEN)
+    }
+
+    if (mediaDocuments.some((media) => media.status === MediaStatus.Failed)) {
+      throw new HttpError('MEDIA_PROCESSING_FAILED', HTTP_STATUS.UNPROCESSABLE_ENTITY)
+    }
+
+    if (mediaDocuments.some((media) => media.status !== MediaStatus.Ready || !media.url)) {
+      throw new HttpError('MEDIA_NOT_READY', HTTP_STATUS.CONFLICT)
+    }
+
+    return mediaIds
+  }
+
   async createTweet(user_id: string, body: any) {
     const { type, audience, content, parent_id, hashtags, mentions, medias } = body
+    const mediaIds = await this.validateTweetMedia(user_id, medias)
 
     const hashtagIds = await this.processHashtags(hashtags)
     
@@ -32,7 +60,7 @@ class TweetService {
       parent_id,
       hashtags: hashtagIds,
       mentions: finalMentions.map(id => new ObjectId(id)),
-      media_ids: (medias || []).map((id: string) => new ObjectId(id))
+      media_ids: mediaIds
     })
 
     const result = await databaseService.tweets.insertOne(tweet)
@@ -42,7 +70,7 @@ class TweetService {
     if (parent_id) {
       const incField =
         type === TweetType.Retweet ? 'retweet_count' : type === TweetType.Comment ? 'reply_count' : 'quote_count'
-      
+
       await databaseService.tweets.updateOne({ _id: new ObjectId(parent_id) }, { $inc: { [incField]: 1 } })
       
       // Xóa cache của parent tweet
@@ -114,61 +142,51 @@ class TweetService {
       { $inc: { [incField]: 1 } }
     ).catch(console.error)
 
-    let tweetDetail: any = null
-    const cachedTweet = await redisService.get(`tweet:${tweet_id}`)
-    if (cachedTweet) {
-      tweetDetail = cachedTweet
-    } else {
-      // Aggregate to get full details (author, hashtags, media)
-      const tweet = await databaseService.tweets.aggregate([
-        { $match: { _id: new ObjectId(tweet_id) } },
-        {
-          $lookup: {
-            from: 'users',
-            localField: 'user_id',
-            foreignField: '_id',
-            as: 'author'
-          }
-        },
-        {
-          $lookup: {
-            from: 'hashtags',
-            localField: 'hashtags',
-            foreignField: '_id',
-            as: 'hashtags_info'
-          }
-        },
-        {
-          $lookup: {
-            from: 'medias',
-            localField: 'medias',
-            foreignField: '_id',
-            as: 'medias_info'
-          }
-        },
-        {
-          $unwind: {
-            path: '$author',
-            preserveNullAndEmptyArrays: true
-          }
-        },
-        {
-          $project: {
-            'author.password': 0,
-            'author.email_verify_token': 0,
-            'author.forgot_password_token': 0
-          }
-        },
-        ...getParentTweetLookupStages()
-      ]).toArray()
+    // Aggregate to get full details (author, hashtags, media)
+    const tweet = await databaseService.tweets.aggregate([
+      { $match: { _id: new ObjectId(tweet_id) } },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'user_id',
+          foreignField: '_id',
+          as: 'author'
+        }
+      },
+      {
+        $lookup: {
+          from: 'hashtags',
+          localField: 'hashtags',
+          foreignField: '_id',
+          as: 'hashtags_info'
+        }
+      },
+      {
+        $lookup: {
+          from: 'medias',
+          localField: 'medias',
+          foreignField: '_id',
+          as: 'medias_info'
+        }
+      },
+      {
+        $unwind: {
+          path: '$author',
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $project: {
+          'author.password': 0,
+          'author.email_verify_token': 0,
+          'author.forgot_password_token': 0
+        }
+      },
+      ...getParentTweetLookupStages(user_id),
+      ...getIsRetweetedLookupStages(user_id ?? null)
+    ]).toArray()
 
-      tweetDetail = tweet[0] || null
-
-      if (tweetDetail) {
-        // Lưu vào Redis (TTL 1 tiếng)
-        await redisService.set(`tweet:${tweet_id}`, tweetDetail, 3600)
-      }
-    }
+    const tweetDetail: any = tweet[0] || null
 
     if (tweetDetail && user_id) {
       const [bookmark, like] = await Promise.all([
@@ -189,30 +207,33 @@ class TweetService {
   }
 
   async likeTweet(user_id: string, tweet_id: string) {
-    const like = await databaseService.likes.findOneAndUpdate(
+    const result = await databaseService.likes.updateOne(
       { user_id: new ObjectId(user_id), tweet_id: new ObjectId(tweet_id) },
       { $setOnInsert: new Like({ user_id: new ObjectId(user_id), tweet_id: new ObjectId(tweet_id) }) },
-      { upsert: true, returnDocument: 'after' }
+      { upsert: true }
     )
     
-    // update like count in tweet
-    await databaseService.tweets.updateOne(
-      { _id: new ObjectId(tweet_id) },
-      { $inc: { like_count: 1 } }
-    )
-    
-    // Create Notification
-    const tweet = await databaseService.tweets.findOne({ _id: new ObjectId(tweet_id) })
-    if (tweet && tweet.user_id.toString() !== user_id && like) { // we don't need to check like.value if the driver returns the document directly
-      await notificationService.createNotification(
-        tweet.user_id.toString(),
-        user_id,
-        NotificationType.Like,
-        tweet_id
+    if (result.upsertedCount > 0) {
+      // update like count in tweet
+      await databaseService.tweets.updateOne(
+        { _id: new ObjectId(tweet_id) },
+        { $inc: { like_count: 1 } }
       )
+
+      // Create Notification
+      const tweet = await databaseService.tweets.findOne({ _id: new ObjectId(tweet_id) })
+      if (tweet && tweet.user_id.toString() !== user_id) {
+        await notificationService.createNotification(
+          tweet.user_id.toString(),
+          user_id,
+          NotificationType.Like,
+          tweet_id
+        )
+      }
+      await redisService.del(`tweet:${tweet_id}`)
     }
 
-    await redisService.del(`tweet:${tweet_id}`)
+    const like = await databaseService.likes.findOne({ user_id: new ObjectId(user_id), tweet_id: new ObjectId(tweet_id) })
     return like
   }
 
@@ -257,18 +278,21 @@ class TweetService {
   }
 
   async bookmarkTweet(user_id: string, tweet_id: string) {
-    const bookmark = await databaseService.bookmarks.findOneAndUpdate(
+    const result = await databaseService.bookmarks.updateOne(
       { user_id: new ObjectId(user_id), tweet_id: new ObjectId(tweet_id) },
       { $setOnInsert: new Bookmark({ user_id: new ObjectId(user_id), tweet_id: new ObjectId(tweet_id) }) },
-      { upsert: true, returnDocument: 'after' }
+      { upsert: true }
     )
     
-    // update bookmark count in tweet
-    await databaseService.tweets.updateOne(
-      { _id: new ObjectId(tweet_id) },
-      { $inc: { bookmark_count: 1 } }
-    )
-    await redisService.del(`tweet:${tweet_id}`)
+    if (result.upsertedCount > 0) {
+      await databaseService.tweets.updateOne(
+        { _id: new ObjectId(tweet_id) },
+        { $inc: { bookmark_count: 1 } }
+      )
+      await redisService.del(`tweet:${tweet_id}`)
+    }
+
+    const bookmark = await databaseService.bookmarks.findOne({ user_id: new ObjectId(user_id), tweet_id: new ObjectId(tweet_id) })
     return bookmark
   }
 
@@ -335,6 +359,70 @@ class TweetService {
             'tweet.author.password': 0,
             'tweet.author.email_verify_token': 0,
             'tweet.author.forgot_password_token': 0
+          }
+        },
+        ...getParentTweetLookupStages(user_id, 'tweet'),
+        ...getIsRetweetedLookupStages(user_id, 'tweet'),
+        {
+          $lookup: {
+            from: 'bookmarks',
+            let: { tweet_id: '$tweet._id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$tweet_id', '$$tweet_id'] },
+                      { $eq: ['$user_id', new ObjectId(user_id)] }
+                    ]
+                  }
+                }
+              }
+            ],
+            as: 'tweet.bookmarks'
+          }
+        },
+        {
+          $lookup: {
+            from: 'likes',
+            let: { tweet_id: '$tweet._id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$tweet_id', '$$tweet_id'] },
+                      { $eq: ['$user_id', new ObjectId(user_id)] }
+                    ]
+                  }
+                }
+              }
+            ],
+            as: 'tweet.likes'
+          }
+        },
+        {
+          $addFields: {
+            'tweet.is_bookmarked': {
+              $cond: {
+                if: { $gt: [{ $size: '$tweet.bookmarks' }, 0] },
+                then: true,
+                else: false
+              }
+            },
+            'tweet.is_liked': {
+              $cond: {
+                if: { $gt: [{ $size: '$tweet.likes' }, 0] },
+                then: true,
+                else: false
+              }
+            }
+          }
+        },
+        {
+          $project: {
+            'tweet.bookmarks': 0,
+            'tweet.likes': 0
           }
         },
         { $replaceRoot: { newRoot: { $mergeObjects: ['$tweet', { bookmarkId: '$_id' }] } } }
@@ -417,8 +505,7 @@ class TweetService {
       matchStage._id = { $lt: new ObjectId(cursor) }
     }
     
-    const tweets = await databaseService.tweets
-      .aggregate([
+    const pipeline: any[] = [
         { $match: matchStage },
         {
           $lookup: {
@@ -452,11 +539,80 @@ class TweetService {
             'author.forgot_password_token': 0
           }
         },
-        ...getParentTweetLookupStages(),
+        ...getParentTweetLookupStages(user_id),
         { $sort: { _id: -1 } },
         { $limit: limit }
-      ])
-      .toArray()
+      ];
+
+    if (user_id) {
+      pipeline.push(
+        ...getIsRetweetedLookupStages(user_id),
+        {
+          $lookup: {
+            from: 'bookmarks',
+            let: { tweet_id: '$_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$tweet_id', '$$tweet_id'] },
+                      { $eq: ['$user_id', new ObjectId(user_id)] }
+                    ]
+                  }
+                }
+              }
+            ],
+            as: 'bookmarks'
+          }
+        },
+        {
+          $lookup: {
+            from: 'likes',
+            let: { tweet_id: '$_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$tweet_id', '$$tweet_id'] },
+                      { $eq: ['$user_id', new ObjectId(user_id)] }
+                    ]
+                  }
+                }
+              }
+            ],
+            as: 'likes'
+          }
+        },
+        {
+          $addFields: {
+            is_bookmarked: {
+              $cond: {
+                if: { $gt: [{ $size: '$bookmarks' }, 0] },
+                then: true,
+                else: false
+              }
+            },
+            is_liked: {
+              $cond: {
+                if: { $gt: [{ $size: '$likes' }, 0] },
+                then: true,
+                else: false
+              }
+            }
+          }
+        },
+        {
+          $project: {
+            bookmarks: 0,
+            likes: 0
+          }
+        }
+      );
+    }
+
+    const tweets = await databaseService.tweets.aggregate(pipeline).toArray();
       
     const has_next_page = tweets.length === limit
     const next_cursor = has_next_page ? tweets[tweets.length - 1]._id?.toString() : null
@@ -533,7 +689,7 @@ class TweetService {
             'tweet.author.forgot_password_token': 0
           }
         },
-        ...getParentTweetLookupStages('tweet'),
+        ...getParentTweetLookupStages(user_id, 'tweet'),
         ...getIsRetweetedLookupStages(user_id, 'tweet'),
         {
           $lookup: {
@@ -662,7 +818,7 @@ class TweetService {
             'author.forgot_password_token': 0
           }
         },
-        ...getParentTweetLookupStages(),
+        ...getParentTweetLookupStages(user_id),
         ...getIsRetweetedLookupStages(user_id),
         {
           $lookup: {
@@ -836,7 +992,7 @@ class TweetService {
     }
 
     if (body.medias !== undefined) {
-      updateData.medias = body.medias
+      updateData.medias = await this.validateTweetMedia(user_id, body.medias)
     }
 
     await databaseService.tweets.updateOne(

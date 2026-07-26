@@ -1,6 +1,8 @@
-export const getParentTweetLookupStages = (prefix: string = '') => {
+import { ObjectId } from 'mongodb';
+
+export const getParentTweetLookupStages = (current_user_id?: string | null, prefix: string = '') => {
   const p = prefix ? `${prefix}.` : '';
-  return [
+  const stages: any[] = [
     {
       $lookup: {
         from: 'tweets',
@@ -45,6 +47,75 @@ export const getParentTweetLookupStages = (prefix: string = '') => {
       }
     }
   ];
+
+  if (current_user_id) {
+    stages.push(
+      {
+        $lookup: {
+          from: 'bookmarks',
+          let: { tweet_id: `$${p}parent_tweet._id` },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ['$tweet_id', '$$tweet_id'] },
+                    { $eq: ['$user_id', new ObjectId(current_user_id)] }
+                  ]
+                }
+              }
+            }
+          ],
+          as: `${p}parent_tweet.bookmarks`
+        }
+      },
+      {
+        $lookup: {
+          from: 'likes',
+          let: { tweet_id: `$${p}parent_tweet._id` },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ['$tweet_id', '$$tweet_id'] },
+                    { $eq: ['$user_id', new ObjectId(current_user_id)] }
+                  ]
+                }
+              }
+            }
+          ],
+          as: `${p}parent_tweet.likes`
+        }
+      },
+      {
+        $addFields: {
+          [`${p}parent_tweet.is_bookmarked`]: {
+            $cond: {
+              if: { $gt: [{ $size: { $ifNull: [`$${p}parent_tweet.bookmarks`, []] } }, 0] },
+              then: true,
+              else: false
+            }
+          },
+          [`${p}parent_tweet.is_liked`]: {
+            $cond: {
+              if: { $gt: [{ $size: { $ifNull: [`$${p}parent_tweet.likes`, []] } }, 0] },
+              then: true,
+              else: false
+            }
+          }
+        }
+      },
+      {
+        $project: {
+          [`${p}parent_tweet.bookmarks`]: 0,
+          [`${p}parent_tweet.likes`]: 0
+        }
+      }
+    );
+  }
+
+  return stages;
 };
 
 export const getIsRetweetedLookupStages = (user_id: string | null, prefix: string = '') => {

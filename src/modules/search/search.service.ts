@@ -76,7 +76,7 @@ class SearchService {
           'author.forgot_password_token': 0
         }
       },
-      ...getParentTweetLookupStages()
+      ...getParentTweetLookupStages(current_user_id)
     ]
 
     if (current_user_id) {

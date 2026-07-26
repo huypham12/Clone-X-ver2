@@ -25,6 +25,7 @@ export const uploadImageController: PostHandler<any, UploadMediaResponseDto> = a
         url: uploadResult.secure_url,
         public_id: uploadResult.public_id,
         type: MediaType.Image,
+        status: MediaStatus.Ready,
         uploaded_by: user_id
       })
       await databaseService.medias.insertOne(media)
@@ -75,6 +76,7 @@ export const uploadAudioController: PostHandler<any, UploadMediaResponseDto> = a
         url: uploadResult.secure_url,
         public_id: uploadResult.public_id,
         type: MediaType.Audio,
+        status: MediaStatus.Ready,
         uploaded_by: user_id
       })
       await databaseService.medias.insertOne(media)

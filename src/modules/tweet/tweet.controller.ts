@@ -48,6 +48,7 @@ export const getTweetController: GetHandler<GetTweetResponseDto, { tweet_id: str
 }
 
 export const likeTweetController: PostHandler<any, LikeTweetResponseDto, { tweet_id: string }> = async (req, res) => {
+  console.log('HIT LIKE TWEET', req.params.tweet_id)
   const user_id = (req as any).decoded_authorization.user_id
   const { tweet_id } = req.params
   const result = await tweetService.likeTweet(user_id, tweet_id)
@@ -57,6 +58,7 @@ export const likeTweetController: PostHandler<any, LikeTweetResponseDto, { tweet
 }
 
 export const unlikeTweetController: DeleteHandler<LikeTweetResponseDto, { tweet_id: string }> = async (req, res) => {
+  console.log('HIT UNLIKE TWEET', req.params.tweet_id)
   const user_id = (req as any).decoded_authorization.user_id
   const { tweet_id } = req.params
   const result = await tweetService.unlikeTweet(user_id, tweet_id)
@@ -75,6 +77,7 @@ export const unretweetController: DeleteHandler<any, { tweet_id: string }> = asy
 }
 
 export const bookmarkTweetController: PostHandler<any, BookmarkTweetResponseDto, { tweet_id: string }> = async (req, res) => {
+  console.log('HIT BOOKMARK TWEET', req.params.tweet_id)
   const user_id = (req as any).decoded_authorization.user_id
   const { tweet_id } = req.params
   const result = await tweetService.bookmarkTweet(user_id, tweet_id)
@@ -84,6 +87,7 @@ export const bookmarkTweetController: PostHandler<any, BookmarkTweetResponseDto,
 }
 
 export const unbookmarkTweetController: DeleteHandler<BookmarkTweetResponseDto, { tweet_id: string }> = async (req, res) => {
+  console.log('HIT UNBOOKMARK TWEET', req.params.tweet_id)
   const user_id = (req as any).decoded_authorization.user_id
   const { tweet_id } = req.params
   const result = await tweetService.unbookmarkTweet(user_id, tweet_id)

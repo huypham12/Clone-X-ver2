@@ -5,6 +5,7 @@ import { UserResponseDto } from './dto/user.dto'
 import { BlockUserResponseDto, UnblockUserResponseDto } from './dto/blocked_user.dto'
 import { MESSAGES } from '~/constants/messages'
 import { HTTP_STATUS } from '~/constants/httpStatus'
+import { SuccessResponseDto } from '~/common/success-response.dto'
 
 export class UserController {
   constructor(private readonly userService: UserService) {}
@@ -42,42 +43,36 @@ export class UserController {
     res.json(new UnblockUserResponseDto())
   }
 
-  getBlockedUsersController: GetHandler<{ users: UserResponseDto[] }> = async (req, res) => {
+  getBlockedUsersController: GetHandler<any> = async (req, res) => {
     const { user_id } = req.decoded_authorization as TokenPayload
     const result = await this.userService.getBlockedUsers(user_id)
-    res.json({ users: result.map((user) => new UserResponseDto(user)) })
+    res.json(new SuccessResponseDto(HTTP_STATUS.OK, 'Get blocked users successfully', { users: result.map((user) => new UserResponseDto(user)) }))
   }
 
   followUserController: PostHandler = async (req, res) => {
     const { user_id } = req.decoded_authorization as TokenPayload
     const { followed_user_id } = req.params
     await this.userService.followUser(user_id, followed_user_id)
-    res.json({
-      statusCode: HTTP_STATUS.OK,
-      message: MESSAGES.FOLLOW_USER_SUCCESS
-    })
+    res.json(new SuccessResponseDto(HTTP_STATUS.OK, MESSAGES.FOLLOW_USER_SUCCESS, null))
   }
 
   unfollowUserController: DeleteHandler = async (req, res) => {
     const { user_id } = req.decoded_authorization as TokenPayload
     const { followed_user_id } = req.params
     await this.userService.unfollowUser(user_id, followed_user_id)
-    res.json({
-      statusCode: HTTP_STATUS.OK,
-      message: MESSAGES.UNFOLLOW_USER_SUCCESS
-    })
+    res.json(new SuccessResponseDto(HTTP_STATUS.OK, MESSAGES.UNFOLLOW_USER_SUCCESS, null))
   }
 
-  getFollowersController: GetHandler<{ followers: any[] }> = async (req, res) => {
+  getFollowersController: GetHandler<any> = async (req, res) => {
     const { target_user_id } = req.params
     const result = await this.userService.getFollowers(target_user_id)
-    res.json({ followers: result })
+    res.json(new SuccessResponseDto(HTTP_STATUS.OK, 'Get followers successfully', { followers: result }))
   }
 
-  getFollowingController: GetHandler<{ following: any[] }> = async (req, res) => {
+  getFollowingController: GetHandler<any> = async (req, res) => {
     const { target_user_id } = req.params
     const result = await this.userService.getFollowing(target_user_id)
-    res.json({ following: result })
+    res.json(new SuccessResponseDto(HTTP_STATUS.OK, 'Get following successfully', { following: result }))
   }
 
   getUserTweetsController: GetHandler<any> = async (req, res) => {
@@ -87,7 +82,7 @@ export class UserController {
     const current_user_id = req.decoded_authorization?.user_id
     
     const result = await this.userService.getUserTweets(username, cursor, limit, current_user_id)
-    res.json({ message: 'Get user tweets successfully', result })
+    res.json(new SuccessResponseDto(HTTP_STATUS.OK, 'Get user tweets successfully', result))
   }
 
   getUserRepliesController: GetHandler<any> = async (req, res) => {
@@ -97,7 +92,7 @@ export class UserController {
     const current_user_id = req.decoded_authorization?.user_id
     
     const result = await this.userService.getUserReplies(username, cursor, limit, current_user_id)
-    res.json({ message: 'Get user replies successfully', result })
+    res.json(new SuccessResponseDto(HTTP_STATUS.OK, 'Get user replies successfully', result))
   }
 
   getUserLikesController: GetHandler<any> = async (req, res) => {
@@ -107,7 +102,7 @@ export class UserController {
     const current_user_id = req.decoded_authorization?.user_id
     
     const result = await this.userService.getUserLikes(username, cursor, limit, current_user_id)
-    res.json({ message: 'Get user likes successfully', result })
+    res.json(new SuccessResponseDto(HTTP_STATUS.OK, 'Get user likes successfully', result))
   }
 
   getUserMediaController: GetHandler<any> = async (req, res) => {
@@ -117,6 +112,6 @@ export class UserController {
     const current_user_id = req.decoded_authorization?.user_id
     
     const result = await this.userService.getUserMedia(username, cursor, limit, current_user_id)
-    res.json({ message: 'Get user media successfully', result })
+    res.json(new SuccessResponseDto(HTTP_STATUS.OK, 'Get user media successfully', result))
   }
 }

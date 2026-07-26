@@ -1,5 +1,6 @@
 import { Request, Response } from 'express'
 import { HTTP_STATUS } from '~/constants/httpStatus'
+import { SuccessResponseDto } from '~/common/success-response.dto'
 import searchService from './search.service'
 import { GetHandler } from '~/types/controller-handler.type'
 import { SearchQueryDto, SearchResponseDto, SearchTweetsQueryDto } from './dto'
@@ -46,13 +47,13 @@ export const searchHashtagsController: GetHandler<SearchResponseDto, any, { q: s
 export const getSearchHistoryController: GetHandler<any> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
   const result = await searchService.getSearchHistory(user_id)
-  res.json({ message: 'Get search history successfully', result })
+  res.json(new SuccessResponseDto(HTTP_STATUS.OK, 'Get search history successfully', result))
 }
 
 export const deleteSearchHistoryController: GetHandler<any> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
   await searchService.deleteSearchHistory(user_id)
-  res.json({ message: 'Delete search history successfully' })
+  res.json(new SuccessResponseDto(HTTP_STATUS.OK, 'Delete search history successfully'))
 }
 
 export const getHashtagTweetsController: GetHandler<any> = async (req, res) => {
@@ -62,5 +63,5 @@ export const getHashtagTweetsController: GetHandler<any> = async (req, res) => {
   const user_id = (req as any).decoded_authorization?.user_id
 
   const result = await searchService.getHashtagTweets(tag, cursor, limit, user_id)
-  res.json({ message: 'Get hashtag tweets successfully', result })
+  res.json(new SuccessResponseDto(HTTP_STATUS.OK, 'Get hashtag tweets successfully', result))
 }

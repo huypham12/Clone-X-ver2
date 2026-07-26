@@ -49,7 +49,7 @@ export default class Tweet {
     this.type = tweet.type
     this.audience = tweet.audience || TweetAudience.Everyone
     this.content = tweet.content || ''
-    this.parent_id = tweet.parent_id || null
+    this.parent_id = tweet.parent_id ? new ObjectId(tweet.parent_id) : null
     this.hashtags = tweet.hashtags || []
     this.mentions = tweet.mentions || []
     this.medias = tweet.media_ids || []

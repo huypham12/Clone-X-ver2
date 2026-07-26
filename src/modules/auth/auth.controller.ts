@@ -1,4 +1,5 @@
 import { AuthService } from './services/auth.service'
+import { SuccessResponseDto } from '~/common/success-response.dto'
 import {
   SendEmailBodyDto,
   SendEmailResponseDto,
@@ -114,10 +115,7 @@ export class AuthController {
   }
 
   verifyForgotPasswordToken: PostHandler = async (req, res) => {
-    res.json({
-      statusCode: 200,
-      message: MESSAGES.VERIFY_FORGOT_PASSWORD_TOKEN_SUCCESS
-    })
+    res.json(new SuccessResponseDto(HTTP_STATUS.OK, MESSAGES.VERIFY_FORGOT_PASSWORD_TOKEN_SUCCESS, null))
   }
 
   resetPassword: PostHandler<ResetPasswordBodyDto, ResetPasswordResponseDto> = async (req, res) => {

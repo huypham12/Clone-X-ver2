@@ -28,8 +28,8 @@ export default class MediaMetadata {
     this._id = data._id || new ObjectId()
     this.url = data.url || ''
     this.public_id = data.public_id || ''
-    this.status = data.status || MediaStatus.Pending
     this.type = data.type
+    this.status = data.status ?? (data.type === MediaType.Video ? MediaStatus.Pending : MediaStatus.Ready)
     this.thumbnail = data.thumbnail || ''
     this.uploaded_by = data.uploaded_by || null
     this.created_at = data.created_at || new Date()

@@ -25,10 +25,8 @@ export interface UserPrivateDTO extends UserPublicDTO {
   verify?: UserVerifyStatus
 }
 
-export class UserResponseDto extends SuccessResponseDto {
-  user: UserPublicDTO[] | UserPrivateDTO[]
-  constructor(user: UserPublicDTO | UserPrivateDTO) {
-    super(HTTP_STATUS.OK, MESSAGES.GET_USER_PROFILE_SUCCESS)
-    this.user = Array.isArray(user) ? user : [user]
+export class UserResponseDto extends SuccessResponseDto<UserPublicDTO[] | UserPrivateDTO[]> {
+  constructor(user: UserPublicDTO | UserPrivateDTO | UserPublicDTO[] | UserPrivateDTO[]) {
+    super(HTTP_STATUS.OK, MESSAGES.GET_USER_PROFILE_SUCCESS, Array.isArray(user) ? user : [user])
   }
 }
