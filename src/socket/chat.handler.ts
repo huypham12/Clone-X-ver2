@@ -60,6 +60,19 @@ export const chatHandler = (io: Server, socket: Socket) => {
       // 1. Save to MongoDB
       await databaseService.messages.insertOne(newMessage)
 
+      // Fetch medias_info if there are media_ids
+      let medias_info = []
+      if (media_ids && media_ids.length > 0) {
+        medias_info = await databaseService.medias.find({
+          _id: { $in: media_ids.map((id: string) => new databaseService.ObjectId(id)) }
+        }).toArray()
+      }
+
+      const messageToBroadcast = {
+        ...newMessage,
+        medias_info
+      }
+
       const messagePreview = {
         sender_id,
         content: content.substring(0, 50),
@@ -86,7 +99,7 @@ export const chatHandler = (io: Server, socket: Socket) => {
       
       await redisService.clientInstance.zAdd(redisKey, {
         score,
-        value: JSON.stringify(newMessage)
+        value: JSON.stringify(messageToBroadcast)
       })
       await redisService.clientInstance.zRemRangeByRank(redisKey, 0, -101)
       await redisService.clientInstance.expire(redisKey, 7 * 24 * 60 * 60)
@@ -94,7 +107,7 @@ export const chatHandler = (io: Server, socket: Socket) => {
       // 4. Lấy danh sách members và Broadcast qua Personal Inbox
       const memberIds = await getConversationMembers(conversation_id, conversation_type)
       if (memberIds.length > 0) {
-        io.to(memberIds).emit('@conversation:receive', newMessage)
+        io.to(memberIds).emit('@conversation:receive', messageToBroadcast)
       }
 
       // 5. Gửi Notification cho những người trong nhóm

@@ -19,12 +19,35 @@ class ConversationService {
     const objectIdUserId = new this.databaseService.ObjectId(userId)
 
     const [directs, groups] = await Promise.all([
-      this.databaseService.directConversations
-        .find({
-          $or: [{ user1_id: objectIdUserId }, { user2_id: objectIdUserId }],
-          hidden_by: { $ne: objectIdUserId }
-        })
-        .toArray(),
+      this.databaseService.directConversations.aggregate([
+        {
+          $match: {
+            $or: [{ user1_id: objectIdUserId }, { user2_id: objectIdUserId }],
+            hidden_by: { $ne: objectIdUserId }
+          }
+        },
+        {
+          $addFields: {
+            partner_id: {
+              $cond: {
+                if: { $eq: ['$user1_id', objectIdUserId] },
+                then: '$user2_id',
+                else: '$user1_id'
+              }
+            }
+          }
+        },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'partner_id',
+            foreignField: '_id',
+            as: 'partnerInfo'
+          }
+        },
+        { $unwind: { path: '$partnerInfo', preserveNullAndEmptyArrays: true } }
+      ]).toArray(),
+      
       this.databaseService.groupConversations
         .find({
           'members.user_id': objectIdUserId,
@@ -37,14 +60,19 @@ class ConversationService {
     const formattedDirects = directs.map((c) => ({
       ...c,
       type: 'direct',
-      partner_id: c.user1_id.equals(objectIdUserId) ? c.user2_id : c.user1_id,
-      is_pinned: c.pinned_by?.some((id) => id.equals(objectIdUserId)) || false
+      partner_info: c.partnerInfo ? {
+        _id: c.partnerInfo._id,
+        name: c.partnerInfo.name,
+        username: c.partnerInfo.username,
+        avatar: c.partnerInfo.avatar
+      } : null,
+      is_pinned: c.pinned_by?.some((id: any) => id.equals(objectIdUserId)) || false
     }))
 
     const formattedGroups = groups.map((c) => ({
       ...c,
       type: 'group',
-      is_pinned: c.pinned_by?.some((id) => id.equals(objectIdUserId)) || false
+      is_pinned: c.pinned_by?.some((id: any) => id.equals(objectIdUserId)) || false
     }))
 
     const merged = [...formattedDirects, ...formattedGroups].sort((a, b) => {
@@ -175,9 +203,19 @@ class ConversationService {
       }
       
       messages = await this.databaseService.messages
-        .find(matchStage)
-        .sort({ _id: -1 }) // Newest first
-        .limit(limit)
+        .aggregate([
+          { $match: matchStage },
+          { $sort: { _id: -1 } },
+          { $limit: limit },
+          {
+            $lookup: {
+              from: 'medias',
+              localField: 'media_ids',
+              foreignField: '_id',
+              as: 'medias_info'
+            }
+          }
+        ])
         .toArray()
     }
 
