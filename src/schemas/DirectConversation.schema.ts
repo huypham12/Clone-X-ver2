@@ -3,7 +3,7 @@ import { ObjectId } from 'mongodb'
 type MessagePreview = {
   sender_id: ObjectId
   content: string
-  message_type: 'text' | 'image' | 'video' | 'file'
+  message_type: 'text' | 'image' | 'video' | 'audio' | 'file'
 }
 
 type DirectConversationType = {

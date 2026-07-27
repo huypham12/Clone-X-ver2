@@ -7,6 +7,14 @@ import { HttpError } from '~/common/http-error'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import redisService from '~/config/redis.service'
 import { getIO } from '~/socket'
+import { MediaType } from '~/constants/enums'
+import type User from '~/schemas/User.schema'
+
+type ConversationPartner = Pick<User, '_id' | 'name' | 'username' | 'avatar'>
+type DirectConversationAggregate = DirectConversation & {
+  partner_id: ObjectId
+  partnerInfo?: ConversationPartner
+}
 
 class ConversationService {
   private databaseService: DatabaseService
@@ -19,35 +27,37 @@ class ConversationService {
     const objectIdUserId = new this.databaseService.ObjectId(userId)
 
     const [directs, groups] = await Promise.all([
-      this.databaseService.directConversations.aggregate([
-        {
-          $match: {
-            $or: [{ user1_id: objectIdUserId }, { user2_id: objectIdUserId }],
-            hidden_by: { $ne: objectIdUserId }
-          }
-        },
-        {
-          $addFields: {
-            partner_id: {
-              $cond: {
-                if: { $eq: ['$user1_id', objectIdUserId] },
-                then: '$user2_id',
-                else: '$user1_id'
+      this.databaseService.directConversations
+        .aggregate<DirectConversationAggregate>([
+          {
+            $match: {
+              $or: [{ user1_id: objectIdUserId }, { user2_id: objectIdUserId }],
+              hidden_by: { $ne: objectIdUserId }
+            }
+          },
+          {
+            $addFields: {
+              partner_id: {
+                $cond: {
+                  if: { $eq: ['$user1_id', objectIdUserId] },
+                  then: '$user2_id',
+                  else: '$user1_id'
+                }
               }
             }
-          }
-        },
-        {
-          $lookup: {
-            from: 'users',
-            localField: 'partner_id',
-            foreignField: '_id',
-            as: 'partnerInfo'
-          }
-        },
-        { $unwind: { path: '$partnerInfo', preserveNullAndEmptyArrays: true } }
-      ]).toArray(),
-      
+          },
+          {
+            $lookup: {
+              from: 'users',
+              localField: 'partner_id',
+              foreignField: '_id',
+              as: 'partnerInfo'
+            }
+          },
+          { $unwind: { path: '$partnerInfo', preserveNullAndEmptyArrays: true } }
+        ])
+        .toArray(),
+
       this.databaseService.groupConversations
         .find({
           'members.user_id': objectIdUserId,
@@ -60,26 +70,28 @@ class ConversationService {
     const formattedDirects = directs.map((c) => ({
       ...c,
       type: 'direct',
-      partner_info: c.partnerInfo ? {
-        _id: c.partnerInfo._id,
-        name: c.partnerInfo.name,
-        username: c.partnerInfo.username,
-        avatar: c.partnerInfo.avatar
-      } : null,
-      is_pinned: c.pinned_by?.some((id: any) => id.equals(objectIdUserId)) || false
+      partner_info: c.partnerInfo
+        ? {
+            _id: c.partnerInfo._id,
+            name: c.partnerInfo.name,
+            username: c.partnerInfo.username,
+            avatar: c.partnerInfo.avatar
+          }
+        : null,
+      is_pinned: c.pinned_by?.some((id) => id.equals(objectIdUserId)) || false
     }))
 
     const formattedGroups = groups.map((c) => ({
       ...c,
       type: 'group',
-      is_pinned: c.pinned_by?.some((id: any) => id.equals(objectIdUserId)) || false
+      is_pinned: c.pinned_by?.some((id) => id.equals(objectIdUserId)) || false
     }))
 
     const merged = [...formattedDirects, ...formattedGroups].sort((a, b) => {
       // 1. Sort by pinned status first
       if (a.is_pinned && !b.is_pinned) return -1
       if (!a.is_pinned && b.is_pinned) return 1
-      
+
       // 2. Then sort by last_message_at
       const timeA = a.last_message_at ? new Date(a.last_message_at).getTime() : 0
       const timeB = b.last_message_at ? new Date(b.last_message_at).getTime() : 0
@@ -100,7 +112,7 @@ class ConversationService {
     // Ensure user1_id < user2_id to maintain consistency
     const [u1, u2] = user1_id < user2_id ? [id1, id2] : [id2, id1]
 
-    let conversation = await this.databaseService.directConversations.findOne({
+    const conversation = await this.databaseService.directConversations.findOne({
       user1_id: u1,
       user2_id: u2
     })
@@ -117,10 +129,7 @@ class ConversationService {
       return newConversation
     } else if (conversation.hidden_by?.some((id) => id.equals(id1) || id.equals(id2))) {
       // If one of them hidden it, unhide when someone starts chatting again
-      await this.databaseService.directConversations.updateOne(
-        { _id: conversation._id },
-        { $set: { hidden_by: [] } }
-      )
+      await this.databaseService.directConversations.updateOne({ _id: conversation._id }, { $set: { hidden_by: [] } })
     }
 
     return conversation
@@ -188,7 +197,7 @@ class ConversationService {
     const convId = new this.databaseService.ObjectId(conversationId)
 
     let messages = []
-    
+
     if (!cursor) {
       const cachedMessages = await redisService.clientInstance.zRange(redisKey, 0, limit - 1, { REV: true })
       if (cachedMessages && cachedMessages.length === limit) {
@@ -201,7 +210,7 @@ class ConversationService {
       if (cursor) {
         matchStage._id = { $lt: new this.databaseService.ObjectId(cursor) }
       }
-      
+
       messages = await this.databaseService.messages
         .aggregate([
           { $match: matchStage },
@@ -221,7 +230,7 @@ class ConversationService {
 
     const has_next_page = messages.length === limit
     const next_cursor = has_next_page ? messages[messages.length - 1]._id?.toString() : null
-    
+
     return { messages, next_cursor, has_next_page }
   }
 
@@ -247,10 +256,7 @@ class ConversationService {
       throw new HttpError('You can only revoke your own messages', HTTP_STATUS.FORBIDDEN)
     }
 
-    await this.databaseService.messages.updateOne(
-      { _id: msgId },
-      { $set: { status: 'revoked' } }
-    )
+    await this.databaseService.messages.updateOne({ _id: msgId }, { $set: { status: 'revoked' } })
 
     try {
       getIO().to(message.conversation_id.toString()).emit('@message:revoked', { message_id: messageId })
@@ -266,15 +272,12 @@ class ConversationService {
 
     const message = await this.databaseService.messages.findOne({ _id: msgId })
     if (!message) throw new HttpError('Message not found', HTTP_STATUS.NOT_FOUND)
-    
+
     if (!message.sender_id.equals(objectIdUserId)) {
       throw new HttpError('You can only delete your own messages', HTTP_STATUS.FORBIDDEN)
     }
 
-    await this.databaseService.messages.updateOne(
-      { _id: msgId },
-      { $set: { status: 'deleted' } }
-    )
+    await this.databaseService.messages.updateOne({ _id: msgId }, { $set: { status: 'deleted' } })
 
     try {
       getIO().to(message.conversation_id.toString()).emit('@message:deleted', { message_id: messageId })
@@ -297,7 +300,7 @@ class ConversationService {
       { _id: msgId },
       { $pull: { reactions: { user_id: objectIdUserId } } as any } // Xóa cũ
     )
-    
+
     await this.databaseService.messages.updateOne(
       { _id: msgId },
       { $push: { reactions: reaction } as any } // Thêm mới
@@ -348,18 +351,16 @@ class ConversationService {
     const convId = new this.databaseService.ObjectId(conversationId)
 
     // Try Direct
-    const directUpdate = await this.databaseService.directConversations.updateOne(
-      { _id: convId },
-      { $pull: { pinned_by: objectIdUserId } } as any
-    )
+    const directUpdate = await this.databaseService.directConversations.updateOne({ _id: convId }, {
+      $pull: { pinned_by: objectIdUserId }
+    } as any)
 
     if (directUpdate.matchedCount > 0) return { success: true }
 
     // Try Group
-    const groupUpdate = await this.databaseService.groupConversations.updateOne(
-      { _id: convId },
-      { $pull: { pinned_by: objectIdUserId } } as any
-    )
+    const groupUpdate = await this.databaseService.groupConversations.updateOne({ _id: convId }, {
+      $pull: { pinned_by: objectIdUserId }
+    } as any)
 
     if (groupUpdate.matchedCount > 0) return { success: true }
 
@@ -384,7 +385,7 @@ class ConversationService {
 
     const has_next_page = messages.length === limit
     const next_cursor = has_next_page ? messages[messages.length - 1]._id?.toString() : null
-    
+
     return { messages, next_cursor, has_next_page }
   }
 
@@ -398,22 +399,18 @@ class ConversationService {
       matchStage._id = { $lt: new this.databaseService.ObjectId(cursor) }
     }
 
-    const messages = await this.databaseService.messages
-      .find(matchStage)
-      .sort({ _id: -1 })
-      .limit(limit)
-      .toArray()
+    const messages = await this.databaseService.messages.find(matchStage).sort({ _id: -1 }).limit(limit).toArray()
 
     const has_next_page = messages.length === limit
     const next_cursor = has_next_page ? messages[messages.length - 1]._id?.toString() : null
-    
+
     return { messages, next_cursor, has_next_page }
   }
 
   async muteConversation(userId: string, conversationId: string, type: 'direct' | 'group', durationHours?: number) {
     const convId = new this.databaseService.ObjectId(conversationId)
     const uId = new this.databaseService.ObjectId(userId)
-    
+
     let until: Date | null = null
     if (durationHours && durationHours > 0) {
       until = new Date()
@@ -427,19 +424,13 @@ class ConversationService {
         { _id: convId },
         { $pull: { muted_by: { user_id: uId } } as any }
       )
-      await this.databaseService.directConversations.updateOne(
-        { _id: convId },
-        { $push: { muted_by: muteObj } as any }
-      )
+      await this.databaseService.directConversations.updateOne({ _id: convId }, { $push: { muted_by: muteObj } as any })
     } else {
       await this.databaseService.groupConversations.updateOne(
         { _id: convId },
         { $pull: { muted_by: { user_id: uId } } as any }
       )
-      await this.databaseService.groupConversations.updateOne(
-        { _id: convId },
-        { $push: { muted_by: muteObj } as any }
-      )
+      await this.databaseService.groupConversations.updateOne({ _id: convId }, { $push: { muted_by: muteObj } as any })
     }
     return { success: true, until }
   }
@@ -464,8 +455,8 @@ class ConversationService {
 
   async updateGroupInfo(userId: string, conversationId: string, updates: { name?: string; avatar_url?: string }) {
     const convId = new this.databaseService.ObjectId(conversationId)
-    // Optional: check if user is admin or member depending on business logic. 
-    // Usually any member can change the group name or avatar, or only admin. 
+    // Optional: check if user is admin or member depending on business logic.
+    // Usually any member can change the group name or avatar, or only admin.
     // Here we'll just check if they are in the group for simplicity, or we can assume it's checked by some middleware/controller logic.
     // I'll update it directly.
     const validUpdates: any = {}
@@ -474,47 +465,46 @@ class ConversationService {
 
     if (Object.keys(validUpdates).length === 0) return { success: true }
 
-    await this.databaseService.groupConversations.updateOne(
-      { _id: convId },
-      { $set: validUpdates }
-    )
+    await this.databaseService.groupConversations.updateOne({ _id: convId }, { $set: validUpdates })
     return { success: true }
   }
 
   async getGroupMembers(userId: string, conversationId: string) {
     const convId = new this.databaseService.ObjectId(conversationId)
-    const group = await this.databaseService.groupConversations.aggregate([
-      { $match: { _id: convId } },
-      { $unwind: '$members' },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'members.user_id',
-          foreignField: '_id',
-          as: 'userInfo'
-        }
-      },
-      { $unwind: '$userInfo' },
-      {
-        $project: {
-          'userInfo.password': 0,
-          'userInfo.email_verify_token': 0,
-          'userInfo.forgot_password_token': 0
-        }
-      },
-      {
-        $group: {
-          _id: '$_id',
-          members: {
-            $push: {
-              role: '$members.role',
-              joined_at: '$members.joined_at',
-              user: '$userInfo'
+    const group = await this.databaseService.groupConversations
+      .aggregate([
+        { $match: { _id: convId } },
+        { $unwind: '$members' },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'members.user_id',
+            foreignField: '_id',
+            as: 'userInfo'
+          }
+        },
+        { $unwind: '$userInfo' },
+        {
+          $project: {
+            'userInfo.password': 0,
+            'userInfo.email_verify_token': 0,
+            'userInfo.forgot_password_token': 0
+          }
+        },
+        {
+          $group: {
+            _id: '$_id',
+            members: {
+              $push: {
+                role: '$members.role',
+                joined_at: '$members.joined_at',
+                user: '$userInfo'
+              }
             }
           }
         }
-      }
-    ]).toArray()
+      ])
+      .toArray()
 
     return group.length > 0 ? group[0].members : []
   }
@@ -574,7 +564,7 @@ class ConversationService {
 
     const message = await this.databaseService.messages.findOne({ _id: msgId })
     if (!message) throw new HttpError('Message not found', HTTP_STATUS.NOT_FOUND)
-    
+
     if (!message.sender_id.equals(objectIdUserId)) {
       throw new HttpError('You can only edit your own messages', HTTP_STATUS.FORBIDDEN)
     }
@@ -604,7 +594,9 @@ class ConversationService {
     )
 
     try {
-      getIO().to(message.conversation_id.toString()).emit('@message:unreacted', { message_id: messageId, user_id: userId })
+      getIO()
+        .to(message.conversation_id.toString())
+        .emit('@message:unreacted', { message_id: messageId, user_id: userId })
     } catch (e) {}
 
     return { success: true }
@@ -612,31 +604,33 @@ class ConversationService {
 
   async getMessageReactions(messageId: string) {
     const msgId = new this.databaseService.ObjectId(messageId)
-    
-    const message = await this.databaseService.messages.aggregate([
-      { $match: { _id: msgId } },
-      { $unwind: '$reactions' },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'reactions.user_id',
-          foreignField: '_id',
-          as: 'userInfo'
-        }
-      },
-      { $unwind: '$userInfo' },
-      {
-        $project: {
-          emoji: '$reactions.emoji',
-          user: {
-            _id: '$userInfo._id',
-            name: '$userInfo.name',
-            username: '$userInfo.username',
-            avatar: '$userInfo.avatar'
+
+    const message = await this.databaseService.messages
+      .aggregate([
+        { $match: { _id: msgId } },
+        { $unwind: '$reactions' },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'reactions.user_id',
+            foreignField: '_id',
+            as: 'userInfo'
+          }
+        },
+        { $unwind: '$userInfo' },
+        {
+          $project: {
+            emoji: '$reactions.emoji',
+            user: {
+              _id: '$userInfo._id',
+              name: '$userInfo.name',
+              username: '$userInfo.username',
+              avatar: '$userInfo.avatar'
+            }
           }
         }
-      }
-    ]).toArray()
+      ])
+      .toArray()
 
     return message
   }
@@ -650,18 +644,30 @@ class ConversationService {
       throw new HttpError('Original message not found', HTTP_STATUS.NOT_FOUND)
     }
 
+    const firstMedia = originalMessage.media_ids?.[0]
+      ? await this.databaseService.medias.findOne({ _id: originalMessage.media_ids[0] })
+      : null
+    const forwardedMessageType =
+      firstMedia?.type === MediaType.Image ||
+      firstMedia?.type === MediaType.Video ||
+      firstMedia?.type === MediaType.Audio
+        ? firstMedia.type
+        : firstMedia
+          ? ('file' as const)
+          : ('text' as const)
+
     // Determine conversation types for all target conversations
-    const objectConvIds = conversationIds.map(id => new this.databaseService.ObjectId(id))
+    const objectConvIds = conversationIds.map((id) => new this.databaseService.ObjectId(id))
     const [directs, groups] = await Promise.all([
       this.databaseService.directConversations.find({ _id: { $in: objectConvIds } }).toArray(),
       this.databaseService.groupConversations.find({ _id: { $in: objectConvIds } }).toArray()
     ])
 
     const convTypeMap = new Map<string, 'direct' | 'group'>()
-    directs.forEach(c => convTypeMap.set(c._id.toString(), 'direct'))
-    groups.forEach(c => convTypeMap.set(c._id.toString(), 'group'))
+    directs.forEach((c) => convTypeMap.set(c._id.toString(), 'direct'))
+    groups.forEach((c) => convTypeMap.set(c._id.toString(), 'group'))
 
-    const newMessages = conversationIds.map(convId => {
+    const newMessages = conversationIds.map((convId) => {
       const convType = convTypeMap.get(convId) || 'direct' // Default to direct if somehow missing
       const newMessage = new Message({
         _id: new this.databaseService.ObjectId(),
@@ -681,16 +687,16 @@ class ConversationService {
 
     if (newMessages.length > 0) {
       await this.databaseService.messages.insertMany(newMessages)
-      
+
       // Update last_message_preview for all conversations
-      const updatePromises = conversationIds.map(convId => {
+      const updatePromises = conversationIds.map((convId) => {
         const cId = new this.databaseService.ObjectId(convId)
         const preview = {
           sender_id: senderId,
           content: originalMessage.content,
-          message_type: (originalMessage.media_ids && originalMessage.media_ids.length > 0) ? 'image' as const : 'text' as const
+          message_type: forwardedMessageType
         }
-        
+
         const convType = convTypeMap.get(convId)
         if (convType === 'direct') {
           return this.databaseService.directConversations.updateOne(

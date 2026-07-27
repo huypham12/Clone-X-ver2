@@ -2,8 +2,25 @@ import { Server, Socket } from 'socket.io'
 import DatabaseService from '~/config/database.service'
 import redisService from '~/config/redis.service'
 import Message from '~/schemas/Message.schema'
+import MediaMetadata from '~/schemas/MediaMetadata.schema'
 import notificationService from '../modules/notification/notification.service'
-import { NotificationType } from '~/constants/enums'
+import { MediaStatus, MediaType, NotificationType } from '~/constants/enums'
+import { ObjectId } from 'mongodb'
+
+type ConversationType = 'direct' | 'group'
+type MessageMediaType = MediaType.Image | MediaType.Video | MediaType.Audio
+type MessagePreviewType = 'text' | MessageMediaType
+
+interface SendMessagePayload {
+  conversation_id?: unknown
+  conversation_type?: unknown
+  content?: unknown
+  media_ids?: unknown
+  reply_to_message_id?: unknown
+}
+
+const isMessageMediaType = (type: MediaType): type is MessageMediaType =>
+  type === MediaType.Image || type === MediaType.Video || type === MediaType.Audio
 
 export const chatHandler = (io: Server, socket: Socket) => {
   const databaseService = new DatabaseService()
@@ -32,27 +49,79 @@ export const chatHandler = (io: Server, socket: Socket) => {
     return memberIds
   }
 
-  socket.on('@conversation:send', async (payload) => {
+  socket.on('@conversation:send', async (payload: SendMessagePayload) => {
     try {
       const { conversation_id, conversation_type, content, media_ids, reply_to_message_id } = payload
 
-      if (!conversation_id || !content) {
+      const hasValidConversation =
+        typeof conversation_id === 'string' &&
+        ObjectId.isValid(conversation_id) &&
+        (conversation_type === 'direct' || conversation_type === 'group')
+      const hasValidContent = content === undefined || typeof content === 'string'
+      const hasValidMediaIds =
+        media_ids === undefined ||
+        (Array.isArray(media_ids) && media_ids.every((id) => typeof id === 'string' && ObjectId.isValid(id)))
+      const hasValidReplyId =
+        reply_to_message_id === undefined ||
+        (typeof reply_to_message_id === 'string' && ObjectId.isValid(reply_to_message_id))
+
+      if (!hasValidConversation || !hasValidContent || !hasValidMediaIds || !hasValidReplyId) {
         return socket.emit('error', { message: 'Invalid payload' })
       }
 
+      const normalizedContent = typeof content === 'string' ? content.trim() : ''
+      const normalizedMediaIds = Array.isArray(media_ids) ? (media_ids as string[]) : []
+      const uniqueMediaIds = [...new Set(normalizedMediaIds)]
+
+      if (
+        (!normalizedContent && uniqueMediaIds.length === 0) ||
+        uniqueMediaIds.length !== normalizedMediaIds.length ||
+        uniqueMediaIds.length > 4
+      ) {
+        return socket.emit('error', { message: 'A message must contain text or up to 4 unique media files' })
+      }
+
       const sender_id = new databaseService.ObjectId(socket.user_id as string)
-      const convObjectId = new databaseService.ObjectId(conversation_id)
-      
+      const convObjectId = new databaseService.ObjectId(conversation_id as string)
+      const typedConversationType = conversation_type as ConversationType
+      const memberIds = await getConversationMembers(conversation_id as string, typedConversationType)
+
+      if (!memberIds.includes(sender_id.toString())) {
+        return socket.emit('error', { message: 'You are not a member of this conversation' })
+      }
+
+      const mediaObjectIds = uniqueMediaIds.map((id) => new databaseService.ObjectId(id))
+      const medias_info: MediaMetadata[] = []
+
+      if (mediaObjectIds.length > 0) {
+        const mediaDocuments = await databaseService.medias.find({ _id: { $in: mediaObjectIds } }).toArray()
+        const mediaById = new Map(mediaDocuments.map((media) => [media._id.toString(), media]))
+
+        for (const mediaId of uniqueMediaIds) {
+          const media = mediaById.get(mediaId)
+          const isOwnedBySender = media?.uploaded_by?.toString() === sender_id.toString()
+          const isReady = media?.status === MediaStatus.Ready && Boolean(media.url)
+          const isSupported = media ? isMessageMediaType(media.type) : false
+
+          if (!media || !isOwnedBySender || !isReady || !isSupported) {
+            return socket.emit('error', { message: 'One or more media files are invalid or not ready' })
+          }
+
+          medias_info.push(media)
+        }
+      }
+
       const newMessage = new Message({
         _id: new databaseService.ObjectId(),
         conversation_id: convObjectId,
-        conversation_type,
+        conversation_type: typedConversationType,
         sender_id,
-        content,
-        media_ids: media_ids?.map((id: string) => new databaseService.ObjectId(id)) || [],
+        content: normalizedContent,
+        media_ids: mediaObjectIds,
         send_at: new Date(),
         read_by: [sender_id],
-        reply_to_message_id: reply_to_message_id ? new databaseService.ObjectId(reply_to_message_id) : undefined,
+        reply_to_message_id:
+          typeof reply_to_message_id === 'string' ? new databaseService.ObjectId(reply_to_message_id) : undefined,
         status: 'sent',
         reactions: []
       })
@@ -60,23 +129,18 @@ export const chatHandler = (io: Server, socket: Socket) => {
       // 1. Save to MongoDB
       await databaseService.messages.insertOne(newMessage)
 
-      // Fetch medias_info if there are media_ids
-      let medias_info = []
-      if (media_ids && media_ids.length > 0) {
-        medias_info = await databaseService.medias.find({
-          _id: { $in: media_ids.map((id: string) => new databaseService.ObjectId(id)) }
-        }).toArray()
-      }
-
       const messageToBroadcast = {
         ...newMessage,
         medias_info
       }
 
+      const firstMediaType = medias_info[0]?.type
+      const messageType: MessagePreviewType =
+        firstMediaType && isMessageMediaType(firstMediaType) ? firstMediaType : 'text'
       const messagePreview = {
         sender_id,
-        content: content.substring(0, 50),
-        message_type: media_ids && media_ids.length > 0 ? 'image' : 'text'
+        content: normalizedContent.substring(0, 50),
+        message_type: messageType
       }
 
       // 2. Update Conversations last_message
@@ -105,13 +169,12 @@ export const chatHandler = (io: Server, socket: Socket) => {
       await redisService.clientInstance.expire(redisKey, 7 * 24 * 60 * 60)
 
       // 4. Lấy danh sách members và Broadcast qua Personal Inbox
-      const memberIds = await getConversationMembers(conversation_id, conversation_type)
       if (memberIds.length > 0) {
         io.to(memberIds).emit('@conversation:receive', messageToBroadcast)
       }
 
       // 5. Gửi Notification cho những người trong nhóm
-      const conv = conversation_type === 'direct' 
+      const conv = typedConversationType === 'direct'
         ? await databaseService.directConversations.findOne({ _id: convObjectId })
         : await databaseService.groupConversations.findOne({ _id: convObjectId })
       
