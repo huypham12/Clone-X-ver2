@@ -152,6 +152,13 @@ class ConversationService {
       throw new HttpError('Group must have at least 3 members', HTTP_STATUS.BAD_REQUEST)
     }
 
+    const existingMembersCount = await this.databaseService.users.countDocuments({
+      _id: { $in: uniqueMembers }
+    })
+    if (existingMembersCount !== uniqueMembers.length) {
+      throw new HttpError('One or more group members do not exist', HTTP_STATUS.BAD_REQUEST)
+    }
+
     const newGroup = new GroupConversation({
       _id: new this.databaseService.ObjectId(),
       name,
@@ -522,14 +529,15 @@ class ConversationService {
           }
         },
         { $match: { 'medias_info.0': { $exists: true } } },
-        { $limit: limit }
+        { $limit: limit + 1 }
       ])
       .toArray()
 
-    const has_next_page = messages.length === limit
-    const next_cursor = has_next_page ? (messages[messages.length - 1]?._id?.toString() ?? null) : null
+    const has_next_page = messages.length > limit
+    const pageMessages = messages.slice(0, limit)
+    const next_cursor = has_next_page ? (pageMessages[pageMessages.length - 1]?._id?.toString() ?? null) : null
 
-    return { messages, next_cursor, has_next_page }
+    return { messages: pageMessages, next_cursor, has_next_page }
   }
 
   async muteConversation(userId: string, conversationId: string, type: ConversationType, durationHours?: number) {
