@@ -145,9 +145,10 @@ export default class DatabaseService {
   }
 
   private async indexMessages() {
-    const [hasSearchIndex, hasTimelineIndex] = await Promise.all([
+    const [hasSearchIndex, hasTimelineIndex, hasContextIndex] = await Promise.all([
       this.messages.indexExists('conversation_id_1_content_text'),
-      this.messages.indexExists('conversation_id_1_send_at_-1')
+      this.messages.indexExists('conversation_id_1_send_at_-1'),
+      this.messages.indexExists('conversation_status_message_id')
     ])
 
     if (!hasSearchIndex) {
@@ -158,6 +159,14 @@ export default class DatabaseService {
     if (!hasTimelineIndex) {
       console.log('Creating timeline index for messages...')
       await this.messages.createIndex({ conversation_id: 1, send_at: -1 })
+    }
+
+    if (!hasContextIndex) {
+      console.log('Creating context index for messages...')
+      await this.messages.createIndex(
+        { conversation_id: 1, status: 1, _id: 1 },
+        { name: 'conversation_status_message_id' }
+      )
     }
   }
 

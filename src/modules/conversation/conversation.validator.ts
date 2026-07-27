@@ -43,6 +43,19 @@ export const messageSearchQueryValidator = validate(
   })
 )
 
+export const messageContextValidator = validate(
+  z.object({
+    params: z.object({
+      conversation_id: objectIdString,
+      message_id: objectIdString
+    }),
+    query: z.object({
+      before: z.coerce.number().int().min(0).max(50).default(20),
+      after: z.coerce.number().int().min(0).max(50).default(20)
+    })
+  })
+)
+
 export const muteConversationValidator = validate(
   z.object({
     params: z.object({

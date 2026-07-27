@@ -11,9 +11,12 @@ import {
   PaginationQueryDto,
   MessageActionResponseDto,
   ReactMessageBodyDto,
-  type MessagePageData
+  type MessagePageData,
+  GetMessageContextResponseDto,
+  MessageContextQueryDto
 } from './dto'
 import { SearchQueryDto, SearchResponseDto } from '../search/dto'
+import type { TokenPayload } from '~/types/token-payload.type'
 
 export const getConversationsController: GetHandler<GetConversationsResponseDto> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
@@ -62,6 +65,22 @@ export const getMessagesController: GetHandler<GetMessagesResponseDto, { convers
   const result = await conversationService.getMessages(user_id, conversation_id, cursor, limit)
   
   const response = new GetMessagesResponseDto(HTTP_STATUS.OK, 'Get messages successfully', result)
+  res.status(response.statusCode).json(response)
+}
+
+export const getMessageContextController: GetHandler<
+  GetMessageContextResponseDto,
+  { conversation_id: string; message_id: string },
+  MessageContextQueryDto
+> = async (req, res) => {
+  const { user_id } = req.decoded_authorization as TokenPayload
+  const { conversation_id, message_id } = req.params
+  const before = Number(req.query.before ?? 20)
+  const after = Number(req.query.after ?? 20)
+
+  const result = await conversationService.getMessageContext(user_id, conversation_id, message_id, before, after)
+
+  const response = new GetMessageContextResponseDto(HTTP_STATUS.OK, 'Get message context successfully', result)
   res.status(response.statusCode).json(response)
 }
 

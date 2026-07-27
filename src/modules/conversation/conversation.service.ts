@@ -10,13 +10,15 @@ import { getIO } from '~/socket'
 import { MediaStatus, MediaType } from '~/constants/enums'
 import type User from '~/schemas/User.schema'
 import conversationAccessService, { type ConversationType } from './conversation-access.service'
-import type { MessageWithMediaInfo } from './dto'
+import type { MessageContextData, MessageWithMediaInfo } from './dto'
 
 type ConversationPartner = Pick<User, '_id' | 'name' | 'username' | 'avatar'>
 type DirectConversationAggregate = DirectConversation & {
   partner_id: ObjectId
   partnerInfo?: ConversationPartner
 }
+
+const MESSAGE_QUERY_MAX_TIME_MS = 10000
 
 class ConversationService {
   private databaseService: DatabaseService
@@ -235,6 +237,84 @@ class ConversationService {
     return { messages, next_cursor, has_next_page }
   }
 
+  async getMessageContext(
+    userId: string,
+    conversationId: string,
+    messageId: string,
+    before: number,
+    after: number
+  ): Promise<MessageContextData> {
+    await conversationAccessService.assertConversationMember(userId, conversationId)
+
+    const conversationObjectId = new this.databaseService.ObjectId(conversationId)
+    const messageObjectId = new this.databaseService.ObjectId(messageId)
+    const target = await this.databaseService.messages.findOne({
+      _id: messageObjectId,
+      conversation_id: conversationObjectId,
+      status: 'sent'
+    })
+
+    if (!target) {
+      throw new HttpError('Message not found in this conversation', HTTP_STATUS.NOT_FOUND)
+    }
+
+    const aggregateMessages = (
+      match: Filter<Message>,
+      sortDirection: 1 | -1,
+      limit: number
+    ): Promise<MessageWithMediaInfo[]> => {
+      if (limit === 0) return Promise.resolve([])
+
+      return this.databaseService.messages
+        .aggregate<MessageWithMediaInfo>(
+          [
+            { $match: match },
+            { $sort: { _id: sortDirection } },
+            { $limit: limit },
+            {
+              $lookup: {
+                from: 'medias',
+                localField: 'media_ids',
+                foreignField: '_id',
+                as: 'medias_info'
+              }
+            }
+          ],
+          { maxTimeMS: MESSAGE_QUERY_MAX_TIME_MS }
+        )
+        .toArray()
+    }
+
+    const baseMatch: Filter<Message> = {
+      conversation_id: conversationObjectId,
+      status: 'sent'
+    }
+
+    const [olderDescending, targetMessages, newerAscending] = await Promise.all([
+      aggregateMessages({ ...baseMatch, _id: { $lt: messageObjectId } }, -1, before + 1),
+      aggregateMessages({ ...baseMatch, _id: messageObjectId }, 1, 1),
+      aggregateMessages({ ...baseMatch, _id: { $gt: messageObjectId } }, 1, after + 1)
+    ])
+
+    if (targetMessages.length !== 1) {
+      throw new HttpError('Message not found in this conversation', HTTP_STATUS.NOT_FOUND)
+    }
+
+    const hasOlderMessages = olderDescending.length > before
+    const hasNewerMessages = newerAscending.length > after
+    const olderMessages = olderDescending.slice(0, before).reverse()
+    const newerMessages = newerAscending.slice(0, after)
+    const oldestIncludedMessage = olderMessages[0]
+    const newestIncludedMessage = newerMessages[newerMessages.length - 1]
+
+    return {
+      messages: [...olderMessages, ...targetMessages, ...newerMessages],
+      target_message_id: messageId,
+      older_cursor: hasOlderMessages ? (oldestIncludedMessage?._id?.toString() ?? null) : null,
+      newer_cursor: hasNewerMessages ? (newestIncludedMessage?._id?.toString() ?? null) : null
+    }
+  }
+
   async markAsRead(userId: string, conversationId: string) {
     await conversationAccessService.assertConversationMember(userId, conversationId)
 
@@ -363,10 +443,9 @@ class ConversationService {
         { $pull: { pinned_by: objectIdUserId } } as any
       )
     } else {
-      await this.databaseService.groupConversations.updateOne(
-        { _id: convId, 'members.user_id': objectIdUserId },
-        { $pull: { pinned_by: objectIdUserId } } as any
-      )
+      await this.databaseService.groupConversations.updateOne({ _id: convId, 'members.user_id': objectIdUserId }, {
+        $pull: { pinned_by: objectIdUserId }
+      } as any)
     }
 
     return { success: true }
@@ -385,13 +464,14 @@ class ConversationService {
       matchStage._id = { $lt: new this.databaseService.ObjectId(cursor) }
     }
 
-    const messages: MessageWithMediaInfo[] = await this.databaseService.messages
-      .find(matchStage)
+    const matchedMessages: MessageWithMediaInfo[] = await this.databaseService.messages
+      .find(matchStage, { maxTimeMS: MESSAGE_QUERY_MAX_TIME_MS })
       .sort({ _id: -1 }) // Search cursor relies on _id sort instead of text score
-      .limit(limit)
+      .limit(limit + 1)
       .toArray()
 
-    const has_next_page = messages.length === limit
+    const has_next_page = matchedMessages.length > limit
+    const messages = matchedMessages.slice(0, limit)
     const next_cursor = has_next_page ? (messages[messages.length - 1]?._id?.toString() ?? null) : null
 
     return { messages, next_cursor, has_next_page }

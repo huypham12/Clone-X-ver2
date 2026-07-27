@@ -61,6 +61,7 @@ Các endpoint có `conversation_id` chỉ cho phép thành viên của hội tho
 - `POST /:conversation_id/pin`: Ghim một hội thoại lên đầu danh sách.
 - `DELETE /:conversation_id/pin`: Bỏ ghim một hội thoại.
 - `GET /:conversation_id/messages`: Lấy danh sách các tin nhắn trong một hội thoại, kèm `medias_info` của message.
+- `GET /:conversation_id/messages/:message_id/context?before=20&after=20`: Lấy cửa sổ tối đa 50 tin cũ và 50 tin mới quanh một message còn hiệu lực để nhảy tới đúng vị trí; yêu cầu người gọi là thành viên conversation.
 - `GET /:conversation_id/search`: Tìm kiếm các tin nhắn trạng thái `sent` bên trong một hội thoại bằng từ khóa.
 - `GET /:conversation_id/media`: Lấy danh sách message còn hiệu lực có ảnh/video/audio; mỗi message trả sẵn metadata media trạng thái `ready` trong `medias_info`.
 - `POST /:conversation_id/read`: Đánh dấu đã đọc các tin nhắn mới trong hội thoại.

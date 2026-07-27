@@ -19,6 +19,13 @@ export interface MessagePageData {
   has_next_page: boolean
 }
 
+export interface MessageContextData {
+  messages: MessageWithMediaInfo[]
+  target_message_id: string
+  older_cursor: string | null
+  newer_cursor: string | null
+}
+
 export class CreateGroupConversationBodyDto {
   constructor(
     public name: string,
@@ -40,6 +47,13 @@ export class PaginationQueryDto {
   ) {}
 }
 
+export class MessageContextQueryDto {
+  constructor(
+    public before: number,
+    public after: number
+  ) {}
+}
+
 export class GetConversationsResponseDto extends SuccessResponseDto<any> {
   constructor(statusCode: number, message: string, data: any) {
     super(statusCode, message, data)
@@ -54,6 +68,12 @@ export class ConversationResponseDto extends SuccessResponseDto<any> {
 
 export class GetMessagesResponseDto extends SuccessResponseDto<MessagePageData> {
   constructor(statusCode: number, message: string, data: MessagePageData) {
+    super(statusCode, message, data)
+  }
+}
+
+export class GetMessageContextResponseDto extends SuccessResponseDto<MessageContextData> {
+  constructor(statusCode: number, message: string, data: MessageContextData) {
     super(statusCode, message, data)
   }
 }

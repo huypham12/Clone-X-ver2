@@ -453,6 +453,56 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/conversations/{conversation_id}/messages/{message_id}/context:
+    get:
+      tags:
+        - message
+      summary: Get messages around a target message
+      description: Returns active messages around a target in chronological order. The authenticated user must be a conversation member.
+      operationId: getConversationMessageContext
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: message_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: before
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 50
+            default: 20
+        - name: after
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 50
+            default: 20
+      responses:
+        "200":
+          description: Message context retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageContextResponse"
+        "403":
+          description: The authenticated user is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Conversation or target message not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/conversations/{conversation_id}/search:
     get:
       tags:
@@ -707,6 +757,37 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/MessagePageData"
+
+    MessageContextData:
+      type: object
+      required:
+        - messages
+        - target_message_id
+        - older_cursor
+        - newer_cursor
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationMessage"
+        target_message_id:
+          type: string
+        older_cursor:
+          type: string
+          nullable: true
+        newer_cursor:
+          type: string
+          nullable: true
+
+    MessageContextResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              $ref: "#/components/schemas/MessageContextData"
 
     # Token related schemas
     TokenData:

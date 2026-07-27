@@ -8,6 +8,7 @@ import {
   createGroupConversationController,
   deleteConversationController,
   getMessagesController,
+  getMessageContextController,
   markReadController,
   revokeMessageController,
   deleteMessageController,
@@ -40,7 +41,8 @@ import {
   forwardMessageValidator,
   messageSearchQueryValidator,
   muteConversationValidator,
-  unmuteConversationValidator
+  unmuteConversationValidator,
+  messageContextValidator
 } from './conversation.validator'
 
 const conversationRouter = Router()
@@ -120,6 +122,12 @@ conversationRouter.get(
   conversationIdParamValidator,
   paginationValidator,
   wrapController(getMessagesController)
+)
+
+conversationRouter.get(
+  '/:conversation_id/messages/:message_id/context',
+  messageContextValidator,
+  wrapController(getMessageContextController)
 )
 
 conversationRouter.get(
