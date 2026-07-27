@@ -48,6 +48,7 @@ Dưới đây là danh sách tất cả các API Endpoints được trích xuấ
 
 ## 4. Conversation Module (`/conversations`)
 *Quản lý tính năng trò chuyện, bao gồm Chat 1-1 và Chat Group, cùng với tin nhắn.*
+Các endpoint có `conversation_id` chỉ cho phép thành viên của hội thoại truy cập hoặc thay đổi dữ liệu; người dùng đã xác thực nhưng không phải thành viên nhận `403 Forbidden`.
 - `GET /`: Lấy danh sách các hội thoại (Conversations) hiện có của người dùng.
 - `POST /direct/:receiver_id`: Mở hoặc tạo một hội thoại nhắn tin trực tiếp 1-1 với người dùng khác.
 - `POST /group`: Tạo một hội thoại nhóm (Group Conversation).
@@ -59,9 +60,9 @@ Dưới đây là danh sách tất cả các API Endpoints được trích xuấ
 - `DELETE /:conversation_id/leave`: Rời khỏi nhóm chat (tự chủ động rời).
 - `POST /:conversation_id/pin`: Ghim một hội thoại lên đầu danh sách.
 - `DELETE /:conversation_id/pin`: Bỏ ghim một hội thoại.
-- `GET /:conversation_id/messages`: Lấy danh sách các tin nhắn trong một hội thoại.
-- `GET /:conversation_id/search`: Tìm kiếm tin nhắn bên trong một hội thoại bằng từ khóa.
-- `GET /:conversation_id/media`: Lấy danh sách các tập tin hình ảnh/video/file đã gửi trong hội thoại.
+- `GET /:conversation_id/messages`: Lấy danh sách các tin nhắn trong một hội thoại, kèm `medias_info` của message.
+- `GET /:conversation_id/search`: Tìm kiếm các tin nhắn trạng thái `sent` bên trong một hội thoại bằng từ khóa.
+- `GET /:conversation_id/media`: Lấy danh sách message còn hiệu lực có ảnh/video/audio; mỗi message trả sẵn metadata media trạng thái `ready` trong `medias_info`.
 - `POST /:conversation_id/read`: Đánh dấu đã đọc các tin nhắn mới trong hội thoại.
 - `POST /messages/:message_id/revoke`: Thu hồi (gỡ bỏ đối với mọi người) một tin nhắn.
 - `DELETE /messages/:message_id`: Xóa tin nhắn (chỉ gỡ bỏ từ phía người xóa).
@@ -69,9 +70,9 @@ Dưới đây là danh sách tất cả các API Endpoints được trích xuấ
 - `POST /messages/:message_id/react`: Thả cảm xúc (React) vào một tin nhắn cụ thể.
 - `DELETE /messages/:message_id/react`: Gỡ bỏ cảm xúc (Reaction) đã thả khỏi tin nhắn.
 - `GET /messages/:message_id/reactions`: Lấy danh sách chi tiết những người đã thả cảm xúc vào tin nhắn này.
-- `POST /messages/:message_id/forward`: Chuyển tiếp (Forward) tin nhắn tới nhiều hội thoại khác.
-- `POST /:conversation_id/mute`: Tắt thông báo cho một hội thoại (Mute).
-- `DELETE /:conversation_id/mute`: Bật lại thông báo cho hội thoại đã tắt.
+- `POST /messages/:message_id/forward`: Chuyển tiếp message trạng thái `sent`; người gọi phải là thành viên của conversation nguồn và mọi conversation đích.
+- `POST /:conversation_id/mute`: Tắt thông báo với body `{ type, duration_hours? }`; duration hỗ trợ 1, 8, 24 giờ hoặc bỏ trống để mute vô thời hạn.
+- `DELETE /:conversation_id/mute?type=direct|group`: Bật lại thông báo cho hội thoại đã tắt.
 
 ## 5. Search Module (`/search`)
 *Hệ thống tìm kiếm chung.*

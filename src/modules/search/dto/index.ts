@@ -19,8 +19,8 @@ export class SearchTweetsQueryDto extends SearchQueryDto {
   }
 }
 
-export class SearchResponseDto extends SuccessResponseDto<any> {
-  constructor(statusCode: number, message: string, data: any) {
+export class SearchResponseDto<T = unknown> extends SuccessResponseDto<T> {
+  constructor(statusCode: number, message: string, data: T) {
     super(statusCode, message, data)
   }
 }

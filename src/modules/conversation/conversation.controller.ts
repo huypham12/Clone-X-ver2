@@ -10,7 +10,8 @@ import {
   GetMessagesResponseDto,
   PaginationQueryDto,
   MessageActionResponseDto,
-  ReactMessageBodyDto
+  ReactMessageBodyDto,
+  type MessagePageData
 } from './dto'
 import { SearchQueryDto, SearchResponseDto } from '../search/dto'
 
@@ -53,11 +54,12 @@ export const deleteConversationController: DeleteHandler<ConversationResponseDto
 }
 
 export const getMessagesController: GetHandler<GetMessagesResponseDto, { conversation_id: string }, PaginationQueryDto> = async (req, res) => {
+  const user_id = (req as any).decoded_authorization.user_id
   const { conversation_id } = req.params
   const cursor = (req.query as any).cursor as string | undefined
-  const limit = Number((req.query as any).limit)
+  const limit = Number((req.query as any).limit ?? 10)
   
-  const result = await conversationService.getMessages(conversation_id, cursor, limit)
+  const result = await conversationService.getMessages(user_id, conversation_id, cursor, limit)
   
   const response = new GetMessagesResponseDto(HTTP_STATUS.OK, 'Get messages successfully', result)
   res.status(response.statusCode).json(response)
@@ -124,10 +126,10 @@ export const unpinConversationController: DeleteHandler<ConversationResponseDto,
   res.status(response.statusCode).json(response)
 }
 
-export const searchMessagesController: GetHandler<SearchResponseDto, { conversation_id: string }, SearchQueryDto> = async (req, res) => {
+export const searchMessagesController: GetHandler<SearchResponseDto<MessagePageData>, { conversation_id: string }, SearchQueryDto> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { conversation_id } = req.params
-  const { q, cursor, limit } = req.query as any
+  const { q, cursor, limit = 10 } = req.query as any
 
   const result = await conversationService.searchMessages(user_id, conversation_id, q, cursor, Number(limit))
   
@@ -138,7 +140,7 @@ export const searchMessagesController: GetHandler<SearchResponseDto, { conversat
 export const getConversationMediaController: GetHandler<GetMessagesResponseDto, { conversation_id: string }, PaginationQueryDto> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { conversation_id } = req.params
-  const { cursor, limit } = req.query as any
+  const { cursor, limit = 10 } = req.query as any
 
   const result = await conversationService.getConversationMedia(user_id, conversation_id, cursor, Number(limit))
   
@@ -157,10 +159,14 @@ export const muteConversationController: PostHandler<{ type: 'direct' | 'group',
   res.status(response.statusCode).json(response)
 }
 
-export const unmuteConversationController: DeleteHandler<ConversationResponseDto, { conversation_id: string }> = async (req, res) => {
+export const unmuteConversationController: DeleteHandler<
+  ConversationResponseDto,
+  { conversation_id: string },
+  { type: 'direct' | 'group' }
+> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { conversation_id } = req.params
-  const type = (req as any).body.type || (req.query as any).type
+  const { type } = req.query
 
   const result = await conversationService.unmuteConversation(user_id, conversation_id, type)
   

@@ -37,9 +37,11 @@ import {
   addMembersValidator,
   messageIdParamValidator,
   editMessageValidator,
-  forwardMessageValidator
+  forwardMessageValidator,
+  messageSearchQueryValidator,
+  muteConversationValidator,
+  unmuteConversationValidator
 } from './conversation.validator'
-import { searchQueryValidator } from '../search/search.validator'
 
 const conversationRouter = Router()
 
@@ -123,7 +125,7 @@ conversationRouter.get(
 conversationRouter.get(
   '/:conversation_id/search',
   conversationIdParamValidator,
-  searchQueryValidator,
+  messageSearchQueryValidator,
   wrapController(searchMessagesController)
 )
 
@@ -182,13 +184,13 @@ conversationRouter.post(
 
 conversationRouter.post(
   '/:conversation_id/mute',
-  conversationIdParamValidator,
+  muteConversationValidator,
   wrapController(muteConversationController)
 )
 
 conversationRouter.delete(
   '/:conversation_id/mute',
-  conversationIdParamValidator,
+  unmuteConversationValidator,
   wrapController(unmuteConversationController)
 )
 

@@ -63,6 +63,11 @@ export default class DatabaseService {
     ])
   }
 
+  /** Conversation bootstrap only needs message indexes; avoid rebuilding unrelated legacy indexes. */
+  async createMessageIndexes() {
+    await this.indexMessages()
+  }
+
   private async indexUsers() {
     const exists = await this.users.indexExists(['email_1', 'username_1', 'email_1_password_1'])
     if (exists) return
@@ -140,13 +145,20 @@ export default class DatabaseService {
   }
 
   private async indexMessages() {
-    const exists = await this.messages.indexExists(['conversation_id_1_content_text'])
-    if (exists) return
+    const [hasSearchIndex, hasTimelineIndex] = await Promise.all([
+      this.messages.indexExists('conversation_id_1_content_text'),
+      this.messages.indexExists('conversation_id_1_send_at_-1')
+    ])
 
-    console.log('Creating compound text index for messages...')
-    await this.messages.createIndex({ conversation_id: 1, content: 'text' }, { default_language: 'none' })
-    // Index for retrieving media messages efficiently
-    await this.messages.createIndex({ conversation_id: 1, send_at: -1 })
+    if (!hasSearchIndex) {
+      console.log('Creating compound text index for messages...')
+      await this.messages.createIndex({ conversation_id: 1, content: 'text' }, { default_language: 'none' })
+    }
+
+    if (!hasTimelineIndex) {
+      console.log('Creating timeline index for messages...')
+      await this.messages.createIndex({ conversation_id: 1, send_at: -1 })
+    }
   }
 
   private async indexNotifications() {

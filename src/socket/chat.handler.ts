@@ -6,6 +6,7 @@ import MediaMetadata from '~/schemas/MediaMetadata.schema'
 import notificationService from '../modules/notification/notification.service'
 import { MediaStatus, MediaType, NotificationType } from '~/constants/enums'
 import { ObjectId } from 'mongodb'
+import conversationAccessService from '~/modules/conversation/conversation-access.service'
 
 type ConversationType = 'direct' | 'group'
 type MessageMediaType = MediaType.Image | MediaType.Video | MediaType.Audio
@@ -24,30 +25,6 @@ const isMessageMediaType = (type: MediaType): type is MessageMediaType =>
 
 export const chatHandler = (io: Server, socket: Socket) => {
   const databaseService = new DatabaseService()
-
-  // Hàm tiện ích lấy thành viên conversation (có cache Redis)
-  const getConversationMembers = async (conversation_id: string, conversation_type: string) => {
-    const cacheKey = `conv_members:${conversation_id}`
-    const cached = await redisService.get(cacheKey)
-    if (cached) return cached as string[]
-
-    const convObjectId = new databaseService.ObjectId(conversation_id)
-    const conv = conversation_type === 'direct' 
-      ? await databaseService.directConversations.findOne({ _id: convObjectId })
-      : await databaseService.groupConversations.findOne({ _id: convObjectId })
-
-    if (!conv) return []
-
-    let memberIds: string[] = []
-    if (conversation_type === 'direct') {
-      memberIds = [(conv as any).user1_id.toString(), (conv as any).user2_id.toString()]
-    } else {
-      memberIds = (conv as any).members.map((m: any) => m.user_id.toString())
-    }
-
-    await redisService.set(cacheKey, memberIds, 3600 * 24) // Cache 24h
-    return memberIds
-  }
 
   socket.on('@conversation:send', async (payload: SendMessagePayload) => {
     try {
@@ -84,10 +61,17 @@ export const chatHandler = (io: Server, socket: Socket) => {
       const sender_id = new databaseService.ObjectId(socket.user_id as string)
       const convObjectId = new databaseService.ObjectId(conversation_id as string)
       const typedConversationType = conversation_type as ConversationType
-      const memberIds = await getConversationMembers(conversation_id as string, typedConversationType)
+      let memberIds: string[]
 
-      if (!memberIds.includes(sender_id.toString())) {
-        return socket.emit('error', { message: 'You are not a member of this conversation' })
+      try {
+        const access = await conversationAccessService.assertConversationMember(
+          sender_id.toString(),
+          conversation_id as string,
+          typedConversationType
+        )
+        memberIds = access.memberIds
+      } catch {
+        return socket.emit('error', { message: 'Conversation not found or access denied' })
       }
 
       const mediaObjectIds = uniqueMediaIds.map((id) => new databaseService.ObjectId(id))
@@ -209,30 +193,55 @@ export const chatHandler = (io: Server, socket: Socket) => {
 
   socket.on('@conversation:typing_on', async (payload) => {
     const { conversation_id, conversation_type } = payload
-    if (conversation_id && conversation_type) {
-      const memberIds = await getConversationMembers(conversation_id, conversation_type)
-      // Bỏ chính người gửi ra khỏi danh sách nhận
-      const receivers = memberIds.filter(id => id !== socket.user_id)
-      if (receivers.length > 0) {
-        io.to(receivers).emit('@conversation:typing_on', {
-          conversation_id,
-          user_id: socket.user_id
-        })
-      }
+    const isValidPayload =
+      typeof conversation_id === 'string' &&
+      ObjectId.isValid(conversation_id) &&
+      (conversation_type === 'direct' || conversation_type === 'group')
+
+    if (!isValidPayload || !socket.user_id) return
+
+    try {
+      const access = await conversationAccessService.assertConversationMember(
+        socket.user_id,
+        conversation_id,
+        conversation_type
+      )
+      const receivers = access.memberIds.filter((id) => id !== socket.user_id)
+      if (receivers.length === 0) return
+
+      io.to(receivers).emit('@conversation:typing_on', {
+        conversation_id,
+        user_id: socket.user_id
+      })
+    } catch {
+      socket.emit('error', { message: 'Conversation not found or access denied' })
     }
   })
 
   socket.on('@conversation:typing_off', async (payload) => {
     const { conversation_id, conversation_type } = payload
-    if (conversation_id && conversation_type) {
-      const memberIds = await getConversationMembers(conversation_id, conversation_type)
-      const receivers = memberIds.filter(id => id !== socket.user_id)
-      if (receivers.length > 0) {
-        io.to(receivers).emit('@conversation:typing_off', {
-          conversation_id,
-          user_id: socket.user_id
-        })
-      }
+    const isValidPayload =
+      typeof conversation_id === 'string' &&
+      ObjectId.isValid(conversation_id) &&
+      (conversation_type === 'direct' || conversation_type === 'group')
+
+    if (!isValidPayload || !socket.user_id) return
+
+    try {
+      const access = await conversationAccessService.assertConversationMember(
+        socket.user_id,
+        conversation_id,
+        conversation_type
+      )
+      const receivers = access.memberIds.filter((id) => id !== socket.user_id)
+      if (receivers.length === 0) return
+
+      io.to(receivers).emit('@conversation:typing_off', {
+        conversation_id,
+        user_id: socket.user_id
+      })
+    } catch {
+      socket.emit('error', { message: 'Conversation not found or access denied' })
     }
   })
 }

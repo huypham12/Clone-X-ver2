@@ -420,7 +420,137 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/conversations/{conversation_id}/messages:
+    get:
+      tags:
+        - message
+      summary: Get messages in a conversation
+      description: Returns a cursor-paginated message page. The authenticated user must be a conversation member.
+      operationId: getConversationMessages
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/MessageCursor"
+        - $ref: "#/components/parameters/MessageLimit"
+      responses:
+        "200":
+          description: Messages retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessagePageResponse"
+        "403":
+          description: The authenticated user is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/search:
+    get:
+      tags:
+        - message
+      summary: Search active messages in a conversation
+      description: Searches only messages with status sent. The authenticated user must be a conversation member.
+      operationId: searchConversationMessages
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: "#/components/parameters/MessageCursor"
+        - $ref: "#/components/parameters/MessageLimit"
+      responses:
+        "200":
+          description: Matching messages retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessagePageResponse"
+        "403":
+          description: The authenticated user is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/media:
+    get:
+      tags:
+        - conversation
+        - media
+      summary: Get shared media in a conversation
+      description: Returns active messages containing ready image, video, or audio metadata in medias_info. The authenticated user must be a conversation member.
+      operationId: getConversationMedia
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/MessageCursor"
+        - $ref: "#/components/parameters/MessageLimit"
+      responses:
+        "200":
+          description: Shared media retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessagePageResponse"
+        "403":
+          description: The authenticated user is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 components:
+  parameters:
+    ConversationId:
+      name: conversation_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-fA-F0-9]{24}$"
+    MessageCursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+        pattern: "^[a-fA-F0-9]{24}$"
+    MessageLimit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
   schemas:
     User:
       type: object
@@ -483,6 +613,100 @@ components:
       required:
         - statusCode
         - message
+
+    MediaMetadata:
+      type: object
+      required:
+        - _id
+        - url
+        - type
+        - status
+      properties:
+        _id:
+          type: string
+        url:
+          type: string
+          format: uri
+        thumbnail:
+          type: string
+          format: uri
+        type:
+          type: string
+          enum: [image, video, audio]
+        status:
+          type: string
+          enum: [ready]
+
+    ConversationMessage:
+      type: object
+      required:
+        - _id
+        - conversation_id
+        - conversation_type
+        - sender_id
+        - content
+        - media_ids
+        - send_at
+        - status
+        - reactions
+      properties:
+        _id:
+          type: string
+        conversation_id:
+          type: string
+        conversation_type:
+          type: string
+          enum: [direct, group]
+        sender_id:
+          type: string
+        content:
+          type: string
+        media_ids:
+          type: array
+          items:
+            type: string
+        medias_info:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaMetadata"
+        send_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [sent, revoked, deleted]
+        reactions:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    MessagePageData:
+      type: object
+      required:
+        - messages
+        - next_cursor
+        - has_next_page
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationMessage"
+        next_cursor:
+          type: string
+          nullable: true
+        has_next_page:
+          type: boolean
+
+    MessagePageResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              $ref: "#/components/schemas/MessagePageData"
 
     # Token related schemas
     TokenData:

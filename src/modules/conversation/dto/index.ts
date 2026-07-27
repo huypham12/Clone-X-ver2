@@ -2,6 +2,22 @@ import { SuccessResponseDto } from '~/common/success-response.dto'
 import DirectConversation from '~/schemas/DirectConversation.schema'
 import GroupConversation from '~/schemas/GroupConversation.schema'
 import Message from '~/schemas/Message.schema'
+import type MediaMetadata from '~/schemas/MediaMetadata.schema'
+
+export type ConversationMediaInfo = Pick<
+  MediaMetadata,
+  '_id' | 'url' | 'thumbnail' | 'type' | 'status' | 'created_at' | 'updated_at'
+>
+
+export type MessageWithMediaInfo = Message & {
+  medias_info?: ConversationMediaInfo[]
+}
+
+export interface MessagePageData {
+  messages: MessageWithMediaInfo[]
+  next_cursor: string | null
+  has_next_page: boolean
+}
 
 export class CreateGroupConversationBodyDto {
   constructor(
@@ -36,8 +52,8 @@ export class ConversationResponseDto extends SuccessResponseDto<any> {
   }
 }
 
-export class GetMessagesResponseDto extends SuccessResponseDto<any> {
-  constructor(statusCode: number, message: string, data: any) {
+export class GetMessagesResponseDto extends SuccessResponseDto<MessagePageData> {
+  constructor(statusCode: number, message: string, data: MessagePageData) {
     super(statusCode, message, data)
   }
 }
