@@ -232,6 +232,7 @@ export const chatHandler = (io: Server, socket: Socket) => {
       const messageType: MessagePreviewType =
         firstMediaType && isMessageMediaType(firstMediaType) ? firstMediaType : 'text'
       const messagePreview = {
+        message_id: newMessage._id,
         sender_id,
         content: normalizedContent.substring(0, 50),
         message_type: messageType
@@ -241,7 +242,8 @@ export const chatHandler = (io: Server, socket: Socket) => {
       const updateQuery = {
         $set: {
           last_message_at: newMessage.send_at,
-          last_message_preview: messagePreview as any,
+          last_message_preview: messagePreview,
+          last_message_overrides: [],
           updated_at: new Date()
         }
       }

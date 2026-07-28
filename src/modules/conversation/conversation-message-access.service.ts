@@ -16,6 +16,7 @@ type MessageStatus = Message['status']
 
 interface MessageAccessOptions {
   requireSender?: boolean
+  requireVisibleToUser?: boolean
   allowedStatuses?: readonly MessageStatus[]
 }
 
@@ -66,6 +67,13 @@ export class ConversationMessageAccessService {
       throw new HttpError('Message is not available for this action', HTTP_STATUS.BAD_REQUEST)
     }
 
+    if (
+      options.requireVisibleToUser &&
+      message.deleted_by?.some((deletedByUserId) => deletedByUserId.toString() === userId)
+    ) {
+      throw new HttpError('Message is not available for this action', HTTP_STATUS.BAD_REQUEST)
+    }
+
     return { message, conversation }
   }
 
@@ -93,7 +101,11 @@ export class ConversationMessageAccessService {
       targetMessage?.conversation_id.toString() === conversationId &&
       targetMessage.conversation_type === conversationType
 
-    if (!targetMessage || !belongsToConversation || targetMessage.status !== 'sent') {
+    const isDeletedForUser = targetMessage?.deleted_by?.some(
+      (deletedByUserId) => deletedByUserId.toString() === userId
+    )
+
+    if (!targetMessage || !belongsToConversation || targetMessage.status !== 'sent' || isDeletedForUser) {
       throw new HttpError(
         REPLY_MESSAGE_UNAVAILABLE_MESSAGE,
         HTTP_STATUS.BAD_REQUEST,

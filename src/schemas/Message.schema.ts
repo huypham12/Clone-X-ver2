@@ -15,6 +15,7 @@ interface MessageType {
   reply_to_message_id?: ObjectId // Nếu đây là tin trả lời một tin khác
   status: 'sent' | 'revoked' | 'deleted'
   reactions: { emoji: string; user_id: ObjectId }[]
+  deleted_by?: ObjectId[]
 }
 
 export default class Message {
@@ -29,6 +30,7 @@ export default class Message {
   reply_to_message_id?: ObjectId
   status: 'sent' | 'revoked' | 'deleted'
   reactions: { emoji: string; user_id: ObjectId }[]
+  deleted_by: ObjectId[]
 
   constructor(data: MessageType) {
     this._id = data._id
@@ -42,5 +44,6 @@ export default class Message {
     this.reply_to_message_id = data.reply_to_message_id
     this.status = data.status || 'sent'
     this.reactions = data.reactions || []
+    this.deleted_by = data.deleted_by || []
   }
 }

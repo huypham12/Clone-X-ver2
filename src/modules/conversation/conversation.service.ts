@@ -1,5 +1,5 @@
 import DatabaseService from '~/config/database.service'
-import { Filter, ObjectId } from 'mongodb'
+import { ClientSession, Document, Filter, ObjectId } from 'mongodb'
 import DirectConversation from '~/schemas/DirectConversation.schema'
 import GroupConversation from '~/schemas/GroupConversation.schema'
 import Message from '~/schemas/Message.schema'
@@ -13,7 +13,12 @@ import conversationAccessService, { type ConversationType } from './conversation
 import conversationMessageAccessService from './conversation-message-access.service'
 import conversationMessageHydrationService from './conversation-message-hydration.service'
 import conversationMessageSyncService from './conversation-message-sync.service'
-import type { MessageContextData, MessageRevokedEvent, MessageWithMediaInfo } from './dto'
+import type {
+  MessageContextData,
+  MessageDeletedForMeEvent,
+  MessageRevokedEvent,
+  MessageWithMediaInfo
+} from './dto'
 
 type ConversationPartner = Pick<User, '_id' | 'name' | 'username' | 'avatar'>
 type DirectConversationAggregate = DirectConversation & {
@@ -35,6 +40,9 @@ interface GroupUpdateEvent {
 
 const MESSAGE_QUERY_MAX_TIME_MS = 10000
 const escapeRegularExpression = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const isMessageVisibleToUser = (message: MessageWithMediaInfo, userId: string) =>
+  message.status !== 'deleted' &&
+  !message.deleted_by?.some((deletedByUserId) => deletedByUserId.toString() === userId)
 
 class ConversationService {
   private databaseService: DatabaseService
@@ -79,31 +87,20 @@ class ConversationService {
     this.emitGroupUpdate([...recipientIds, ...currentMemberIds], event)
   }
 
-  private async syncLastMessagePreviewAfterRevoke(message: Message): Promise<void> {
-    if (!message._id || !message.send_at) return
+  private async buildLastMessagePreview(message: Message, session?: ClientSession) {
+    if (message.status === 'revoked') {
+      return {
+        message_id: message._id,
+        sender_id: message.sender_id,
+        content: 'Message was revoked',
+        message_type: 'text' as const
+      }
+    }
 
-    const conversation =
-      message.conversation_type === 'direct'
-        ? await this.databaseService.directConversations.findOne(
-            { _id: message.conversation_id },
-            { projection: { last_message_at: 1 } }
-          )
-        : await this.databaseService.groupConversations.findOne(
-            { _id: message.conversation_id },
-            { projection: { last_message_at: 1 } }
-          )
-    if (!conversation?.last_message_at) return
-
-    const latestSentMessage = await this.databaseService.messages
-      .find({ conversation_id: message.conversation_id, status: 'sent' })
-      .sort({ _id: -1 })
-      .limit(1)
-      .next()
-    if (latestSentMessage && latestSentMessage._id.toString() > message._id.toString()) return
-    const firstMedia = latestSentMessage?.media_ids[0]
+    const firstMedia = message.media_ids[0]
       ? await this.databaseService.medias.findOne(
-          { _id: latestSentMessage.media_ids[0] },
-          { projection: { type: 1 } }
+          { _id: message.media_ids[0] },
+          { projection: { type: 1 }, session }
         )
       : null
     const messageType =
@@ -114,35 +111,142 @@ class ConversationService {
         : firstMedia
           ? ('file' as const)
           : ('text' as const)
-    const lastMessagePreview = latestSentMessage
-      ? {
-          sender_id: latestSentMessage.sender_id,
-          content: latestSentMessage.content.substring(0, 50),
-          message_type: messageType
-        }
+
+    return {
+      message_id: message._id,
+      sender_id: message.sender_id,
+      content: message.content.substring(0, 50),
+      message_type: messageType
+    }
+  }
+
+  private async setLastMessageOverride(
+    userId: string,
+    deletedMessage: Message,
+    session?: ClientSession
+  ): Promise<boolean> {
+    if (!deletedMessage._id || !deletedMessage.send_at) return false
+
+    const actorId = new this.databaseService.ObjectId(userId)
+    const latestVisibleMessage = await this.databaseService.messages
+      .find({
+        conversation_id: deletedMessage.conversation_id,
+        status: { $in: ['sent', 'revoked'] },
+        deleted_by: { $ne: actorId }
+      }, { session })
+      .sort({ _id: -1 })
+      .limit(1)
+      .next()
+    const lastMessagePreview = latestVisibleMessage
+      ? await this.buildLastMessagePreview(latestVisibleMessage, session)
       : {
-          sender_id: message.sender_id,
-          content: 'Message was revoked',
+          sender_id: actorId,
+          content: 'No visible messages',
           message_type: 'text' as const
         }
-    const update = {
-      $set: {
-        last_message_at: latestSentMessage?.send_at ?? message.send_at,
-        last_message_preview: lastMessagePreview,
-        updated_at: new Date()
+    const override = {
+      user_id: actorId,
+      message_id: latestVisibleMessage?._id,
+      last_message_at:
+        latestVisibleMessage?.send_at ?? deletedMessage.conversation_id.getTimestamp(),
+      last_message_preview: lastMessagePreview
+    }
+    const updatePipeline: Document[] = [
+      {
+        $set: {
+          last_message_overrides: {
+            $concatArrays: [
+              {
+                $filter: {
+                  input: { $ifNull: ['$last_message_overrides', []] },
+                  as: 'override',
+                  cond: { $ne: ['$$override.user_id', actorId] }
+                }
+              },
+              [override]
+            ]
+          },
+          updated_at: new Date()
+        }
+      }
+    ]
+
+    if (deletedMessage.conversation_type === 'direct') {
+      const result = await this.databaseService.directConversations.updateOne(
+        { _id: deletedMessage.conversation_id },
+        updatePipeline,
+        { session }
+      )
+      return result.matchedCount === 1
+    }
+
+    const result = await this.databaseService.groupConversations.updateOne(
+      { _id: deletedMessage.conversation_id },
+      updatePipeline,
+      { session }
+    )
+    return result.matchedCount === 1
+  }
+
+  private async syncLastMessagePreviewAfterRevoke(message: Message): Promise<void> {
+    if (!message._id || !message.send_at) return
+
+    const conversation =
+      message.conversation_type === 'direct'
+        ? await this.databaseService.directConversations.findOne(
+            { _id: message.conversation_id },
+            { projection: { last_message_at: 1, last_message_overrides: 1 } }
+          )
+        : await this.databaseService.groupConversations.findOne(
+            { _id: message.conversation_id },
+            { projection: { last_message_at: 1, last_message_overrides: 1 } }
+          )
+    if (!conversation?.last_message_at) return
+
+    const latestSentMessage = await this.databaseService.messages
+      .find({ conversation_id: message.conversation_id, status: 'sent' })
+      .sort({ _id: -1 })
+      .limit(1)
+      .next()
+    const affectedOverrideUserIds = (conversation.last_message_overrides ?? [])
+      .filter(
+        (override) =>
+          override.message_id?.equals(message._id) ||
+          override.last_message_preview.message_id?.equals(message._id)
+      )
+      .map((override) => override.user_id.toString())
+
+    if (!latestSentMessage || latestSentMessage._id.toString() <= message._id.toString()) {
+      const lastMessagePreview = latestSentMessage
+        ? await this.buildLastMessagePreview(latestSentMessage)
+        : {
+            message_id: message._id,
+            sender_id: message.sender_id,
+            content: 'Message was revoked',
+            message_type: 'text' as const
+          }
+      const update = {
+        $set: {
+          last_message_at: latestSentMessage?.send_at ?? message.send_at,
+          last_message_preview: lastMessagePreview,
+          updated_at: new Date()
+        }
+      }
+      const filter = {
+        _id: message.conversation_id,
+        last_message_at: conversation.last_message_at
+      }
+
+      if (message.conversation_type === 'direct') {
+        await this.databaseService.directConversations.updateOne(filter, update)
+      } else {
+        await this.databaseService.groupConversations.updateOne(filter, update)
       }
     }
-    const filter = {
-      _id: message.conversation_id,
-      last_message_at: conversation.last_message_at
-    }
 
-    if (message.conversation_type === 'direct') {
-      await this.databaseService.directConversations.updateOne(filter, update)
-      return
-    }
-
-    await this.databaseService.groupConversations.updateOne(filter, update)
+    await Promise.all(
+      affectedOverrideUserIds.map((overrideUserId) => this.setLastMessageOverride(overrideUserId, message))
+    )
   }
 
   async getConversations(userId: string) {
@@ -189,25 +293,43 @@ class ConversationService {
     ])
 
     // Normalize format
-    const formattedDirects = directs.map((c) => ({
-      ...c,
-      type: 'direct',
-      partner_info: c.partnerInfo
-        ? {
-            _id: c.partnerInfo._id,
-            name: c.partnerInfo.name,
-            username: c.partnerInfo.username,
-            avatar: c.partnerInfo.avatar
-          }
-        : null,
-      is_pinned: c.pinned_by?.some((id) => id.equals(objectIdUserId)) || false
-    }))
+    const formattedDirects = directs.map((conversationDocument) => {
+      const { partnerInfo, last_message_overrides, ...conversation } = conversationDocument
+      const actorOverride = last_message_overrides?.find((override) =>
+        override.user_id.equals(objectIdUserId)
+      )
 
-    const formattedGroups = groups.map((c) => ({
-      ...c,
-      type: 'group',
-      is_pinned: c.pinned_by?.some((id) => id.equals(objectIdUserId)) || false
-    }))
+      return {
+        ...conversation,
+        type: 'direct' as const,
+        last_message_at: actorOverride?.last_message_at ?? conversation.last_message_at,
+        last_message_preview: actorOverride?.last_message_preview ?? conversation.last_message_preview,
+        partner_info: partnerInfo
+          ? {
+              _id: partnerInfo._id,
+              name: partnerInfo.name,
+              username: partnerInfo.username,
+              avatar: partnerInfo.avatar
+            }
+          : null,
+        is_pinned: conversation.pinned_by?.some((id) => id.equals(objectIdUserId)) || false
+      }
+    })
+
+    const formattedGroups = groups.map((conversationDocument) => {
+      const { last_message_overrides, ...conversation } = conversationDocument
+      const actorOverride = last_message_overrides?.find((override) =>
+        override.user_id.equals(objectIdUserId)
+      )
+
+      return {
+        ...conversation,
+        type: 'group' as const,
+        last_message_at: actorOverride?.last_message_at ?? conversation.last_message_at,
+        last_message_preview: actorOverride?.last_message_preview ?? conversation.last_message_preview,
+        is_pinned: conversation.pinned_by?.some((id) => id.equals(objectIdUserId)) || false
+      }
+    })
 
     const merged = [...formattedDirects, ...formattedGroups].sort((a, b) => {
       // 1. Sort by pinned status first
@@ -392,14 +514,23 @@ class ConversationService {
     let rawMessages: MessageWithMediaInfo[] = []
 
     if (!cursor) {
-      const cachedMessages = await redisService.clientInstance.zRange(redisKey, 0, limit - 1, { REV: true })
-      if (cachedMessages && cachedMessages.length === limit) {
-        rawMessages = cachedMessages.map((msg: string) => JSON.parse(msg) as MessageWithMediaInfo)
+      const cachedMessages = await redisService.clientInstance.zRange(redisKey, 0, limit, { REV: true })
+      if (cachedMessages && cachedMessages.length > limit) {
+        const visibleCachedMessages = cachedMessages
+          .map((msg: string) => JSON.parse(msg) as MessageWithMediaInfo)
+          .filter((message) => isMessageVisibleToUser(message, userId))
+        if (visibleCachedMessages.length > limit) {
+          rawMessages = visibleCachedMessages
+        }
       }
     }
 
-    if (rawMessages.length === 0) {
-      const matchStage: any = { conversation_id: convId }
+    if (rawMessages.length < limit) {
+      const matchStage: Filter<Message> = {
+        conversation_id: convId,
+        status: { $in: ['sent', 'revoked'] },
+        deleted_by: { $ne: new this.databaseService.ObjectId(userId) }
+      }
       if (cursor) {
         matchStage._id = { $lt: new this.databaseService.ObjectId(cursor) }
       }
@@ -408,7 +539,7 @@ class ConversationService {
         .aggregate<MessageWithMediaInfo>([
           { $match: matchStage },
           { $sort: { _id: -1 } },
-          { $limit: limit },
+          { $limit: limit + 1 },
           {
             $lookup: {
               from: 'medias',
@@ -421,9 +552,12 @@ class ConversationService {
         .toArray()
     }
 
-    const messages = await conversationMessageHydrationService.hydrateSenderInfo(rawMessages)
+    const messages = await conversationMessageHydrationService.hydrateSenderInfo(
+      rawMessages.slice(0, limit),
+      userId
+    )
 
-    const has_next_page = messages.length === limit
+    const has_next_page = rawMessages.length > limit
     const next_cursor = has_next_page ? (messages[messages.length - 1]?._id?.toString() ?? null) : null
 
     return { messages, next_cursor, has_next_page }
@@ -443,7 +577,8 @@ class ConversationService {
     const target = await this.databaseService.messages.findOne({
       _id: messageObjectId,
       conversation_id: conversationObjectId,
-      status: 'sent'
+      status: 'sent',
+      deleted_by: { $ne: new this.databaseService.ObjectId(userId) }
     })
 
     if (!target) {
@@ -479,7 +614,8 @@ class ConversationService {
 
     const baseMatch: Filter<Message> = {
       conversation_id: conversationObjectId,
-      status: 'sent'
+      status: 'sent',
+      deleted_by: { $ne: new this.databaseService.ObjectId(userId) }
     }
 
     const [olderDescending, targetMessages, newerAscending] = await Promise.all([
@@ -499,11 +635,10 @@ class ConversationService {
     const oldestIncludedMessage = olderMessages[0]
     const newestIncludedMessage = newerMessages[newerMessages.length - 1]
 
-    const messages = await conversationMessageHydrationService.hydrateSenderInfo([
-      ...olderMessages,
-      ...targetMessages,
-      ...newerMessages
-    ])
+    const messages = await conversationMessageHydrationService.hydrateSenderInfo(
+      [...olderMessages, ...targetMessages, ...newerMessages],
+      userId
+    )
 
     return {
       messages,
@@ -568,25 +703,43 @@ class ConversationService {
 
   async deleteMessage(userId: string, messageId: string) {
     const msgId = new this.databaseService.ObjectId(messageId)
-    const { message, conversation } = await conversationMessageAccessService.assertMessageAccess(
-      userId,
-      messageId,
-      { requireSender: true, allowedStatuses: ['sent'] }
-    )
-    const updateResult = await this.databaseService.messages.updateOne(
-      { _id: msgId, status: 'sent' },
-      { $set: { status: 'deleted' } }
-    )
-    if (updateResult.modifiedCount !== 1) {
-      throw new HttpError('Message state changed before it could be deleted', HTTP_STATUS.CONFLICT)
+    const { message } = await conversationMessageAccessService.assertMessageAccess(userId, messageId, {
+      requireVisibleToUser: true,
+      allowedStatuses: ['sent']
+    })
+    const actorId = new this.databaseService.ObjectId(userId)
+    const session = this.databaseService.startSession()
+
+    try {
+      await session.withTransaction(async () => {
+        const updateResult = await this.databaseService.messages.updateOne(
+          { _id: msgId, status: 'sent', deleted_by: { $ne: actorId } },
+          { $addToSet: { deleted_by: actorId } },
+          { session }
+        )
+        if (updateResult.modifiedCount !== 1) {
+          throw new HttpError('Message state changed before it could be deleted', HTTP_STATUS.CONFLICT)
+        }
+
+        const previewUpdated = await this.setLastMessageOverride(userId, message, session)
+        if (!previewUpdated) {
+          throw new HttpError('Conversation preview could not be updated', HTTP_STATUS.CONFLICT)
+        }
+      })
+    } finally {
+      await session.endSession()
     }
 
     const conversationId = message.conversation_id.toString()
-    await conversationMessageSyncService.syncConversationAction(
+    const deletedEvent: MessageDeletedForMeEvent = {
+      conversation_id: conversationId,
+      message_id: messageId
+    }
+    await conversationMessageSyncService.syncActorAction(
       conversationId,
-      conversation.memberIds,
-      '@message:deleted',
-      { conversation_id: conversationId, message_id: messageId }
+      userId,
+      '@message:deleted-for-me',
+      deletedEvent
     )
 
     return { success: true }
@@ -686,6 +839,7 @@ class ConversationService {
     const matchStage: Filter<Message> = {
       conversation_id: convId,
       status: 'sent',
+      deleted_by: { $ne: new this.databaseService.ObjectId(userId) },
       $text: { $search: q }
     }
     if (cursor) {
@@ -700,7 +854,8 @@ class ConversationService {
 
     const has_next_page = matchedMessages.length > limit
     const messages = await conversationMessageHydrationService.hydrateSenderInfo(
-      matchedMessages.slice(0, limit)
+      matchedMessages.slice(0, limit),
+      userId
     )
     const next_cursor = has_next_page ? (messages[messages.length - 1]?._id?.toString() ?? null) : null
 
@@ -714,6 +869,7 @@ class ConversationService {
     const matchStage: Filter<Message> = {
       conversation_id: convId,
       status: 'sent',
+      deleted_by: { $ne: new this.databaseService.ObjectId(userId) },
       media_ids: { $exists: true, $not: { $size: 0 } }
     }
     if (cursor) {
@@ -757,7 +913,10 @@ class ConversationService {
       .toArray()
 
     const has_next_page = messages.length > limit
-    const pageMessages = await conversationMessageHydrationService.hydrateSenderInfo(messages.slice(0, limit))
+    const pageMessages = await conversationMessageHydrationService.hydrateSenderInfo(
+      messages.slice(0, limit),
+      userId
+    )
     const next_cursor = has_next_page ? (pageMessages[pageMessages.length - 1]?._id?.toString() ?? null) : null
 
     return { messages: pageMessages, next_cursor, has_next_page }
@@ -1197,12 +1356,18 @@ class ConversationService {
   async getMessageReactions(userId: string, messageId: string) {
     const msgId = new this.databaseService.ObjectId(messageId)
     await conversationMessageAccessService.assertMessageAccess(userId, messageId, {
+      requireVisibleToUser: true,
       allowedStatuses: ['sent']
     })
 
     const message = await this.databaseService.messages
       .aggregate([
-        { $match: { _id: msgId } },
+        {
+          $match: {
+            _id: msgId,
+            deleted_by: { $ne: new this.databaseService.ObjectId(userId) }
+          }
+        },
         { $unwind: '$reactions' },
         {
           $lookup: {
@@ -1247,6 +1412,9 @@ class ConversationService {
 
     if (originalMessage.status !== 'sent') {
       throw new HttpError('Only sent messages can be forwarded', HTTP_STATUS.BAD_REQUEST)
+    }
+    if (originalMessage.deleted_by?.some((deletedByUserId) => deletedByUserId.toString() === userId)) {
+      throw new HttpError('Message is not available for this action', HTTP_STATUS.BAD_REQUEST)
     }
 
     const normalizedConversationIds = conversationIds.map((conversationId) =>
@@ -1325,24 +1493,37 @@ class ConversationService {
       await this.databaseService.messages.insertMany(newMessages)
 
       // Update last_message_preview for all conversations
-      const updatePromises = normalizedConversationIds.map((conversationId) => {
+      const updatePromises = normalizedConversationIds.map((conversationId, index) => {
         const conversationObjectId = new this.databaseService.ObjectId(conversationId)
+        const forwardedMessage = newMessages[index]
+        if (!forwardedMessage?._id) {
+          throw new HttpError('Forwarded message could not be created', HTTP_STATUS.INTERNAL_SERVER_ERROR)
+        }
         const preview = {
+          message_id: forwardedMessage._id,
           sender_id: senderId,
           content: originalMessage.content,
           message_type: forwardedMessageType
+        }
+        const update = {
+          $set: {
+            last_message_at: forwardedMessage.send_at ?? new Date(),
+            last_message_preview: preview,
+            last_message_overrides: [],
+            updated_at: new Date()
+          }
         }
 
         if (targetConversationTypeById.get(conversationId) === 'direct') {
           return this.databaseService.directConversations.updateOne(
             { _id: conversationObjectId, $or: [{ user1_id: senderId }, { user2_id: senderId }] },
-            { $set: { last_message_at: new Date(), last_message_preview: preview } }
+            update
           )
         }
 
         return this.databaseService.groupConversations.updateOne(
           { _id: conversationObjectId, 'members.user_id': senderId },
-          { $set: { last_message_at: new Date(), last_message_preview: preview } }
+          update
         )
       })
 

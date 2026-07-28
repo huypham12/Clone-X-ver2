@@ -142,7 +142,7 @@ export const deleteMessageController: DeleteHandler<MessageActionResponseDto, { 
 
   const result = await conversationService.deleteMessage(user_id, message_id)
   
-  const response = new MessageActionResponseDto(HTTP_STATUS.OK, 'Message deleted successfully', result)
+  const response = new MessageActionResponseDto(HTTP_STATUS.OK, 'Message deleted for you successfully', result)
   res.status(response.statusCode).json(response)
 }
 

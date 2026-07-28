@@ -33,11 +33,18 @@ export interface MessageRevokedEvent {
   message_id: string
 }
 
+export interface MessageDeletedForMeEvent {
+  conversation_id: string
+  message_id: string
+}
+
 export type MessageWithMediaInfo = Message & {
   medias_info?: ConversationMediaInfo[]
 }
 
-export type HydratedMessage = MessageWithMediaInfo & {
+export type PublicMessageWithMediaInfo = Omit<MessageWithMediaInfo, 'deleted_by'>
+
+export type HydratedMessage = PublicMessageWithMediaInfo & {
   sender_info: MessageSenderInfo | null
   reply_to: MessageReplyPreview | null
 }

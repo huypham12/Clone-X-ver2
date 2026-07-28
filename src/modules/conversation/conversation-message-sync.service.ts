@@ -1,10 +1,14 @@
 import redisService from '~/config/redis.service'
 import { getIO } from '~/socket'
-import type { MessageRevokedEvent } from './dto'
+import type { MessageDeletedForMeEvent, MessageRevokedEvent } from './dto'
 
-type MessageActionEventName = '@message:revoked' | '@message:deleted' | '@message:reacted' | '@message:unreacted'
+type MessageActionEventName =
+  | '@message:revoked'
+  | '@message:deleted-for-me'
+  | '@message:reacted'
+  | '@message:unreacted'
 
-type MessageActionEventPayload = MessageRevokedEvent | Record<string, unknown>
+type MessageActionEventPayload = MessageRevokedEvent | MessageDeletedForMeEvent | Record<string, unknown>
 type MessageSocketServer = Pick<ReturnType<typeof getIO>, 'to'>
 type DeleteMessageCache = (key: string) => Promise<unknown>
 

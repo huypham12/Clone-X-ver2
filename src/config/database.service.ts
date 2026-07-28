@@ -46,6 +46,10 @@ export default class DatabaseService {
     console.log('MongoDB disconnected')
   }
 
+  startSession() {
+    return this.client.startSession()
+  }
+
   /** Index collections — should be called once during bootstrap */
   async createIndexes() {
     await Promise.all([

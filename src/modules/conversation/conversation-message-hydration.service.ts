@@ -1,4 +1,4 @@
-import { ObjectId } from 'mongodb'
+import { Filter, ObjectId } from 'mongodb'
 import DatabaseService from '~/config/database.service'
 import { MediaType } from '~/constants/enums'
 import type Message from '~/schemas/Message.schema'
@@ -7,7 +7,8 @@ import type {
   MessageReplyMediaType,
   MessageReplyPreview,
   MessageSenderInfo,
-  MessageWithMediaInfo
+  MessageWithMediaInfo,
+  PublicMessageWithMediaInfo
 } from './dto'
 
 const REPLY_PREVIEW_CONTENT_LIMIT = 140
@@ -19,6 +20,12 @@ type ReplyMessage = Pick<
 const isReplyMediaType = (type: MediaType): type is MessageReplyMediaType =>
   type === MediaType.Image || type === MediaType.Video || type === MediaType.Audio
 
+const omitPrivateVisibility = (message: MessageWithMediaInfo): PublicMessageWithMediaInfo => {
+  const publicMessage = { ...message }
+  Reflect.deleteProperty(publicMessage, 'deleted_by')
+  return publicMessage
+}
+
 export class ConversationMessageHydrationService {
   private readonly databaseService: DatabaseService
 
@@ -26,7 +33,10 @@ export class ConversationMessageHydrationService {
     this.databaseService = databaseService
   }
 
-  async hydrateSenderInfo(messages: MessageWithMediaInfo[]): Promise<HydratedMessage[]> {
+  async hydrateSenderInfo(
+    messages: MessageWithMediaInfo[],
+    viewerUserId?: string
+  ): Promise<HydratedMessage[]> {
     if (messages.length === 0) return []
 
     const replyIds = [
@@ -37,10 +47,17 @@ export class ConversationMessageHydrationService {
       )
     ]
     const replyObjectIds = replyIds.map((replyId) => new this.databaseService.ObjectId(replyId))
+    const replyFilter: Filter<Message> = {
+      _id: { $in: replyObjectIds },
+      status: { $in: ['sent', 'revoked'] },
+      ...(viewerUserId
+        ? { deleted_by: { $ne: new this.databaseService.ObjectId(viewerUserId) } }
+        : {})
+    }
     const replyMessages: ReplyMessage[] = replyObjectIds.length
       ? await this.databaseService.messages
           .find(
-            { _id: { $in: replyObjectIds }, status: { $in: ['sent', 'revoked'] } },
+            replyFilter,
             {
               projection: {
                 _id: 1,
@@ -101,6 +118,7 @@ export class ConversationMessageHydrationService {
     )
 
     return messages.map((message) => {
+      const publicMessage = omitPrivateVisibility(message)
       const replyMessage = message.reply_to_message_id
         ? replyMessageById.get(message.reply_to_message_id.toString())
         : undefined
@@ -125,7 +143,7 @@ export class ConversationMessageHydrationService {
 
       if (message.status === 'revoked') {
         return {
-          ...message,
+          ...publicMessage,
           content: '',
           media_ids: [],
           medias_info: [],
@@ -137,15 +155,15 @@ export class ConversationMessageHydrationService {
       }
 
       return {
-        ...message,
+        ...publicMessage,
         sender_info: senderInfoById.get(message.sender_id.toString()) ?? null,
         reply_to: replyTo
       }
     })
   }
 
-  async hydrateSingleMessage(message: MessageWithMediaInfo): Promise<HydratedMessage> {
-    const [hydratedMessage] = await this.hydrateSenderInfo([message])
+  async hydrateSingleMessage(message: MessageWithMediaInfo, viewerUserId?: string): Promise<HydratedMessage> {
+    const [hydratedMessage] = await this.hydrateSenderInfo([message], viewerUserId)
     return hydratedMessage
   }
 }

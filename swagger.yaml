@@ -52,8 +52,10 @@ x-socket-events:
     description: Emitted to conversation members after the sender atomically replaces a sent message with a payload-free tombstone, refreshes the last-message preview when needed and invalidates its message cache.
     payload:
       $ref: "#/components/schemas/MessageRevokedEvent"
-  "@message:deleted":
-    description: Emitted to conversation members after the legacy global delete mutation and cache invalidation.
+  "@message:deleted-for-me":
+    description: Emitted only to the actor's personal room after delete-for-me succeeds and the shared message cache is invalidated.
+    payload:
+      $ref: "#/components/schemas/MessageRevokedEvent"
   "@message:reacted":
     description: Emitted to conversation members after a reaction is stored and cache invalidated.
   "@message:unreacted":
@@ -999,8 +1001,8 @@ paths:
     delete:
       tags:
         - message
-      summary: Delete a sent message using the legacy global status mutation
-      description: Currently restricted to the sender while they are still a conversation member. Delete-for-me will use a separate contract.
+      summary: Delete a sent message for the current user
+      description: Transactionally adds only the caller to private deleted_by state and recomputes that caller's preview override. Other members keep the original message and do not receive the private realtime event.
       operationId: deleteConversationMessage
       security:
         - bearerAuth: []
@@ -1008,19 +1010,19 @@ paths:
         - $ref: "#/components/parameters/MessageId"
       responses:
         "200":
-          description: Message deleted and member personal rooms synchronized
+          description: Message hidden for the caller and caller personal devices synchronized
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/SuccessResponse"
         "400":
-          description: Invalid message ID or message is not in sent status
+          description: Invalid message ID, message is not sent, or it is already hidden for the caller
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
         "403":
-          description: Caller is not a member or is not the sender
+          description: Caller is not a current conversation member
           content:
             application/json:
               schema:
@@ -1552,7 +1554,6 @@ components:
           items:
             type: object
             additionalProperties: true
-
     MessagePageData:
       type: object
       required:
