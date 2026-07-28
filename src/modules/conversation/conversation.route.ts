@@ -168,11 +168,13 @@ conversationRouter.post(
 // 3. Thao tác với từng tin nhắn cụ thể
 conversationRouter.post(
   '/messages/:message_id/revoke',
+  messageIdParamValidator,
   wrapController(revokeMessageController)
 )
 
 conversationRouter.delete(
   '/messages/:message_id',
+  messageIdParamValidator,
   wrapController(deleteMessageController)
 )
 

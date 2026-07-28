@@ -62,26 +62,28 @@ Các endpoint có `conversation_id` chỉ cho phép thành viên của hội tho
 - `DELETE /:conversation_id/leave`: Member tự rời nhóm. Sole admin nhận `409 GROUP_SOLE_ADMIN_CANNOT_LEAVE` nếu nhóm vẫn còn member khác; hiện chưa có cơ chế chuyển quyền admin.
 - `POST /:conversation_id/pin`: Ghim một hội thoại lên đầu danh sách.
 - `DELETE /:conversation_id/pin`: Bỏ ghim một hội thoại.
-- `GET /:conversation_id/messages`: Lấy danh sách các tin nhắn trong một hội thoại, kèm `medias_info` của message.
-- `GET /:conversation_id/messages/:message_id/context?before=20&after=20`: Lấy cửa sổ tối đa 50 tin cũ và 50 tin mới quanh một message còn hiệu lực để nhảy tới đúng vị trí; yêu cầu người gọi là thành viên conversation.
-- `GET /:conversation_id/search`: Tìm kiếm các tin nhắn trạng thái `sent` bên trong một hội thoại bằng từ khóa.
-- `GET /:conversation_id/media`: Lấy danh sách message còn hiệu lực có ảnh/video/audio; mỗi message trả sẵn metadata media trạng thái `ready` trong `medias_info`.
+- `GET /:conversation_id/messages`: Lấy danh sách các tin nhắn trong một hội thoại. Mỗi message có `medias_info`, `sender_info` public gồm `_id/name/username/avatar` và `reply_to` compact hoặc `null`; cache cũ cũng được hydrate lại trước khi trả.
+- `GET /:conversation_id/messages/:message_id/context?before=20&after=20`: Lấy cửa sổ tối đa 50 tin cũ và 50 tin mới quanh một message còn hiệu lực để nhảy tới đúng vị trí; yêu cầu người gọi là thành viên conversation và mỗi message có `sender_info/reply_to` đã hydrate.
+- `GET /:conversation_id/search`: Tìm kiếm các tin nhắn trạng thái `sent` bên trong một hội thoại bằng từ khóa; kết quả có `sender_info/reply_to` đã hydrate.
+- `GET /:conversation_id/media`: Lấy danh sách message còn hiệu lực có ảnh/video/audio; mỗi message trả metadata media trạng thái `ready` trong `medias_info`, public identity trong `sender_info` và `reply_to` compact.
 - `POST /:conversation_id/read`: Đánh dấu đã đọc các tin nhắn mới trong hội thoại.
-- `POST /messages/:message_id/revoke`: Thu hồi (gỡ bỏ đối với mọi người) một tin nhắn.
-- `DELETE /messages/:message_id`: Xóa tin nhắn (chỉ gỡ bỏ từ phía người xóa).
+- `POST /messages/:message_id/revoke`: Sender còn là thành viên conversation được thu hồi message trạng thái `sent` cho mọi người. Mutation nguyên tử xóa content/media/reaction/reply target khỏi document, giữ tombstone và tính lại sidebar preview nếu đây là message cuối.
+- `DELETE /messages/:message_id`: Hành vi legacy hiện chỉ cho sender còn là thành viên đổi message `sent` sang `deleted` toàn cục; delete-for-me thực sự được tách sang phase contract/schema riêng.
 - `PATCH /messages/:message_id`: Chỉnh sửa nội dung tin nhắn đã gửi.
-- `POST /messages/:message_id/react`: Thả cảm xúc (React) vào một tin nhắn cụ thể.
-- `DELETE /messages/:message_id/react`: Gỡ bỏ cảm xúc (Reaction) đã thả khỏi tin nhắn.
-- `GET /messages/:message_id/reactions`: Lấy danh sách chi tiết những người đã thả cảm xúc vào tin nhắn này.
+- `POST /messages/:message_id/react`: Member thả cảm xúc không rỗng, tối đa 32 ký tự, vào message trạng thái `sent`.
+- `DELETE /messages/:message_id/react`: Member gỡ cảm xúc của chính mình khỏi message trạng thái `sent`.
+- `GET /messages/:message_id/reactions`: Member lấy danh sách chi tiết những người đã thả cảm xúc vào message trạng thái `sent`; outsider nhận `403`.
 - `POST /messages/:message_id/forward`: Chuyển tiếp message trạng thái `sent`; người gọi phải là thành viên của conversation nguồn và mọi conversation đích.
 - `POST /:conversation_id/mute`: Tắt thông báo với body `{ type, duration_hours? }`; duration hỗ trợ 1, 8, 24 giờ hoặc bỏ trống để mute vô thời hạn.
 - `DELETE /:conversation_id/mute?type=direct|group`: Bật lại thông báo cho hội thoại đã tắt.
 
 ### Socket conversation
 
-- `@conversation:send`: Với direct conversation, server kiểm tra block hai chiều trước khi đọc media, ghi message, cập nhật conversation/Redis, broadcast hoặc tạo notification. Client có thể truyền acknowledgement callback; server trả `{ success: true, message_id }` sau khi message đã được lưu, cập nhật cache và broadcast, hoặc `{ success: false, error }` nếu bị từ chối. Frontend chỉ xóa draft/media sau acknowledgement thành công.
+- `@conversation:send`: Với direct conversation, server kiểm tra block hai chiều trước khi đọc media, ghi message, cập nhật conversation/Redis, broadcast hoặc tạo notification. Payload có thể chứa `reply_to_message_id`; target phải là message `sent` trong cùng conversation. Client có thể truyền acknowledgement callback; server trả `{ success: true, message_id }` sau khi message đã được lưu, cập nhật cache và broadcast, hoặc `{ success: false, error }` nếu bị từ chối. Frontend chỉ xóa draft/media sau acknowledgement thành công.
+- `@conversation:receive`: Message mới được gửi tới personal rooms của member và có cùng contract HTTP, bao gồm `medias_info`, `sender_info` public và `reply_to` compact; Redis lưu chính payload đã hydrate này.
+- `@message:revoked`, `@message:deleted`, `@message:reacted`, `@message:unreacted`: Phát tới personal rooms của các member sau khi mutation thành công, kèm `conversation_id/message_id`; cache `chat:messages:<conversation_id>` bị xóa trước khi emit. Riêng revoke đã xóa payload nhạy cảm trong database trước khi đồng bộ.
 - Với group send, server kiểm tra lại membership ngay trước insert và tải lại danh sách member ngay trước broadcast/notification để người vừa bị remove không tiếp tục nằm trong recipients đã chụp trước đó. Forward cũng kiểm tra lại source/target membership ngay trước khi ghi.
-- `@conversation:error`: Lỗi nghiệp vụ có payload `{ code, conversation_id, message }`. Code `DIRECT_MESSAGE_BLOCKED` cho biết direct message bị từ chối vì tồn tại block theo một trong hai chiều; frontend không cần parse chuỗi `message`.
+- `@conversation:error`: Lỗi nghiệp vụ có payload `{ code, conversation_id, message }`. `DIRECT_MESSAGE_BLOCKED` cho biết direct message bị chặn hai chiều; `REPLY_MESSAGE_UNAVAILABLE` cho biết reply target không tồn tại, khác conversation hoặc không còn ở trạng thái `sent`. Frontend không cần parse chuỗi `message`.
 - `@user:block-status-changed`: Gửi tới personal room của cả hai user sau khi block/unblock thành công, payload `{ user_ids: string[] }`; client phải invalidate/refetch profile để lấy trạng thái hai chiều có thẩm quyền từ server.
 - `@conversation:group-updated`: Gửi tới personal rooms của các member cũ/mới liên quan sau khi đổi thông tin hoặc add/remove/leave, payload `{ conversation_id, change_type, actor_id, affected_user_ids }`. Sau mutation membership, server xóa ngay cache legacy `conv_members:<conversation_id>` trước khi emit.
 - Forward vào direct conversation cũng bị từ chối toàn bộ trước khi ghi nếu một target direct có block. Typing direct không được chuyển tới người còn lại khi có block.

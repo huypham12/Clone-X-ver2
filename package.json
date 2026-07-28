@@ -8,6 +8,7 @@
     "dev:prod": "npx nodemon --env=production",
     "dev:stag": "npx nodemon --env=staging",
     "build": "rimraf ./dist && tsc && tsc-alias",
+    "test:conversation-foundation": "rimraf ./.test-dist && tsc -p tsconfig.test.json && tsc-alias -p tsconfig.test.json && node --test .test-dist/tests/conversation-foundation.test.js && rimraf ./.test-dist",
     "start:prod": "node dist/app.js --env=production",
     "start:dev": "node dist/app.js --env=development",
     "start:stag": "node dist/app.js --env=staging",

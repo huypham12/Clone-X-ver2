@@ -3,24 +3,53 @@ import DirectConversation from '~/schemas/DirectConversation.schema'
 import GroupConversation from '~/schemas/GroupConversation.schema'
 import Message from '~/schemas/Message.schema'
 import type MediaMetadata from '~/schemas/MediaMetadata.schema'
+import type { ObjectId } from 'mongodb'
+import { MediaType } from '~/constants/enums'
 
 export type ConversationMediaInfo = Pick<
   MediaMetadata,
   '_id' | 'url' | 'thumbnail' | 'type' | 'status' | 'created_at' | 'updated_at'
 >
 
+export interface MessageSenderInfo {
+  _id: ObjectId
+  name: string
+  username: string
+  avatar?: string
+}
+
+export type MessageReplyMediaType = MediaType.Image | MediaType.Video | MediaType.Audio
+
+export interface MessageReplyPreview {
+  _id: ObjectId
+  sender_info: MessageSenderInfo | null
+  content: string
+  media_type?: MessageReplyMediaType
+  status: 'sent' | 'revoked'
+}
+
+export interface MessageRevokedEvent {
+  conversation_id: string
+  message_id: string
+}
+
 export type MessageWithMediaInfo = Message & {
   medias_info?: ConversationMediaInfo[]
 }
 
+export type HydratedMessage = MessageWithMediaInfo & {
+  sender_info: MessageSenderInfo | null
+  reply_to: MessageReplyPreview | null
+}
+
 export interface MessagePageData {
-  messages: MessageWithMediaInfo[]
+  messages: HydratedMessage[]
   next_cursor: string | null
   has_next_page: boolean
 }
 
 export interface MessageContextData {
-  messages: MessageWithMediaInfo[]
+  messages: HydratedMessage[]
   target_message_id: string
   older_cursor: string | null
   newer_cursor: string | null
@@ -55,9 +84,7 @@ export class CreateGroupConversationBodyDto {
 }
 
 export class ReactMessageBodyDto {
-  constructor(
-    public emoji: string
-  ) {}
+  constructor(public emoji: string) {}
 }
 
 export class PaginationQueryDto {

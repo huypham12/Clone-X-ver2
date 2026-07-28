@@ -92,10 +92,11 @@ export const unmuteConversationValidator = validate(
 export const reactMessageValidator = validate(
   z.object({
     params: z.object({
-      message_id: z.string().refine((val) => ObjectId.isValid(val), { message: 'Invalid message ID format' })
+      message_id: objectIdString
     }),
     body: z.object({
-})
+      emoji: z.string().trim().min(1, 'Emoji is required').max(32, 'Emoji is too long')
+    })
   })
 )
 
@@ -139,7 +140,7 @@ export const groupMemberParamsValidator = validate(
 export const messageIdParamValidator = validate(
   z.object({
     params: z.object({
-      message_id: z.string().refine((val) => ObjectId.isValid(val), { message: 'Invalid message ID format' })
+      message_id: objectIdString
     })
   })
 )

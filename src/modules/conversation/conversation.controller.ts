@@ -299,9 +299,10 @@ export const unreactMessageController: DeleteHandler<MessageActionResponseDto, {
 }
 
 export const getMessageReactionsController: GetHandler<SuccessResponseDto, { message_id: string }> = async (req, res) => {
+  const { user_id } = req.decoded_authorization as TokenPayload
   const { message_id } = req.params
 
-  const result = await conversationService.getMessageReactions(message_id)
+  const result = await conversationService.getMessageReactions(user_id, message_id)
   
   const response = new SuccessResponseDto(HTTP_STATUS.OK, 'Get reactions successfully', result)
   res.status(response.statusCode).json(response)

@@ -10,7 +10,10 @@ import { getIO } from '~/socket'
 import { MediaStatus, MediaType } from '~/constants/enums'
 import type User from '~/schemas/User.schema'
 import conversationAccessService, { type ConversationType } from './conversation-access.service'
-import type { MessageContextData, MessageWithMediaInfo } from './dto'
+import conversationMessageAccessService from './conversation-message-access.service'
+import conversationMessageHydrationService from './conversation-message-hydration.service'
+import conversationMessageSyncService from './conversation-message-sync.service'
+import type { MessageContextData, MessageRevokedEvent, MessageWithMediaInfo } from './dto'
 
 type ConversationPartner = Pick<User, '_id' | 'name' | 'username' | 'avatar'>
 type DirectConversationAggregate = DirectConversation & {
@@ -74,6 +77,72 @@ class ConversationService {
     }
 
     this.emitGroupUpdate([...recipientIds, ...currentMemberIds], event)
+  }
+
+  private async syncLastMessagePreviewAfterRevoke(message: Message): Promise<void> {
+    if (!message._id || !message.send_at) return
+
+    const conversation =
+      message.conversation_type === 'direct'
+        ? await this.databaseService.directConversations.findOne(
+            { _id: message.conversation_id },
+            { projection: { last_message_at: 1 } }
+          )
+        : await this.databaseService.groupConversations.findOne(
+            { _id: message.conversation_id },
+            { projection: { last_message_at: 1 } }
+          )
+    if (!conversation?.last_message_at) return
+
+    const latestSentMessage = await this.databaseService.messages
+      .find({ conversation_id: message.conversation_id, status: 'sent' })
+      .sort({ _id: -1 })
+      .limit(1)
+      .next()
+    if (latestSentMessage && latestSentMessage._id.toString() > message._id.toString()) return
+    const firstMedia = latestSentMessage?.media_ids[0]
+      ? await this.databaseService.medias.findOne(
+          { _id: latestSentMessage.media_ids[0] },
+          { projection: { type: 1 } }
+        )
+      : null
+    const messageType =
+      firstMedia?.type === MediaType.Image ||
+      firstMedia?.type === MediaType.Video ||
+      firstMedia?.type === MediaType.Audio
+        ? firstMedia.type
+        : firstMedia
+          ? ('file' as const)
+          : ('text' as const)
+    const lastMessagePreview = latestSentMessage
+      ? {
+          sender_id: latestSentMessage.sender_id,
+          content: latestSentMessage.content.substring(0, 50),
+          message_type: messageType
+        }
+      : {
+          sender_id: message.sender_id,
+          content: 'Message was revoked',
+          message_type: 'text' as const
+        }
+    const update = {
+      $set: {
+        last_message_at: latestSentMessage?.send_at ?? message.send_at,
+        last_message_preview: lastMessagePreview,
+        updated_at: new Date()
+      }
+    }
+    const filter = {
+      _id: message.conversation_id,
+      last_message_at: conversation.last_message_at
+    }
+
+    if (message.conversation_type === 'direct') {
+      await this.databaseService.directConversations.updateOne(filter, update)
+      return
+    }
+
+    await this.databaseService.groupConversations.updateOne(filter, update)
   }
 
   async getConversations(userId: string) {
@@ -320,22 +389,22 @@ class ConversationService {
     const redisKey = `chat:messages:${conversationId}`
     const convId = new this.databaseService.ObjectId(conversationId)
 
-    let messages: MessageWithMediaInfo[] = []
+    let rawMessages: MessageWithMediaInfo[] = []
 
     if (!cursor) {
       const cachedMessages = await redisService.clientInstance.zRange(redisKey, 0, limit - 1, { REV: true })
       if (cachedMessages && cachedMessages.length === limit) {
-        messages = cachedMessages.map((msg: string) => JSON.parse(msg) as MessageWithMediaInfo)
+        rawMessages = cachedMessages.map((msg: string) => JSON.parse(msg) as MessageWithMediaInfo)
       }
     }
 
-    if (messages.length === 0) {
+    if (rawMessages.length === 0) {
       const matchStage: any = { conversation_id: convId }
       if (cursor) {
         matchStage._id = { $lt: new this.databaseService.ObjectId(cursor) }
       }
 
-      messages = await this.databaseService.messages
+      rawMessages = await this.databaseService.messages
         .aggregate<MessageWithMediaInfo>([
           { $match: matchStage },
           { $sort: { _id: -1 } },
@@ -351,6 +420,8 @@ class ConversationService {
         ])
         .toArray()
     }
+
+    const messages = await conversationMessageHydrationService.hydrateSenderInfo(rawMessages)
 
     const has_next_page = messages.length === limit
     const next_cursor = has_next_page ? (messages[messages.length - 1]?._id?.toString() ?? null) : null
@@ -428,8 +499,14 @@ class ConversationService {
     const oldestIncludedMessage = olderMessages[0]
     const newestIncludedMessage = newerMessages[newerMessages.length - 1]
 
+    const messages = await conversationMessageHydrationService.hydrateSenderInfo([
+      ...olderMessages,
+      ...targetMessages,
+      ...newerMessages
+    ])
+
     return {
-      messages: [...olderMessages, ...targetMessages, ...newerMessages],
+      messages,
       target_message_id: messageId,
       older_cursor: hasOlderMessages ? (oldestIncludedMessage?._id?.toString() ?? null) : null,
       newer_cursor: hasNewerMessages ? (newestIncludedMessage?._id?.toString() ?? null) : null
@@ -451,45 +528,66 @@ class ConversationService {
   }
 
   async revokeMessage(userId: string, messageId: string) {
-    const objectIdUserId = new this.databaseService.ObjectId(userId)
     const msgId = new this.databaseService.ObjectId(messageId)
-
-    const message = await this.databaseService.messages.findOne({ _id: msgId })
-    if (!message) throw new HttpError('Message not found', HTTP_STATUS.NOT_FOUND)
-    if (!message.sender_id.equals(objectIdUserId)) {
-      throw new HttpError('You can only revoke your own messages', HTTP_STATUS.FORBIDDEN)
+    const { message, conversation } = await conversationMessageAccessService.assertMessageAccess(
+      userId,
+      messageId,
+      { requireSender: true, allowedStatuses: ['sent'] }
+    )
+    const updateResult = await this.databaseService.messages.updateOne(
+      { _id: msgId, sender_id: new this.databaseService.ObjectId(userId), status: 'sent' },
+      {
+        $set: {
+          status: 'revoked',
+          content: '',
+          media_ids: [],
+          reactions: []
+        },
+        $unset: { reply_to_message_id: '' }
+      }
+    )
+    if (updateResult.modifiedCount !== 1) {
+      throw new HttpError('Message state changed before it could be revoked', HTTP_STATUS.CONFLICT)
     }
 
-    await this.databaseService.messages.updateOne({ _id: msgId }, { $set: { status: 'revoked' } })
-
-    try {
-      getIO().to(message.conversation_id.toString()).emit('@message:revoked', { message_id: messageId })
-    } catch {
-      // Socket server can be unavailable while the service is exercised in isolation.
+    const conversationId = message.conversation_id.toString()
+    await this.syncLastMessagePreviewAfterRevoke(message)
+    const revokedEvent: MessageRevokedEvent = {
+      conversation_id: conversationId,
+      message_id: messageId
     }
+    await conversationMessageSyncService.syncConversationAction(
+      conversationId,
+      conversation.memberIds,
+      '@message:revoked',
+      revokedEvent
+    )
 
-    // TODO: Ideally we should update cache too. For simplicity, just invalidating cache is an option, or leave it to TTL.
     return { success: true }
   }
 
   async deleteMessage(userId: string, messageId: string) {
     const msgId = new this.databaseService.ObjectId(messageId)
-    const objectIdUserId = new this.databaseService.ObjectId(userId)
-
-    const message = await this.databaseService.messages.findOne({ _id: msgId })
-    if (!message) throw new HttpError('Message not found', HTTP_STATUS.NOT_FOUND)
-
-    if (!message.sender_id.equals(objectIdUserId)) {
-      throw new HttpError('You can only delete your own messages', HTTP_STATUS.FORBIDDEN)
+    const { message, conversation } = await conversationMessageAccessService.assertMessageAccess(
+      userId,
+      messageId,
+      { requireSender: true, allowedStatuses: ['sent'] }
+    )
+    const updateResult = await this.databaseService.messages.updateOne(
+      { _id: msgId, status: 'sent' },
+      { $set: { status: 'deleted' } }
+    )
+    if (updateResult.modifiedCount !== 1) {
+      throw new HttpError('Message state changed before it could be deleted', HTTP_STATUS.CONFLICT)
     }
 
-    await this.databaseService.messages.updateOne({ _id: msgId }, { $set: { status: 'deleted' } })
-
-    try {
-      getIO().to(message.conversation_id.toString()).emit('@message:deleted', { message_id: messageId })
-    } catch {
-      // Socket server can be unavailable while the service is exercised in isolation.
-    }
+    const conversationId = message.conversation_id.toString()
+    await conversationMessageSyncService.syncConversationAction(
+      conversationId,
+      conversation.memberIds,
+      '@message:deleted',
+      { conversation_id: conversationId, message_id: messageId }
+    )
 
     return { success: true }
   }
@@ -500,8 +598,11 @@ class ConversationService {
 
     const reaction = { emoji, user_id: objectIdUserId }
 
-    const message = await this.databaseService.messages.findOne({ _id: msgId })
-    if (!message) throw new HttpError('Message not found', HTTP_STATUS.NOT_FOUND)
+    const { message, conversation } = await conversationMessageAccessService.assertMessageAccess(
+      userId,
+      messageId,
+      { allowedStatuses: ['sent'] }
+    )
 
     // Xóa reaction cũ của user này nếu có (nếu thiết kế 1 người 1 reaction), hoặc cứ push. Ở đây push.
     await this.databaseService.messages.updateOne(
@@ -514,11 +615,17 @@ class ConversationService {
       { $push: { reactions: reaction } as any } // Thêm mới
     )
 
-    try {
-      getIO().to(message.conversation_id.toString()).emit('@message:reacted', { message_id: messageId, reaction })
-    } catch {
-      // Socket server can be unavailable while the service is exercised in isolation.
-    }
+    const conversationId = message.conversation_id.toString()
+    await conversationMessageSyncService.syncConversationAction(
+      conversationId,
+      conversation.memberIds,
+      '@message:reacted',
+      {
+        conversation_id: conversationId,
+        message_id: messageId,
+        reaction: { emoji, user_id: userId }
+      }
+    )
 
     return { success: true }
   }
@@ -592,7 +699,9 @@ class ConversationService {
       .toArray()
 
     const has_next_page = matchedMessages.length > limit
-    const messages = matchedMessages.slice(0, limit)
+    const messages = await conversationMessageHydrationService.hydrateSenderInfo(
+      matchedMessages.slice(0, limit)
+    )
     const next_cursor = has_next_page ? (messages[messages.length - 1]?._id?.toString() ?? null) : null
 
     return { messages, next_cursor, has_next_page }
@@ -648,7 +757,7 @@ class ConversationService {
       .toArray()
 
     const has_next_page = messages.length > limit
-    const pageMessages = messages.slice(0, limit)
+    const pageMessages = await conversationMessageHydrationService.hydrateSenderInfo(messages.slice(0, limit))
     const next_cursor = has_next_page ? (pageMessages[pageMessages.length - 1]?._id?.toString() ?? null) : null
 
     return { messages: pageMessages, next_cursor, has_next_page }
@@ -1063,27 +1172,33 @@ class ConversationService {
     const objectIdUserId = new this.databaseService.ObjectId(userId)
     const msgId = new this.databaseService.ObjectId(messageId)
 
-    const message = await this.databaseService.messages.findOne({ _id: msgId })
-    if (!message) throw new HttpError('Message not found', HTTP_STATUS.NOT_FOUND)
+    const { message, conversation } = await conversationMessageAccessService.assertMessageAccess(
+      userId,
+      messageId,
+      { allowedStatuses: ['sent'] }
+    )
 
     await this.databaseService.messages.updateOne(
       { _id: msgId },
       { $pull: { reactions: { user_id: objectIdUserId } } as any }
     )
 
-    try {
-      getIO()
-        .to(message.conversation_id.toString())
-        .emit('@message:unreacted', { message_id: messageId, user_id: userId })
-    } catch {
-      // Socket server can be unavailable while the service is exercised in isolation.
-    }
+    const conversationId = message.conversation_id.toString()
+    await conversationMessageSyncService.syncConversationAction(
+      conversationId,
+      conversation.memberIds,
+      '@message:unreacted',
+      { conversation_id: conversationId, message_id: messageId, user_id: userId }
+    )
 
     return { success: true }
   }
 
-  async getMessageReactions(messageId: string) {
+  async getMessageReactions(userId: string, messageId: string) {
     const msgId = new this.databaseService.ObjectId(messageId)
+    await conversationMessageAccessService.assertMessageAccess(userId, messageId, {
+      allowedStatuses: ['sent']
+    })
 
     const message = await this.databaseService.messages
       .aggregate([

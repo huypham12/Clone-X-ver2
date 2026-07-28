@@ -36,12 +36,28 @@ tags:
 
 x-socket-events:
   "@conversation:send":
-    description: Direct messages are checked for blocks in both directions before any message, cache, broadcast, or notification write.
+    description: Direct messages are checked for blocks in both directions. Optional reply_to_message_id must reference a sent message in the same conversation before any insert.
+    payload:
+      $ref: "#/components/schemas/ConversationSendPayload"
     acknowledgement:
       $ref: "#/components/schemas/ConversationSendAcknowledgement"
     errorEvent: "@conversation:error"
     blockedError:
       $ref: "#/components/schemas/ConversationSocketError"
+  "@conversation:receive":
+    description: Emitted to conversation members' personal rooms. The message includes public sender_info, medias_info and a compact reply_to preview.
+    payload:
+      $ref: "#/components/schemas/ConversationMessage"
+  "@message:revoked":
+    description: Emitted to conversation members after the sender atomically replaces a sent message with a payload-free tombstone, refreshes the last-message preview when needed and invalidates its message cache.
+    payload:
+      $ref: "#/components/schemas/MessageRevokedEvent"
+  "@message:deleted":
+    description: Emitted to conversation members after the legacy global delete mutation and cache invalidation.
+  "@message:reacted":
+    description: Emitted to conversation members after a reaction is stored and cache invalidated.
+  "@message:unreacted":
+    description: Emitted to conversation members after the actor's reaction is removed and cache invalidated.
   "@user:block-status-changed":
     description: Emitted to both users after a block or unblock succeeds. Clients refetch the authoritative two-way profile state.
     payload:
@@ -979,6 +995,156 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/conversations/messages/{message_id}:
+    delete:
+      tags:
+        - message
+      summary: Delete a sent message using the legacy global status mutation
+      description: Currently restricted to the sender while they are still a conversation member. Delete-for-me will use a separate contract.
+      operationId: deleteConversationMessage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+      responses:
+        "200":
+          description: Message deleted and member personal rooms synchronized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Invalid message ID or message is not in sent status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller is not a member or is not the sender
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/messages/{message_id}/revoke:
+    post:
+      tags:
+        - message
+      summary: Revoke a sent message for everyone
+      operationId: revokeConversationMessage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+      responses:
+        "200":
+          description: Message revoked and member personal rooms synchronized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Invalid message ID or message is not in sent status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller is not a member or is not the sender
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/messages/{message_id}/react:
+    post:
+      tags:
+        - message
+      summary: React to a sent message
+      operationId: reactToConversationMessage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - emoji
+              properties:
+                emoji:
+                  type: string
+                  minLength: 1
+                  maxLength: 32
+      responses:
+        "200":
+          description: Reaction stored and member personal rooms synchronized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Invalid input or message is not in sent status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags:
+        - message
+      summary: Remove the caller's reaction from a sent message
+      operationId: unreactToConversationMessage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+      responses:
+        "200":
+          description: Reaction removed and member personal rooms synchronized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "403":
+          description: Caller is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/messages/{message_id}/reactions:
+    get:
+      tags:
+        - message
+      summary: Get reaction details for a sent message
+      operationId: getConversationMessageReactions
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+      responses:
+        "200":
+          description: Reaction details retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "403":
+          description: Caller is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 components:
   parameters:
     ConversationId:
@@ -1004,6 +1170,13 @@ components:
         minimum: 1
         maximum: 100
         default: 10
+    MessageId:
+      name: message_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-fA-F0-9]{24}$"
   schemas:
     User:
       type: object
@@ -1082,12 +1255,38 @@ components:
       properties:
         code:
           type: string
-          enum: [DIRECT_MESSAGE_BLOCKED]
+          enum: [DIRECT_MESSAGE_BLOCKED, REPLY_MESSAGE_UNAVAILABLE]
         conversation_id:
           type: string
           pattern: "^[a-fA-F0-9]{24}$"
         message:
           type: string
+
+    ConversationSendPayload:
+      type: object
+      required:
+        - conversation_id
+        - conversation_type
+        - content
+      properties:
+        conversation_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        conversation_type:
+          type: string
+          enum: [direct, group]
+        content:
+          type: string
+        media_ids:
+          type: array
+          maxItems: 4
+          uniqueItems: true
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+        reply_to_message_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
 
     ConversationSendAcknowledgement:
       oneOf:
@@ -1136,6 +1335,19 @@ components:
           items:
             type: string
             pattern: "^[a-fA-F0-9]{24}$"
+
+    MessageRevokedEvent:
+      type: object
+      required:
+        - conversation_id
+        - message_id
+      properties:
+        conversation_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        message_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
 
     GroupUpdatedEvent:
       type: object
@@ -1244,6 +1456,46 @@ components:
           type: string
           enum: [ready]
 
+    MessageSenderInfo:
+      type: object
+      required:
+        - _id
+        - name
+        - username
+      properties:
+        _id:
+          type: string
+        name:
+          type: string
+        username:
+          type: string
+        avatar:
+          type: string
+
+    MessageReplyPreview:
+      type: object
+      required:
+        - _id
+        - sender_info
+        - content
+        - status
+      properties:
+        _id:
+          type: string
+        sender_info:
+          allOf:
+            - $ref: "#/components/schemas/MessageSenderInfo"
+          nullable: true
+        content:
+          type: string
+          maxLength: 140
+        media_type:
+          type: string
+          enum: [image, video, audio]
+        status:
+          type: string
+          enum: [sent, revoked]
+
     ConversationMessage:
       type: object
       required:
@@ -1251,6 +1503,8 @@ components:
         - conversation_id
         - conversation_type
         - sender_id
+        - sender_info
+        - reply_to
         - content
         - media_ids
         - send_at
@@ -1266,6 +1520,17 @@ components:
           enum: [direct, group]
         sender_id:
           type: string
+        sender_info:
+          allOf:
+            - $ref: "#/components/schemas/MessageSenderInfo"
+          nullable: true
+        reply_to_message_id:
+          type: string
+          nullable: true
+        reply_to:
+          allOf:
+            - $ref: "#/components/schemas/MessageReplyPreview"
+          nullable: true
         content:
           type: string
         media_ids:

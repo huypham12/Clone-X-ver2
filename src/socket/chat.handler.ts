@@ -6,10 +6,16 @@ import MediaMetadata from '~/schemas/MediaMetadata.schema'
 import notificationService from '../modules/notification/notification.service'
 import { MediaStatus, MediaType, NotificationType } from '~/constants/enums'
 import { ObjectId } from 'mongodb'
+import { HttpError } from '~/common/http-error'
 import conversationAccessService, {
   DIRECT_MESSAGE_BLOCKED_CODE,
   DIRECT_MESSAGE_BLOCKED_MESSAGE
 } from '~/modules/conversation/conversation-access.service'
+import conversationMessageHydrationService from '~/modules/conversation/conversation-message-hydration.service'
+import conversationMessageAccessService, {
+  REPLY_MESSAGE_UNAVAILABLE_CODE,
+  REPLY_MESSAGE_UNAVAILABLE_MESSAGE
+} from '~/modules/conversation/conversation-message-access.service'
 
 type ConversationType = 'direct' | 'group'
 type MessageMediaType = MediaType.Image | MediaType.Video | MediaType.Audio
@@ -175,6 +181,30 @@ export const chatHandler = (io: Server, socket: Socket) => {
         }
       }
 
+      if (typeof reply_to_message_id === 'string') {
+        try {
+          await conversationMessageAccessService.assertReplyTargetAccess(
+            sender_id.toString(),
+            reply_to_message_id,
+            conversation_id as string,
+            typedConversationType
+          )
+        } catch (error) {
+          if (!(error instanceof HttpError) || error.code !== REPLY_MESSAGE_UNAVAILABLE_CODE) {
+            throw error
+          }
+
+          return socket.emit(
+            '@conversation:error',
+            rejectSend(
+              REPLY_MESSAGE_UNAVAILABLE_CODE,
+              REPLY_MESSAGE_UNAVAILABLE_MESSAGE,
+              conversation_id as string
+            )
+          )
+        }
+      }
+
       const newMessage = new Message({
         _id: new databaseService.ObjectId(),
         conversation_id: convObjectId,
@@ -193,10 +223,10 @@ export const chatHandler = (io: Server, socket: Socket) => {
       // 1. Save to MongoDB
       await databaseService.messages.insertOne(newMessage)
 
-      const messageToBroadcast = {
+      const messageToBroadcast = await conversationMessageHydrationService.hydrateSingleMessage({
         ...newMessage,
         medias_info
-      }
+      })
 
       const firstMediaType = medias_info[0]?.type
       const messageType: MessagePreviewType =
