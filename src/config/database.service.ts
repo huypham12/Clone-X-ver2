@@ -59,13 +59,14 @@ export default class DatabaseService {
       this.indexHashtags(),
       this.indexUserBlocks(),
       this.indexMessages(),
+      this.indexGroupConversations(),
       this.indexNotifications()
     ])
   }
 
-  /** Conversation bootstrap only needs message indexes; avoid rebuilding unrelated legacy indexes. */
-  async createMessageIndexes() {
-    await this.indexMessages()
+  /** Chat bootstrap indexes kept separate from unrelated legacy collections. */
+  async createConversationIndexes() {
+    await Promise.all([this.indexMessages(), this.indexGroupConversations()])
   }
 
   private async indexUsers() {
@@ -168,6 +169,10 @@ export default class DatabaseService {
         { name: 'conversation_status_message_id' }
       )
     }
+  }
+
+  private async indexGroupConversations() {
+    await this.groupConversations.createIndex({ 'members.user_id': 1, _id: -1 })
   }
 
   private async indexNotifications() {

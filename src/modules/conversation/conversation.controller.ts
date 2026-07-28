@@ -13,7 +13,9 @@ import {
   ReactMessageBodyDto,
   type MessagePageData,
   GetMessageContextResponseDto,
-  MessageContextQueryDto
+  MessageContextQueryDto,
+  ConversationLookupQueryDto,
+  GroupConversationLookupResponseDto
 } from './dto'
 import { SearchQueryDto, SearchResponseDto } from '../search/dto'
 import type { TokenPayload } from '~/types/token-payload.type'
@@ -23,6 +25,23 @@ export const getConversationsController: GetHandler<GetConversationsResponseDto>
   const result = await conversationService.getConversations(user_id)
 
   const response = new GetConversationsResponseDto(HTTP_STATUS.OK, 'Get conversations successfully', result)
+  res.status(response.statusCode).json(response)
+}
+
+export const searchGroupConversationsController: GetHandler<
+  GroupConversationLookupResponseDto,
+  Record<string, never>,
+  ConversationLookupQueryDto
+> = async (req, res) => {
+  const { user_id } = req.decoded_authorization as TokenPayload
+  const { q, cursor, limit = 10 } = req.query
+
+  const result = await conversationService.searchGroupConversations(user_id, q, cursor, Number(limit))
+  const response = new GroupConversationLookupResponseDto(
+    HTTP_STATUS.OK,
+    'Search group conversations successfully',
+    result
+  )
   res.status(response.statusCode).json(response)
 }
 
@@ -52,7 +71,20 @@ export const deleteConversationController: DeleteHandler<ConversationResponseDto
 
   const result = await conversationService.deleteConversation(user_id, conversation_id)
   
-  const response = new ConversationResponseDto(HTTP_STATUS.OK, 'Conversation deleted successfully', result)
+  const response = new ConversationResponseDto(HTTP_STATUS.OK, 'Conversation hidden from your inbox successfully', result)
+  res.status(response.statusCode).json(response)
+}
+
+export const unhideConversationController: PostHandler<
+  Record<string, never>,
+  ConversationResponseDto,
+  { conversation_id: string }
+> = async (req, res) => {
+  const { user_id } = req.decoded_authorization as TokenPayload
+  const { conversation_id } = req.params
+
+  const result = await conversationService.unhideConversation(user_id, conversation_id)
+  const response = new ConversationResponseDto(HTTP_STATUS.OK, 'Conversation restored to your inbox successfully', result)
   res.status(response.statusCode).json(response)
 }
 

@@ -43,6 +43,16 @@ export const messageSearchQueryValidator = validate(
   })
 )
 
+export const groupConversationLookupValidator = validate(
+  z.object({
+    query: z.object({
+      q: z.string().trim().min(1, 'Search query cannot be empty').max(100, 'Search query is too long'),
+      cursor: objectIdString.optional(),
+      limit: z.coerce.number().int().min(1).max(20).default(10)
+    })
+  })
+)
+
 export const messageContextValidator = validate(
   z.object({
     params: z.object({

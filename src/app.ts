@@ -50,8 +50,8 @@ const main = async () => {
     await databaseService.connect()
     console.log('Database connected successfully')
 
-    await databaseService.createMessageIndexes()
-    console.log('Message indexes are ready')
+    await databaseService.createConversationIndexes()
+    console.log('Conversation indexes are ready')
 
     await redisService.connect()
 

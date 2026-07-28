@@ -19,6 +19,7 @@ type DirectConversationAggregate = DirectConversation & {
 }
 
 const MESSAGE_QUERY_MAX_TIME_MS = 10000
+const escapeRegularExpression = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 class ConversationService {
   private databaseService: DatabaseService
@@ -131,12 +132,75 @@ class ConversationService {
       })
       await this.databaseService.directConversations.insertOne(newConversation)
       return newConversation
-    } else if (conversation.hidden_by?.some((id) => id.equals(id1) || id.equals(id2))) {
-      // If one of them hidden it, unhide when someone starts chatting again
-      await this.databaseService.directConversations.updateOne({ _id: conversation._id }, { $set: { hidden_by: [] } })
+    } else if (conversation.hidden_by?.some((id) => id.equals(id1))) {
+      // Reopen the conversation only for the authenticated user who initiated this request.
+      await this.databaseService.directConversations.updateOne({ _id: conversation._id }, { $pull: { hidden_by: id1 } })
+
+      conversation.hidden_by = conversation.hidden_by.filter((id) => !id.equals(id1))
     }
 
     return conversation
+  }
+
+  async searchGroupConversations(userId: string, keyword: string, cursor: string | undefined, limit: number) {
+    const objectIdUserId = new this.databaseService.ObjectId(userId)
+    const filter: Filter<GroupConversation> = {
+      'members.user_id': objectIdUserId,
+      name: new RegExp(escapeRegularExpression(keyword.trim()), 'i')
+    }
+
+    if (cursor) {
+      filter._id = { $lt: new this.databaseService.ObjectId(cursor) }
+    }
+
+    const results = await this.databaseService.groupConversations
+      .find(filter)
+      .sort({ _id: -1 })
+      .limit(limit + 1)
+      .toArray()
+    const hasNextPage = results.length > limit
+    const page = hasNextPage ? results.slice(0, limit) : results
+
+    return {
+      groups: page.map((group) => ({
+        _id: group._id.toString(),
+        name: group.name,
+        avatar_url: group.avatar_url,
+        member_count: group.members.length,
+        is_hidden: group.hidden_by?.some((id) => id.equals(objectIdUserId)) ?? false
+      })),
+      next_cursor: hasNextPage ? (page.at(-1)?._id.toString() ?? null) : null,
+      has_next_page: hasNextPage
+    }
+  }
+
+  async unhideConversation(userId: string, conversationId: string) {
+    const objectIdUserId = new this.databaseService.ObjectId(userId)
+    const conversationObjectId = new this.databaseService.ObjectId(conversationId)
+    const access = await conversationAccessService.assertConversationMember(userId, conversationId)
+
+    const result =
+      access.type === 'direct'
+        ? await this.databaseService.directConversations.updateOne(
+            {
+              _id: conversationObjectId,
+              $or: [{ user1_id: objectIdUserId }, { user2_id: objectIdUserId }]
+            },
+            { $pull: { hidden_by: objectIdUserId } }
+          )
+        : await this.databaseService.groupConversations.updateOne(
+            {
+              _id: conversationObjectId,
+              'members.user_id': objectIdUserId
+            },
+            { $pull: { hidden_by: objectIdUserId } }
+          )
+
+    if (result.matchedCount === 0) {
+      throw new HttpError('You are no longer a member of this conversation', HTTP_STATUS.FORBIDDEN)
+    }
+
+    return { success: true }
   }
 
   async createGroupConversation(userId: string, name: string, membersIds: string[], avatar_url?: string) {

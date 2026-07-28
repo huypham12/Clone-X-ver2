@@ -50,9 +50,11 @@ Dưới đây là danh sách tất cả các API Endpoints được trích xuấ
 *Quản lý tính năng trò chuyện, bao gồm Chat 1-1 và Chat Group, cùng với tin nhắn.*
 Các endpoint có `conversation_id` chỉ cho phép thành viên của hội thoại truy cập hoặc thay đổi dữ liệu; người dùng đã xác thực nhưng không phải thành viên nhận `403 Forbidden`.
 - `GET /`: Lấy danh sách các hội thoại (Conversations) hiện có của người dùng.
+- `GET /groups/search?q=...&cursor=...&limit=10`: Tìm theo tên trong các group mà người gọi vẫn là thành viên, bao gồm group người gọi đã ẩn; trả cursor và tối đa 20 kết quả mỗi trang.
 - `POST /direct/:receiver_id`: Mở hoặc tạo một hội thoại nhắn tin trực tiếp 1-1 với người dùng khác.
 - `POST /group`: Tạo một hội thoại nhóm (Group Conversation).
-- `DELETE /:conversation_id`: Xóa toàn bộ hội thoại.
+- `DELETE /:conversation_id`: Ẩn hội thoại khỏi hộp thư của người gọi. Thao tác này không xóa lịch sử phía thành viên khác; tin nhắn mới không tự làm hội thoại xuất hiện lại.
+- `POST /:conversation_id/unhide`: Chủ động đưa hội thoại trở lại hộp thư; yêu cầu membership và chỉ `$pull` người gọi khỏi `hidden_by`.
 - `PATCH /:conversation_id`: Cập nhật thông tin nhóm (đổi tên nhóm, thay đổi ảnh đại diện nhóm) hoặc đổi biệt danh (nickname).
 - `GET /:conversation_id/members`: Lấy danh sách thành viên trong nhóm.
 - `POST /:conversation_id/members`: Thêm thành viên mới vào nhóm.

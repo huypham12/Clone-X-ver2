@@ -4,9 +4,11 @@ import { authenticateAccessToken } from '~/middleware/verify.middleware'
 import { accessTokenValidator } from '../auth/auth.validator'
 import { 
   getConversationsController,
+  searchGroupConversationsController,
   getDirectConversationController,
   createGroupConversationController,
   deleteConversationController,
+  unhideConversationController,
   getMessagesController,
   getMessageContextController,
   markReadController,
@@ -42,7 +44,8 @@ import {
   messageSearchQueryValidator,
   muteConversationValidator,
   unmuteConversationValidator,
-  messageContextValidator
+  messageContextValidator,
+  groupConversationLookupValidator
 } from './conversation.validator'
 
 const conversationRouter = Router()
@@ -54,6 +57,12 @@ conversationRouter.use(accessTokenValidator, authenticateAccessToken)
 conversationRouter.get(
   '/', 
   wrapController(getConversationsController)
+)
+
+conversationRouter.get(
+  '/groups/search',
+  groupConversationLookupValidator,
+  wrapController(searchGroupConversationsController)
 )
 
 conversationRouter.post(
@@ -72,6 +81,12 @@ conversationRouter.delete(
   '/:conversation_id',
   conversationIdParamValidator,
   wrapController(deleteConversationController)
+)
+
+conversationRouter.post(
+  '/:conversation_id/unhide',
+  conversationIdParamValidator,
+  wrapController(unhideConversationController)
 )
 
 conversationRouter.post(

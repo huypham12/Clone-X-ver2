@@ -26,6 +26,26 @@ export interface MessageContextData {
   newer_cursor: string | null
 }
 
+export interface ConversationLookupQueryDto {
+  q: string
+  cursor?: string
+  limit: number
+}
+
+export interface GroupConversationLookupItem {
+  _id: string
+  name: string
+  avatar_url?: string
+  member_count: number
+  is_hidden: boolean
+}
+
+export interface GroupConversationLookupPage {
+  groups: GroupConversationLookupItem[]
+  next_cursor: string | null
+  has_next_page: boolean
+}
+
 export class CreateGroupConversationBodyDto {
   constructor(
     public name: string,
@@ -74,6 +94,12 @@ export class GetMessagesResponseDto extends SuccessResponseDto<MessagePageData> 
 
 export class GetMessageContextResponseDto extends SuccessResponseDto<MessageContextData> {
   constructor(statusCode: number, message: string, data: MessageContextData) {
+    super(statusCode, message, data)
+  }
+}
+
+export class GroupConversationLookupResponseDto extends SuccessResponseDto<GroupConversationLookupPage> {
+  constructor(statusCode: number, message: string, data: GroupConversationLookupPage) {
     super(statusCode, message, data)
   }
 }

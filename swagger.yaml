@@ -420,6 +420,139 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/conversations/groups/search:
+    get:
+      tags:
+        - conversation
+      summary: Search the authenticated user's group conversations
+      description: Searches visible and hidden groups by name. Only groups where the authenticated user is still a member are returned. This endpoint does not restore hidden groups.
+      operationId: searchGroupConversations
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 100
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+            default: 10
+      responses:
+        "200":
+          description: Matching group conversations retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupConversationLookupPageResponse"
+        "400":
+          description: Invalid search query, cursor, or limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}:
+    delete:
+      tags:
+        - conversation
+      summary: Hide a conversation from your inbox
+      description: Hides the conversation only for the authenticated member. It does not delete message history for other members, and receiving new messages does not restore it. The authenticated member must explicitly find and reopen it.
+      operationId: hideConversationFromInbox
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Conversation hidden from the authenticated user's inbox
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      message:
+                        example: "Conversation hidden from your inbox successfully"
+                      data:
+                        type: object
+                        required:
+                          - success
+                        properties:
+                          success:
+                            type: boolean
+                            example: true
+        "403":
+          description: The authenticated user is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/unhide:
+    post:
+      tags:
+        - conversation
+      summary: Restore a conversation to your inbox
+      description: Removes only the authenticated member from hidden_by. The operation is idempotent and does not change another member's hidden state.
+      operationId: unhideConversation
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Conversation restored to the authenticated user's inbox
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      message:
+                        example: "Conversation restored to your inbox successfully"
+                      data:
+                        type: object
+                        required:
+                          - success
+                        properties:
+                          success:
+                            type: boolean
+                            example: true
+        "403":
+          description: The authenticated user is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/conversations/{conversation_id}/messages:
     get:
       tags:
@@ -663,6 +796,53 @@ components:
       required:
         - statusCode
         - message
+
+    GroupConversationLookupItem:
+      type: object
+      required:
+        - _id
+        - name
+        - member_count
+        - is_hidden
+      properties:
+        _id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        name:
+          type: string
+        avatar_url:
+          type: string
+          format: uri
+        member_count:
+          type: integer
+          minimum: 1
+        is_hidden:
+          type: boolean
+
+    GroupConversationLookupPageResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              type: object
+              required:
+                - groups
+                - next_cursor
+                - has_next_page
+              properties:
+                groups:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/GroupConversationLookupItem"
+                next_cursor:
+                  type: string
+                  nullable: true
+                  pattern: "^[a-fA-F0-9]{24}$"
+                has_next_page:
+                  type: boolean
 
     MediaMetadata:
       type: object
