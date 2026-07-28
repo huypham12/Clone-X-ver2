@@ -6,6 +6,16 @@ import type MediaMetadata from '~/schemas/MediaMetadata.schema'
 import type { ObjectId } from 'mongodb'
 import { MediaType } from '~/constants/enums'
 
+export type MessageReactionEmoji = string
+
+const messageReactionSegmenter = new Intl.Segmenter('en', { granularity: 'grapheme' })
+const messageReactionEmojiPattern = /(?:\p{Emoji_Presentation}|\p{Regional_Indicator}|\uFE0F|\u20E3)/u
+
+export const isMessageReactionEmoji = (value: string): value is MessageReactionEmoji =>
+  value.length <= 64 &&
+  [...messageReactionSegmenter.segment(value)].length === 1 &&
+  messageReactionEmojiPattern.test(value)
+
 export type ConversationMediaInfo = Pick<
   MediaMetadata,
   '_id' | 'url' | 'thumbnail' | 'type' | 'status' | 'created_at' | 'updated_at'
@@ -34,6 +44,26 @@ export interface MessageRevokedEvent {
 }
 
 export interface MessageDeletedForMeEvent {
+  conversation_id: string
+  message_id: string
+}
+
+export interface MessageReactionItem {
+  emoji: MessageReactionEmoji
+  user_id: string
+}
+
+export interface MessageReactionSummaryItem {
+  emoji: MessageReactionEmoji
+  count: number
+}
+
+export interface MessageReactionState {
+  reactions: MessageReactionItem[]
+  summary: MessageReactionSummaryItem[]
+}
+
+export interface MessageReactionUpdatedEvent extends MessageReactionState {
   conversation_id: string
   message_id: string
 }
@@ -91,7 +121,7 @@ export class CreateGroupConversationBodyDto {
 }
 
 export class ReactMessageBodyDto {
-  constructor(public emoji: string) {}
+  constructor(public emoji: MessageReactionEmoji) {}
 }
 
 export class PaginationQueryDto {

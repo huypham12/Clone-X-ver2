@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { validate } from '~/modules/user/user.validator'
 import { ObjectId } from 'mongodb'
+import { isMessageReactionEmoji } from './dto'
 
 const objectIdString = z.string().refine((value) => ObjectId.isValid(value), { message: 'Invalid ID format' })
 const conversationType = z.enum(['direct', 'group'])
@@ -94,9 +95,15 @@ export const reactMessageValidator = validate(
     params: z.object({
       message_id: objectIdString
     }),
-    body: z.object({
-      emoji: z.string().trim().min(1, 'Emoji is required').max(32, 'Emoji is too long')
-    })
+    body: z
+      .object({
+        emoji: z
+          .string()
+          .min(1, 'Emoji is required')
+          .max(64, 'Emoji is too long')
+          .refine(isMessageReactionEmoji, { message: 'Reaction must be exactly one emoji' })
+      })
+      .strict()
   })
 )
 

@@ -56,10 +56,10 @@ x-socket-events:
     description: Emitted only to the actor's personal room after delete-for-me succeeds and the shared message cache is invalidated.
     payload:
       $ref: "#/components/schemas/MessageRevokedEvent"
-  "@message:reacted":
-    description: Emitted to conversation members after a reaction is stored and cache invalidated.
-  "@message:unreacted":
-    description: Emitted to conversation members after the actor's reaction is removed and cache invalidated.
+  "@message:reaction-updated":
+    description: Emitted to conversation members' personal rooms after an atomic react, change or unreact operation and cache invalidation.
+    payload:
+      $ref: "#/components/schemas/MessageReactionUpdatedEvent"
   "@user:block-status-changed":
     description: Emitted to both users after a block or unblock succeeds. Clients refetch the authoritative two-way profile state.
     payload:
@@ -1080,14 +1080,16 @@ paths:
                 emoji:
                   type: string
                   minLength: 1
-                  maxLength: 32
+                  maxLength: 64
+                  description: Exactly one Unicode emoji grapheme.
+              additionalProperties: false
       responses:
         "200":
           description: Reaction stored and member personal rooms synchronized
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SuccessResponse"
+                $ref: "#/components/schemas/MessageReactionStateResponse"
         "400":
           description: Invalid input or message is not in sent status
           content:
@@ -1115,7 +1117,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SuccessResponse"
+                $ref: "#/components/schemas/MessageReactionStateResponse"
         "403":
           description: Caller is not a conversation member
           content:
@@ -1139,7 +1141,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SuccessResponse"
+                $ref: "#/components/schemas/MessageReactionDetailsResponse"
         "403":
           description: Caller is not a conversation member
           content:
@@ -1351,6 +1353,105 @@ components:
           type: string
           pattern: "^[a-fA-F0-9]{24}$"
 
+    MessageReaction:
+      type: object
+      additionalProperties: false
+      required:
+        - emoji
+        - user_id
+      properties:
+        emoji:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Exactly one Unicode emoji grapheme.
+        user_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+
+    MessageReactionSummaryItem:
+      type: object
+      additionalProperties: false
+      required:
+        - emoji
+        - count
+      properties:
+        emoji:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Exactly one Unicode emoji grapheme.
+        count:
+          type: integer
+          minimum: 1
+
+    MessageReactionState:
+      type: object
+      required:
+        - reactions
+        - summary
+      properties:
+        reactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/MessageReaction"
+        summary:
+          type: array
+          items:
+            $ref: "#/components/schemas/MessageReactionSummaryItem"
+
+    MessageReactionUpdatedEvent:
+      allOf:
+        - $ref: "#/components/schemas/MessageReactionState"
+        - type: object
+          required:
+            - conversation_id
+            - message_id
+          properties:
+            conversation_id:
+              type: string
+              pattern: "^[a-fA-F0-9]{24}$"
+            message_id:
+              type: string
+              pattern: "^[a-fA-F0-9]{24}$"
+
+    MessageReactionStateResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              $ref: "#/components/schemas/MessageReactionState"
+
+    MessageReactionDetail:
+      type: object
+      additionalProperties: false
+      required:
+        - emoji
+        - user
+      properties:
+        emoji:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Exactly one Unicode emoji grapheme.
+        user:
+          $ref: "#/components/schemas/MessageSenderInfo"
+
+    MessageReactionDetailsResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/MessageReactionDetail"
+
     GroupUpdatedEvent:
       type: object
       required:
@@ -1552,8 +1653,7 @@ components:
         reactions:
           type: array
           items:
-            type: object
-            additionalProperties: true
+            $ref: "#/components/schemas/MessageReaction"
     MessagePageData:
       type: object
       required:

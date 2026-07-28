@@ -2,6 +2,7 @@ import { Filter, ObjectId } from 'mongodb'
 import DatabaseService from '~/config/database.service'
 import { MediaType } from '~/constants/enums'
 import type Message from '~/schemas/Message.schema'
+import { isMessageReactionEmoji } from './dto'
 import type {
   HydratedMessage,
   MessageReplyMediaType,
@@ -156,6 +157,7 @@ export class ConversationMessageHydrationService {
 
       return {
         ...publicMessage,
+        reactions: publicMessage.reactions.filter((reaction) => isMessageReactionEmoji(reaction.emoji)),
         sender_info: senderInfoById.get(message.sender_id.toString()) ?? null,
         reply_to: replyTo
       }

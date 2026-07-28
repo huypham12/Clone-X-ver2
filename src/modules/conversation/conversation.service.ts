@@ -13,11 +13,15 @@ import conversationAccessService, { type ConversationType } from './conversation
 import conversationMessageAccessService from './conversation-message-access.service'
 import conversationMessageHydrationService from './conversation-message-hydration.service'
 import conversationMessageSyncService from './conversation-message-sync.service'
-import type {
-  MessageContextData,
-  MessageDeletedForMeEvent,
-  MessageRevokedEvent,
-  MessageWithMediaInfo
+import {
+  isMessageReactionEmoji,
+  type MessageContextData,
+  type MessageDeletedForMeEvent,
+  type MessageReactionEmoji,
+  type MessageReactionState,
+  type MessageReactionUpdatedEvent,
+  type MessageRevokedEvent,
+  type MessageWithMediaInfo
 } from './dto'
 
 type ConversationPartner = Pick<User, '_id' | 'name' | 'username' | 'avatar'>
@@ -43,6 +47,23 @@ const escapeRegularExpression = (value: string) => value.replace(/[.*+?^${}()|[\
 const isMessageVisibleToUser = (message: MessageWithMediaInfo, userId: string) =>
   message.status !== 'deleted' &&
   !message.deleted_by?.some((deletedByUserId) => deletedByUserId.toString() === userId)
+const createMessageReactionState = (reactions: Message['reactions']): MessageReactionState => {
+  const publicReactions = reactions.flatMap((reaction) =>
+    isMessageReactionEmoji(reaction.emoji)
+      ? [{ emoji: reaction.emoji, user_id: reaction.user_id.toString() }]
+      : []
+  )
+  const counts = new Map<MessageReactionEmoji, number>()
+
+  publicReactions.forEach((reaction) => {
+    counts.set(reaction.emoji, (counts.get(reaction.emoji) ?? 0) + 1)
+  })
+
+  return {
+    reactions: publicReactions,
+    summary: [...counts].map(([emoji, count]) => ({ emoji, count }))
+  }
+}
 
 class ConversationService {
   private databaseService: DatabaseService
@@ -745,42 +766,65 @@ class ConversationService {
     return { success: true }
   }
 
-  async reactMessage(userId: string, messageId: string, emoji: string) {
+  async reactMessage(userId: string, messageId: string, emoji: MessageReactionEmoji) {
+    if (!isMessageReactionEmoji(emoji)) {
+      throw new HttpError('Unsupported reaction emoji', HTTP_STATUS.BAD_REQUEST)
+    }
+
     const objectIdUserId = new this.databaseService.ObjectId(userId)
     const msgId = new this.databaseService.ObjectId(messageId)
-
-    const reaction = { emoji, user_id: objectIdUserId }
 
     const { message, conversation } = await conversationMessageAccessService.assertMessageAccess(
       userId,
       messageId,
-      { allowedStatuses: ['sent'] }
+      { requireVisibleToUser: true, allowedStatuses: ['sent'] }
     )
-
-    // Xóa reaction cũ của user này nếu có (nếu thiết kế 1 người 1 reaction), hoặc cứ push. Ở đây push.
-    await this.databaseService.messages.updateOne(
-      { _id: msgId },
-      { $pull: { reactions: { user_id: objectIdUserId } } as any } // Xóa cũ
+    const reactionUpdatePipeline: Document[] = [
+      {
+        $set: {
+          reactions: {
+            $concatArrays: [
+              {
+                $filter: {
+                  input: { $ifNull: ['$reactions', []] },
+                  as: 'reaction',
+                  cond: { $ne: ['$$reaction.user_id', objectIdUserId] }
+                }
+              },
+              [{ emoji, user_id: objectIdUserId }]
+            ]
+          }
+        }
+      }
+    ]
+    const updatedMessage = await this.databaseService.messages.findOneAndUpdate(
+      {
+        _id: msgId,
+        status: 'sent',
+        deleted_by: { $ne: objectIdUserId }
+      },
+      reactionUpdatePipeline,
+      { returnDocument: 'after', projection: { reactions: 1 } }
     )
-
-    await this.databaseService.messages.updateOne(
-      { _id: msgId },
-      { $push: { reactions: reaction } as any } // Thêm mới
-    )
+    if (!updatedMessage) {
+      throw new HttpError('Message state changed before it could be reacted to', HTTP_STATUS.CONFLICT)
+    }
 
     const conversationId = message.conversation_id.toString()
+    const reactionState = createMessageReactionState(updatedMessage.reactions)
+    const reactionEvent: MessageReactionUpdatedEvent = {
+      conversation_id: conversationId,
+      message_id: messageId,
+      ...reactionState
+    }
     await conversationMessageSyncService.syncConversationAction(
       conversationId,
       conversation.memberIds,
-      '@message:reacted',
-      {
-        conversation_id: conversationId,
-        message_id: messageId,
-        reaction: { emoji, user_id: userId }
-      }
+      '@message:reaction-updated',
+      reactionEvent
     )
 
-    return { success: true }
+    return reactionState
   }
 
   async pinConversation(userId: string, conversationId: string) {
@@ -1334,23 +1378,49 @@ class ConversationService {
     const { message, conversation } = await conversationMessageAccessService.assertMessageAccess(
       userId,
       messageId,
-      { allowedStatuses: ['sent'] }
+      { requireVisibleToUser: true, allowedStatuses: ['sent'] }
     )
-
-    await this.databaseService.messages.updateOne(
-      { _id: msgId },
-      { $pull: { reactions: { user_id: objectIdUserId } } as any }
+    const reactionUpdatePipeline: Document[] = [
+      {
+        $set: {
+          reactions: {
+            $filter: {
+              input: { $ifNull: ['$reactions', []] },
+              as: 'reaction',
+              cond: { $ne: ['$$reaction.user_id', objectIdUserId] }
+            }
+          }
+        }
+      }
+    ]
+    const updatedMessage = await this.databaseService.messages.findOneAndUpdate(
+      {
+        _id: msgId,
+        status: 'sent',
+        deleted_by: { $ne: objectIdUserId }
+      },
+      reactionUpdatePipeline,
+      { returnDocument: 'after', projection: { reactions: 1 } }
     )
+    if (!updatedMessage) {
+      throw new HttpError('Message state changed before its reaction could be removed', HTTP_STATUS.CONFLICT)
+    }
 
     const conversationId = message.conversation_id.toString()
+    const reactionState = createMessageReactionState(updatedMessage.reactions)
+    const reactionEvent: MessageReactionUpdatedEvent = {
+      conversation_id: conversationId,
+      message_id: messageId,
+      ...reactionState
+    }
     await conversationMessageSyncService.syncConversationAction(
       conversationId,
       conversation.memberIds,
-      '@message:unreacted',
-      { conversation_id: conversationId, message_id: messageId, user_id: userId }
+      '@message:reaction-updated',
+      reactionEvent
     )
 
-    return { success: true }
+    return reactionState
   }
 
   async getMessageReactions(userId: string, messageId: string) {
@@ -1365,6 +1435,7 @@ class ConversationService {
         {
           $match: {
             _id: msgId,
+            status: 'sent',
             deleted_by: { $ne: new this.databaseService.ObjectId(userId) }
           }
         },
@@ -1380,6 +1451,7 @@ class ConversationService {
         { $unwind: '$userInfo' },
         {
           $project: {
+            _id: 0,
             emoji: '$reactions.emoji',
             user: {
               _id: '$userInfo._id',
@@ -1392,7 +1464,7 @@ class ConversationService {
       ])
       .toArray()
 
-    return message
+    return message.filter((reaction) => isMessageReactionEmoji(reaction.emoji))
   }
 
   async forwardMessage(userId: string, messageId: string, conversationIds: string[]) {
