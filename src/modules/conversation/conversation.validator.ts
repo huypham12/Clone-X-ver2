@@ -105,7 +105,7 @@ export const updateGroupValidator = validate(
       conversation_id: z.string().refine((val) => ObjectId.isValid(val), { message: 'Invalid ID format' })
     }),
     body: z.object({
-      name: z.string().max(100).optional(),
+      name: z.string().trim().min(1, 'Group name is required').max(100).optional(),
       avatar_url: z.string().url().optional()
     })
   })
@@ -117,7 +117,21 @@ export const addMembersValidator = validate(
       conversation_id: z.string().refine((val) => ObjectId.isValid(val), { message: 'Invalid ID format' })
     }),
     body: z.object({
-      members: z.array(z.string().refine((val) => ObjectId.isValid(val), { message: 'Invalid member ID' })).min(1, 'At least one member is required')
+      members: z
+        .array(z.string().refine((val) => ObjectId.isValid(val), { message: 'Invalid member ID' }))
+        .min(1, 'At least one member is required')
+        .refine((members) => new Set(members).size === members.length, {
+          message: 'Member IDs must be unique'
+        })
+    })
+  })
+)
+
+export const groupMemberParamsValidator = validate(
+  z.object({
+    params: z.object({
+      conversation_id: objectIdString,
+      user_id: objectIdString
     })
   })
 )

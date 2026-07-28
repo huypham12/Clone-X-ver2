@@ -8,6 +8,17 @@ import { Follower, User, UserBlock } from '~/schemas'
 import { NotificationType, TweetType } from '~/constants/enums'
 import notificationService from '../notification/notification.service'
 import { getParentTweetLookupStages, getIsRetweetedLookupStages } from '~/utils/aggregation'
+import { getIO } from '~/socket'
+
+const emitBlockStatusChanged = (firstUserId: string, secondUserId: string) => {
+  try {
+    getIO().to([firstUserId, secondUserId]).emit('@user:block-status-changed', {
+      user_ids: [firstUserId, secondUserId]
+    })
+  } catch (error) {
+    console.error('Could not emit user block status change:', error)
+  }
+}
 
 export class UserService {
   constructor(private readonly databaseService: DatabaseService) {}
@@ -55,17 +66,20 @@ export class UserService {
 
     let is_following = false
     let is_blocked = false
+    let is_blocked_by_user = false
     
     if (current_user_id) {
-       const [following, blocked] = await Promise.all([
+       const [following, blocked, blockedByUser] = await Promise.all([
           this.databaseService.followers.findOne({ follow_user_id: new ObjectId(current_user_id), followed_user_id: user._id }),
-          this.databaseService.userBlocks.findOne({ user_id: new ObjectId(current_user_id), blocked_user_id: user._id })
+          this.databaseService.userBlocks.findOne({ user_id: new ObjectId(current_user_id), blocked_user_id: user._id }),
+          this.databaseService.userBlocks.findOne({ user_id: user._id, blocked_user_id: new ObjectId(current_user_id) })
        ])
        is_following = !!following
        is_blocked = !!blocked
+       is_blocked_by_user = !!blockedByUser
     }
 
-    return { ...user, is_following, is_blocked }
+    return { ...user, is_following, is_blocked, is_blocked_by_user }
   }
 
   // partial biến tất cả thuộc tính thành optional
@@ -108,20 +122,22 @@ export class UserService {
       throw new HttpError(MESSAGES.CANNOT_BLOCK_YOURSELF, HTTP_STATUS.BAD_REQUEST)
     }
 
-    // Check if already blocked
-    const existingBlock = await this.databaseService.userBlocks.findOne({
-      user_id: new ObjectId(user_id),
-      blocked_user_id: user._id // lấy _id bên trên để tìm
+    const userObjectId = new ObjectId(user_id)
+    const blockedUser = new UserBlock({
+      user_id: userObjectId,
+      blocked_user_id: user._id
     })
-    if (existingBlock) {
+    const result = await this.databaseService.userBlocks.updateOne(
+      { user_id: userObjectId, blocked_user_id: user._id },
+      { $setOnInsert: blockedUser },
+      { upsert: true }
+    )
+
+    if (result.upsertedCount === 0) {
       throw new HttpError(MESSAGES.USER_BLOCKED, HTTP_STATUS.CONFLICT)
     }
 
-    const blockedUser = new UserBlock({
-      user_id: new ObjectId(user_id),
-      blocked_user_id: user._id
-    })
-    await this.databaseService.userBlocks.insertOne(blockedUser)
+    emitBlockStatusChanged(user_id, blocked_user_id)
   }
 
   unblockUser = async (user_id: string, blocked_user_id: string) => {
@@ -131,19 +147,16 @@ export class UserService {
       throw new HttpError(MESSAGES.USER_NOT_FOUND, HTTP_STATUS.NOT_FOUND)
     }
 
-    // Kiểm tra xem đã block hay chưa
-    const existingBlock = await this.databaseService.userBlocks.findOne({
+    const result = await this.databaseService.userBlocks.deleteMany({
       user_id: new ObjectId(user_id),
       blocked_user_id: user._id
     })
-    if (!existingBlock) {
+
+    if (result.deletedCount === 0) {
       throw new HttpError(MESSAGES.USER_NOT_BLOCKED, HTTP_STATUS.BAD_REQUEST)
     }
 
-    await this.databaseService.userBlocks.deleteOne({
-      user_id: new ObjectId(user_id),
-      blocked_user_id: user._id
-    })
+    emitBlockStatusChanged(user_id, blocked_user_id)
   }
 
   getBlockedUsers = async (user_id: string): Promise<UserPublicDTO[]> => {

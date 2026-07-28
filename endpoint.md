@@ -18,10 +18,10 @@ Dưới đây là danh sách tất cả các API Endpoints được trích xuấ
 ## 2. User Module (`/users`)
 *Quản lý thông tin hồ sơ và mạng lưới theo dõi (Follow/Block).*
 - `GET /me`: Lấy thông tin cá nhân của người dùng hiện tại.
-- `GET /profile/:username`: Lấy thông tin hồ sơ công khai của một người dùng dựa theo username.
+- `GET /profile/:username`: Lấy thông tin hồ sơ công khai. Khi có đăng nhập, response có `is_blocked` (người gọi đã chặn profile) và `is_blocked_by_user` (profile đã chặn người gọi).
 - `PATCH /me`: Cập nhật thông tin cá nhân (ảnh đại diện, tiểu sử,...).
-- `POST /:blocked_user_id/block`: Chặn một người dùng.
-- `DELETE /:blocked_user_id/block`: Bỏ chặn một người dùng.
+- `POST /:blocked_user_id/block`: Chặn một người dùng; cả hai chiều không thể gửi direct message mới, lịch sử cũ vẫn được giữ. Cặp block có unique index và được ghi bằng atomic upsert để không tạo bản ghi trùng khi request đồng thời.
+- `DELETE /:blocked_user_id/block`: Bỏ chặn một người dùng; direct message chỉ hoạt động lại nếu chiều còn lại cũng không có block. Server xóa toàn bộ bản ghi trùng cũ của đúng cặp này nếu dữ liệu legacy còn sót.
 - `GET /blocked-users`: Lấy danh sách các người dùng đã bị chặn.
 - `POST /:followed_user_id/follow`: Bắt đầu theo dõi một người dùng.
 - `DELETE /:followed_user_id/follow`: Bỏ theo dõi một người dùng.
@@ -51,15 +51,15 @@ Dưới đây là danh sách tất cả các API Endpoints được trích xuấ
 Các endpoint có `conversation_id` chỉ cho phép thành viên của hội thoại truy cập hoặc thay đổi dữ liệu; người dùng đã xác thực nhưng không phải thành viên nhận `403 Forbidden`.
 - `GET /`: Lấy danh sách các hội thoại (Conversations) hiện có của người dùng.
 - `GET /groups/search?q=...&cursor=...&limit=10`: Tìm theo tên trong các group mà người gọi vẫn là thành viên, bao gồm group người gọi đã ẩn; trả cursor và tối đa 20 kết quả mỗi trang.
-- `POST /direct/:receiver_id`: Mở hoặc tạo một hội thoại nhắn tin trực tiếp 1-1 với người dùng khác.
+- `POST /direct/:receiver_id`: Mở hoặc tạo một hội thoại nhắn tin trực tiếp 1-1; trả `403` và không tạo/mở lại hội thoại nếu có block theo bất kỳ chiều nào.
 - `POST /group`: Tạo một hội thoại nhóm (Group Conversation).
 - `DELETE /:conversation_id`: Ẩn hội thoại khỏi hộp thư của người gọi. Thao tác này không xóa lịch sử phía thành viên khác; tin nhắn mới không tự làm hội thoại xuất hiện lại.
 - `POST /:conversation_id/unhide`: Chủ động đưa hội thoại trở lại hộp thư; yêu cầu membership và chỉ `$pull` người gọi khỏi `hidden_by`.
-- `PATCH /:conversation_id`: Cập nhật thông tin nhóm (đổi tên nhóm, thay đổi ảnh đại diện nhóm) hoặc đổi biệt danh (nickname).
-- `GET /:conversation_id/members`: Lấy danh sách thành viên trong nhóm.
-- `POST /:conversation_id/members`: Thêm thành viên mới vào nhóm.
-- `DELETE /:conversation_id/members/:user_id`: Kích/Xóa một thành viên khỏi nhóm (dành cho trưởng nhóm).
-- `DELETE /:conversation_id/leave`: Rời khỏi nhóm chat (tự chủ động rời).
+- `PATCH /:conversation_id`: Cập nhật tên/avatar nhóm; chỉ member có role `admin` được phép gọi.
+- `GET /:conversation_id/members`: Lấy danh sách thành viên trong nhóm; yêu cầu người gọi vẫn là member và response không chứa thông tin user nhạy cảm.
+- `POST /:conversation_id/members`: Một member hiện tại thêm những user mà chính họ đang follow vào nhóm. Input không được lặp ID; backend kiểm tra membership + following và thêm toàn bộ danh sách bằng một update pipeline nguyên tử so sánh theo `members.user_id`, nên không có trạng thái thành công một phần hoặc member trùng khi request đồng thời. Event membership chỉ đồng bộ cache/realtime; chưa tạo system message/notification.
+- `DELETE /:conversation_id/members/:user_id`: Admin xóa một member khác. Admin không được tự xóa qua route này và phải dùng route leave.
+- `DELETE /:conversation_id/leave`: Member tự rời nhóm. Sole admin nhận `409 GROUP_SOLE_ADMIN_CANNOT_LEAVE` nếu nhóm vẫn còn member khác; hiện chưa có cơ chế chuyển quyền admin.
 - `POST /:conversation_id/pin`: Ghim một hội thoại lên đầu danh sách.
 - `DELETE /:conversation_id/pin`: Bỏ ghim một hội thoại.
 - `GET /:conversation_id/messages`: Lấy danh sách các tin nhắn trong một hội thoại, kèm `medias_info` của message.
@@ -76,6 +76,17 @@ Các endpoint có `conversation_id` chỉ cho phép thành viên của hội tho
 - `POST /messages/:message_id/forward`: Chuyển tiếp message trạng thái `sent`; người gọi phải là thành viên của conversation nguồn và mọi conversation đích.
 - `POST /:conversation_id/mute`: Tắt thông báo với body `{ type, duration_hours? }`; duration hỗ trợ 1, 8, 24 giờ hoặc bỏ trống để mute vô thời hạn.
 - `DELETE /:conversation_id/mute?type=direct|group`: Bật lại thông báo cho hội thoại đã tắt.
+
+### Socket conversation
+
+- `@conversation:send`: Với direct conversation, server kiểm tra block hai chiều trước khi đọc media, ghi message, cập nhật conversation/Redis, broadcast hoặc tạo notification. Client có thể truyền acknowledgement callback; server trả `{ success: true, message_id }` sau khi message đã được lưu, cập nhật cache và broadcast, hoặc `{ success: false, error }` nếu bị từ chối. Frontend chỉ xóa draft/media sau acknowledgement thành công.
+- Với group send, server kiểm tra lại membership ngay trước insert và tải lại danh sách member ngay trước broadcast/notification để người vừa bị remove không tiếp tục nằm trong recipients đã chụp trước đó. Forward cũng kiểm tra lại source/target membership ngay trước khi ghi.
+- `@conversation:error`: Lỗi nghiệp vụ có payload `{ code, conversation_id, message }`. Code `DIRECT_MESSAGE_BLOCKED` cho biết direct message bị từ chối vì tồn tại block theo một trong hai chiều; frontend không cần parse chuỗi `message`.
+- `@user:block-status-changed`: Gửi tới personal room của cả hai user sau khi block/unblock thành công, payload `{ user_ids: string[] }`; client phải invalidate/refetch profile để lấy trạng thái hai chiều có thẩm quyền từ server.
+- `@conversation:group-updated`: Gửi tới personal rooms của các member cũ/mới liên quan sau khi đổi thông tin hoặc add/remove/leave, payload `{ conversation_id, change_type, actor_id, affected_user_ids }`. Sau mutation membership, server xóa ngay cache legacy `conv_members:<conversation_id>` trước khi emit.
+- Forward vào direct conversation cũng bị từ chối toàn bộ trước khi ghi nếu một target direct có block. Typing direct không được chuyển tới người còn lại khi có block.
+
+HTTP error response có trường optional `code`. Các lỗi group ổn định hiện có: `GROUP_ADMIN_CANNOT_REMOVE_SELF` và `GROUP_SOLE_ADMIN_CANNOT_LEAVE`; frontend không cần parse `message`.
 
 ## 5. Search Module (`/search`)
 *Hệ thống tìm kiếm chung.*

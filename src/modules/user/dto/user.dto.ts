@@ -18,6 +18,7 @@ export interface UserPublicDTO {
   following_count?: number
   is_following?: boolean
   is_blocked?: boolean
+  is_blocked_by_user?: boolean
 }
 
 export interface UserPrivateDTO extends UserPublicDTO {

@@ -45,7 +45,8 @@ import {
   muteConversationValidator,
   unmuteConversationValidator,
   messageContextValidator,
-  groupConversationLookupValidator
+  groupConversationLookupValidator,
+  groupMemberParamsValidator
 } from './conversation.validator'
 
 const conversationRouter = Router()
@@ -121,7 +122,7 @@ conversationRouter.post(
 
 conversationRouter.delete(
   '/:conversation_id/members/:user_id',
-  conversationIdParamValidator, // We can reuse this or create a specific one for both params, this is fine for basic validation of conversation_id
+  groupMemberParamsValidator,
   wrapController(removeGroupMemberController)
 )
 

@@ -49,9 +49,9 @@ export default class DatabaseService {
   /** Index collections — should be called once during bootstrap */
   async createIndexes() {
     await Promise.all([
-      this.indexUsers(), 
-      this.indexRefreshTokens(), 
-      this.indexFollowers(), 
+      this.indexUsers(),
+      this.indexRefreshTokens(),
+      this.indexFollowers(),
       this.indexTweets(),
       this.indexNewsFeeds(),
       this.indexBookmarks(),
@@ -66,7 +66,7 @@ export default class DatabaseService {
 
   /** Chat bootstrap indexes kept separate from unrelated legacy collections. */
   async createConversationIndexes() {
-    await Promise.all([this.indexMessages(), this.indexGroupConversations()])
+    await Promise.all([this.indexMessages(), this.indexGroupConversations(), this.indexUserBlocks()])
   }
 
   private async indexUsers() {
@@ -89,11 +89,58 @@ export default class DatabaseService {
   }
 
   private async indexFollowers() {
-    const exists = await this.followers.indexExists(['user_id_1_followed_user_id_1'])
-    if (exists) return
+    const followerIndexName = 'follow_user_id_1_followed_user_id_1'
+    const legacyFollowerIndexName = 'user_id_1_followed_user_id_1'
+    const [hasFollowerIndex, hasLegacyFollowerIndex] = await Promise.all([
+      this.followers.indexExists(followerIndexName),
+      this.followers.indexExists(legacyFollowerIndexName)
+    ])
 
-    console.log('Creating indexes for followers...')
-    await this.followers.createIndex({ user_id: 1, followed_user_id: 1 }, { unique: true })
+    if (!hasFollowerIndex) {
+      const duplicateGroups = await this.followers
+        .aggregate<{ ids: ObjectId[]; count: number }>([
+          {
+            $match: {
+              follow_user_id: { $type: 'objectId' },
+              followed_user_id: { $type: 'objectId' }
+            }
+          },
+          { $sort: { _id: 1 } },
+          {
+            $group: {
+              _id: { follow_user_id: '$follow_user_id', followed_user_id: '$followed_user_id' },
+              ids: { $push: '$_id' },
+              count: { $sum: 1 }
+            }
+          },
+          { $match: { count: { $gt: 1 } } }
+        ])
+        .toArray()
+      const redundantIds = duplicateGroups.flatMap((group) => group.ids.slice(1))
+
+      if (redundantIds.length > 0) {
+        console.log(`Removing ${redundantIds.length} duplicate follower records...`)
+        await this.followers.deleteMany({ _id: { $in: redundantIds } })
+      }
+
+      console.log('Creating indexes for followers...')
+      await this.followers.createIndex(
+        { follow_user_id: 1, followed_user_id: 1 },
+        {
+          name: followerIndexName,
+          unique: true,
+          partialFilterExpression: {
+            follow_user_id: { $type: 'objectId' },
+            followed_user_id: { $type: 'objectId' }
+          }
+        }
+      )
+    }
+
+    if (hasLegacyFollowerIndex) {
+      console.log('Removing legacy followers index...')
+      await this.followers.dropIndex(legacyFollowerIndexName)
+    }
   }
 
   private async indexTweets() {
@@ -140,6 +187,25 @@ export default class DatabaseService {
   private async indexUserBlocks() {
     const exists = await this.userBlocks.indexExists(['user_id_1_blocked_user_id_1'])
     if (exists) return
+
+    const duplicateGroups = await this.userBlocks
+      .aggregate<{ ids: ObjectId[]; count: number }>([
+        {
+          $group: {
+            _id: { user_id: '$user_id', blocked_user_id: '$blocked_user_id' },
+            ids: { $push: '$_id' },
+            count: { $sum: 1 }
+          }
+        },
+        { $match: { count: { $gt: 1 } } }
+      ])
+      .toArray()
+    const redundantIds = duplicateGroups.flatMap((group) => group.ids.slice(1))
+
+    if (redundantIds.length > 0) {
+      console.log(`Removing ${redundantIds.length} duplicate user block records...`)
+      await this.userBlocks.deleteMany({ _id: { $in: redundantIds } })
+    }
 
     console.log('Creating indexes for userBlocks...')
     await this.userBlocks.createIndex({ user_id: 1, blocked_user_id: 1 }, { unique: true })

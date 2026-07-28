@@ -18,6 +18,18 @@ type DirectConversationAggregate = DirectConversation & {
   partnerInfo?: ConversationPartner
 }
 
+type GroupUpdateType = 'info_updated' | 'members_added' | 'member_removed' | 'member_left'
+
+const GROUP_ADMIN_CANNOT_REMOVE_SELF_CODE = 'GROUP_ADMIN_CANNOT_REMOVE_SELF'
+const GROUP_SOLE_ADMIN_CANNOT_LEAVE_CODE = 'GROUP_SOLE_ADMIN_CANNOT_LEAVE'
+
+interface GroupUpdateEvent {
+  conversation_id: string
+  change_type: GroupUpdateType
+  actor_id: string
+  affected_user_ids: string[]
+}
+
 const MESSAGE_QUERY_MAX_TIME_MS = 10000
 const escapeRegularExpression = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -26,6 +38,42 @@ class ConversationService {
 
   constructor() {
     this.databaseService = new DatabaseService()
+  }
+
+  private async invalidateGroupMemberCache(conversationId: string) {
+    try {
+      await redisService.del(`conv_members:${conversationId}`)
+    } catch (error) {
+      console.error('Could not invalidate group member cache:', error)
+    }
+  }
+
+  private emitGroupUpdate(recipientIds: string[], event: GroupUpdateEvent) {
+    const uniqueRecipientIds = [...new Set(recipientIds)]
+    if (uniqueRecipientIds.length === 0) return
+
+    try {
+      getIO().to(uniqueRecipientIds).emit('@conversation:group-updated', event)
+    } catch (error) {
+      console.error('Could not emit group update:', error)
+    }
+  }
+
+  private async syncGroupMembership(recipientIds: string[], event: GroupUpdateEvent) {
+    await this.invalidateGroupMemberCache(event.conversation_id)
+    let currentMemberIds: string[] = []
+
+    try {
+      const group = await this.databaseService.groupConversations.findOne(
+        { _id: new this.databaseService.ObjectId(event.conversation_id) },
+        { projection: { members: 1 } }
+      )
+      currentMemberIds = group?.members.map((member) => member.user_id.toString()) ?? []
+    } catch (error) {
+      console.error('Could not refresh group members before emitting update:', error)
+    }
+
+    this.emitGroupUpdate([...recipientIds, ...currentMemberIds], event)
   }
 
   async getConversations(userId: string) {
@@ -113,6 +161,8 @@ class ConversationService {
 
     const id1 = new this.databaseService.ObjectId(user1_id)
     const id2 = new this.databaseService.ObjectId(user2_id)
+
+    await conversationAccessService.assertDirectMessagingAllowed(user1_id, user2_id)
 
     // Ensure user1_id < user2_id to maintain consistency
     const [u1, u2] = user1_id < user2_id ? [id1, id2] : [id2, id1]
@@ -661,18 +711,33 @@ class ConversationService {
   async updateGroupInfo(userId: string, conversationId: string, updates: { name?: string; avatar_url?: string }) {
     const convId = new this.databaseService.ObjectId(conversationId)
     const userObjectId = new this.databaseService.ObjectId(userId)
-    await conversationAccessService.assertConversationMember(userId, conversationId, 'group')
+    const access = await conversationAccessService.assertGroupAdmin(userId, conversationId)
 
-    const validUpdates: any = {}
-    if (updates.name) validUpdates.name = updates.name
+    const validUpdates: { name?: string; avatar_url?: string; updated_at?: Date } = {}
+    if (updates.name !== undefined) validUpdates.name = updates.name.trim()
     if (updates.avatar_url) validUpdates.avatar_url = updates.avatar_url
 
     if (Object.keys(validUpdates).length === 0) return { success: true }
+    validUpdates.updated_at = new Date()
 
-    await this.databaseService.groupConversations.updateOne(
-      { _id: convId, 'members.user_id': userObjectId },
+    const result = await this.databaseService.groupConversations.updateOne(
+      { _id: convId, members: { $elemMatch: { user_id: userObjectId, role: 'admin' } } },
       { $set: validUpdates }
     )
+
+    if (result.matchedCount === 0) {
+      throw new HttpError('Only group admins can update group information', HTTP_STATUS.FORBIDDEN)
+    }
+
+    if (result.modifiedCount > 0) {
+      this.emitGroupUpdate(access.memberIds, {
+        conversation_id: conversationId,
+        change_type: 'info_updated',
+        actor_id: userId,
+        affected_user_ids: []
+      })
+    }
+
     return { success: true }
   }
 
@@ -695,20 +760,18 @@ class ConversationService {
         },
         { $unwind: '$userInfo' },
         {
-          $project: {
-            'userInfo.password': 0,
-            'userInfo.email_verify_token': 0,
-            'userInfo.forgot_password_token': 0
-          }
-        },
-        {
           $group: {
             _id: '$_id',
             members: {
               $push: {
                 role: '$members.role',
                 joined_at: '$members.joined_at',
-                user: '$userInfo'
+                user: {
+                  _id: '$userInfo._id',
+                  name: '$userInfo.name',
+                  username: '$userInfo.username',
+                  avatar: '$userInfo.avatar'
+                }
               }
             }
           }
@@ -722,18 +785,86 @@ class ConversationService {
   async addGroupMembers(userId: string, conversationId: string, membersIds: string[]) {
     const convId = new this.databaseService.ObjectId(conversationId)
     const userObjectId = new this.databaseService.ObjectId(userId)
-    await conversationAccessService.assertConversationMember(userId, conversationId, 'group')
+    const access = await conversationAccessService.assertConversationMember(userId, conversationId, 'group')
+    const uniqueMemberIds = [...new Set(membersIds)]
+    const memberObjectIds = uniqueMemberIds.map((id) => new this.databaseService.ObjectId(id))
+    const [existingUsers, followRelations] = await Promise.all([
+      this.databaseService.users.find({ _id: { $in: memberObjectIds } }, { projection: { _id: 1 } }).toArray(),
+      this.databaseService.followers
+        .find(
+          {
+            follow_user_id: userObjectId,
+            followed_user_id: { $in: memberObjectIds }
+          },
+          { projection: { followed_user_id: 1 } }
+        )
+        .toArray()
+    ])
 
-    const newMembers = membersIds.map((id) => ({
-      user_id: new this.databaseService.ObjectId(id),
-      role: 'member',
-      joined_at: new Date()
+    if (existingUsers.length !== memberObjectIds.length) {
+      throw new HttpError('One or more users do not exist', HTTP_STATUS.BAD_REQUEST)
+    }
+
+    const followedUserIds = new Set(followRelations.map((relation) => relation.followed_user_id.toString()))
+    if (uniqueMemberIds.some((memberId) => !followedUserIds.has(memberId))) {
+      throw new HttpError('You can only add users you follow', HTTP_STATUS.BAD_REQUEST)
+    }
+
+    const joinedAt = new Date()
+    const requestedMembers = memberObjectIds.map((memberObjectId) => ({
+      user_id: memberObjectId,
+      role: 'member' as const,
+      joined_at: joinedAt
     }))
-
-    await this.databaseService.groupConversations.updateOne(
-      { _id: convId, 'members.user_id': userObjectId },
-      { $addToSet: { members: { $each: newMembers } } as any }
+    const previousGroup = await this.databaseService.groupConversations.findOneAndUpdate(
+      {
+        _id: convId,
+        'members.user_id': userObjectId
+      },
+      [
+        {
+          $set: {
+            members: {
+              $concatArrays: [
+                '$members',
+                {
+                  $filter: {
+                    input: requestedMembers,
+                    as: 'requestedMember',
+                    cond: { $not: [{ $in: ['$$requestedMember.user_id', '$members.user_id'] }] }
+                  }
+                }
+              ]
+            },
+            hidden_by: {
+              $filter: {
+                input: { $ifNull: ['$hidden_by', []] },
+                as: 'hiddenUserId',
+                cond: { $not: [{ $in: ['$$hiddenUserId', memberObjectIds] }] }
+              }
+            },
+            updated_at: joinedAt
+          }
+        }
+      ],
+      { returnDocument: 'before', projection: { members: 1 } }
     )
+
+    if (!previousGroup) {
+      throw new HttpError('Only current group members can add members', HTTP_STATUS.FORBIDDEN)
+    }
+
+    const previousMemberIds = new Set(previousGroup.members.map((member) => member.user_id.toString()))
+    const addedMemberIds = uniqueMemberIds.filter((memberId) => !previousMemberIds.has(memberId))
+
+    if (addedMemberIds.length > 0) {
+      await this.syncGroupMembership([...access.memberIds, ...addedMemberIds], {
+        conversation_id: conversationId,
+        change_type: 'members_added',
+        actor_id: userId,
+        affected_user_ids: addedMemberIds
+      })
+    }
 
     return { success: true }
   }
@@ -742,34 +873,164 @@ class ConversationService {
     const convId = new this.databaseService.ObjectId(conversationId)
     const uId = new this.databaseService.ObjectId(userIdToRemove)
     const adminObjectId = new this.databaseService.ObjectId(adminId)
-    await conversationAccessService.assertConversationMember(adminId, conversationId, 'group')
+    const access = await conversationAccessService.assertGroupAdmin(adminId, conversationId)
 
-    // Check if the requester is an admin (Optional but recommended)
-    const group = await this.databaseService.groupConversations.findOne({
-      _id: convId,
-      members: { $elemMatch: { user_id: adminObjectId, role: 'admin' } }
-    })
-
-    if (!group) {
-      throw new HttpError('Only admins can remove members', HTTP_STATUS.FORBIDDEN)
+    if (adminId === userIdToRemove) {
+      throw new HttpError(
+        'Use the leave endpoint instead of removing yourself',
+        HTTP_STATUS.BAD_REQUEST,
+        undefined,
+        GROUP_ADMIN_CANNOT_REMOVE_SELF_CODE
+      )
     }
 
-    await this.databaseService.groupConversations.updateOne(
-      { _id: convId },
-      { $pull: { members: { user_id: uId } } as any }
+    if (!access.memberIds.includes(userIdToRemove)) {
+      throw new HttpError('Group member not found', HTTP_STATUS.NOT_FOUND)
+    }
+
+    const result = await this.databaseService.groupConversations.updateOne(
+      {
+        _id: convId,
+        members: { $elemMatch: { user_id: adminObjectId, role: 'admin' } },
+        'members.user_id': uId
+      },
+      [
+        {
+          $set: {
+            members: {
+              $filter: {
+                input: '$members',
+                as: 'member',
+                cond: { $ne: ['$$member.user_id', uId] }
+              }
+            },
+            hidden_by: {
+              $filter: {
+                input: { $ifNull: ['$hidden_by', []] },
+                as: 'hiddenUserId',
+                cond: { $ne: ['$$hiddenUserId', uId] }
+              }
+            },
+            pinned_by: {
+              $filter: {
+                input: { $ifNull: ['$pinned_by', []] },
+                as: 'pinnedUserId',
+                cond: { $ne: ['$$pinnedUserId', uId] }
+              }
+            },
+            muted_by: {
+              $filter: {
+                input: { $ifNull: ['$muted_by', []] },
+                as: 'mute',
+                cond: { $ne: ['$$mute.user_id', uId] }
+              }
+            },
+            updated_at: new Date()
+          }
+        }
+      ]
     )
+
+    if (result.modifiedCount === 0) {
+      throw new HttpError('Group membership changed. Refresh and try again', HTTP_STATUS.CONFLICT)
+    }
+
+    await this.syncGroupMembership(access.memberIds, {
+      conversation_id: conversationId,
+      change_type: 'member_removed',
+      actor_id: adminId,
+      affected_user_ids: [userIdToRemove]
+    })
+
     return { success: true }
   }
 
   async leaveGroup(userId: string, conversationId: string) {
     const convId = new this.databaseService.ObjectId(conversationId)
     const uId = new this.databaseService.ObjectId(userId)
-    await conversationAccessService.assertConversationMember(userId, conversationId, 'group')
+    const access = await conversationAccessService.assertConversationMember(userId, conversationId, 'group')
+    if (access.type !== 'group') {
+      throw new HttpError('Conversation is not a group', HTTP_STATUS.BAD_REQUEST)
+    }
 
-    await this.databaseService.groupConversations.updateOne(
-      { _id: convId, 'members.user_id': uId },
-      { $pull: { members: { user_id: uId } } as any }
+    const leavingMember = access.conversation.members.find((member) => member.user_id.equals(uId))
+    const otherAdmins = access.conversation.members.filter(
+      (member) => member.role === 'admin' && !member.user_id.equals(uId)
     )
+
+    if (leavingMember?.role === 'admin' && access.conversation.members.length > 1 && otherAdmins.length === 0) {
+      throw new HttpError(
+        'Remove the remaining members before leaving as the sole admin',
+        HTTP_STATUS.CONFLICT,
+        undefined,
+        GROUP_SOLE_ADMIN_CANNOT_LEAVE_CODE
+      )
+    }
+
+    const adminLeaveGuard =
+      leavingMember?.role === 'admin'
+        ? {
+            $or: [
+              { 'members.1': { $exists: false } },
+              { members: { $elemMatch: { role: 'admin', user_id: { $ne: uId } } } }
+            ]
+          }
+        : {}
+    const result = await this.databaseService.groupConversations.updateOne(
+      { _id: convId, 'members.user_id': uId, ...adminLeaveGuard },
+      [
+        {
+          $set: {
+            members: {
+              $filter: {
+                input: '$members',
+                as: 'member',
+                cond: { $ne: ['$$member.user_id', uId] }
+              }
+            },
+            hidden_by: {
+              $filter: {
+                input: { $ifNull: ['$hidden_by', []] },
+                as: 'hiddenUserId',
+                cond: { $ne: ['$$hiddenUserId', uId] }
+              }
+            },
+            pinned_by: {
+              $filter: {
+                input: { $ifNull: ['$pinned_by', []] },
+                as: 'pinnedUserId',
+                cond: { $ne: ['$$pinnedUserId', uId] }
+              }
+            },
+            muted_by: {
+              $filter: {
+                input: { $ifNull: ['$muted_by', []] },
+                as: 'mute',
+                cond: { $ne: ['$$mute.user_id', uId] }
+              }
+            },
+            updated_at: new Date()
+          }
+        }
+      ]
+    )
+
+    if (result.modifiedCount === 0) {
+      throw new HttpError(
+        'Group membership changed; refresh and try again',
+        HTTP_STATUS.CONFLICT,
+        undefined,
+        GROUP_SOLE_ADMIN_CANNOT_LEAVE_CODE
+      )
+    }
+
+    await this.syncGroupMembership(access.memberIds, {
+      conversation_id: conversationId,
+      change_type: 'member_left',
+      actor_id: userId,
+      affected_user_ids: [userId]
+    })
+
     return { success: true }
   }
 
@@ -881,6 +1142,20 @@ class ConversationService {
         conversationAccessService.assertConversationMember(userId, conversationId)
       )
     )
+
+    await Promise.all(
+      targetConversations.map((targetConversation) => {
+        if (targetConversation.type !== 'direct') return Promise.resolve()
+
+        const partnerId = targetConversation.memberIds.find((memberId) => memberId !== userId)
+        if (!partnerId) {
+          throw new HttpError('Direct conversation partner not found', HTTP_STATUS.NOT_FOUND)
+        }
+
+        return conversationAccessService.assertDirectMessagingAllowed(userId, partnerId)
+      })
+    )
+
     const targetConversationTypeById = new Map(
       normalizedConversationIds.map((conversationId, index) => [conversationId, targetConversations[index].type])
     )
@@ -921,6 +1196,17 @@ class ConversationService {
     })
 
     if (newMessages.length > 0) {
+      await conversationAccessService.assertConversationMember(
+        userId,
+        originalMessage.conversation_id.toString(),
+        originalMessage.conversation_type
+      )
+      await Promise.all(
+        normalizedConversationIds.map((conversationId) =>
+          conversationAccessService.assertConversationMember(userId, conversationId)
+        )
+      )
+
       await this.databaseService.messages.insertMany(newMessages)
 
       // Update last_message_preview for all conversations

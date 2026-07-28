@@ -6,6 +6,9 @@ import type GroupConversation from '~/schemas/GroupConversation.schema'
 
 export type ConversationType = 'direct' | 'group'
 
+export const DIRECT_MESSAGE_BLOCKED_CODE = 'DIRECT_MESSAGE_BLOCKED' as const
+export const DIRECT_MESSAGE_BLOCKED_MESSAGE = 'Direct messaging is unavailable because one user blocked the other'
+
 type ResolvedDirectConversation = {
   type: 'direct'
   conversation: DirectConversation
@@ -72,6 +75,45 @@ class ConversationAccessService {
     }
 
     return resolved
+  }
+
+  async assertGroupAdmin(userId: string, conversationId: string): Promise<ResolvedGroupConversation> {
+    const resolved = await this.assertConversationMember(userId, conversationId, 'group')
+    if (resolved.type !== 'group') {
+      throw new HttpError('Conversation is not a group', HTTP_STATUS.BAD_REQUEST)
+    }
+
+    const isAdmin = resolved.conversation.members.some(
+      (member) => member.user_id.toString() === userId && member.role === 'admin'
+    )
+
+    if (!isAdmin) {
+      throw new HttpError('Only group admins can perform this action', HTTP_STATUS.FORBIDDEN)
+    }
+
+    return resolved
+  }
+
+  async isDirectMessagingBlocked(firstUserId: string, secondUserId: string): Promise<boolean> {
+    const firstUserObjectId = new this.databaseService.ObjectId(firstUserId)
+    const secondUserObjectId = new this.databaseService.ObjectId(secondUserId)
+    const block = await this.databaseService.userBlocks.findOne(
+      {
+        $or: [
+          { user_id: firstUserObjectId, blocked_user_id: secondUserObjectId },
+          { user_id: secondUserObjectId, blocked_user_id: firstUserObjectId }
+        ]
+      },
+      { projection: { _id: 1 } }
+    )
+
+    return Boolean(block)
+  }
+
+  async assertDirectMessagingAllowed(firstUserId: string, secondUserId: string): Promise<void> {
+    if (await this.isDirectMessagingBlocked(firstUserId, secondUserId)) {
+      throw new HttpError(DIRECT_MESSAGE_BLOCKED_MESSAGE, HTTP_STATUS.FORBIDDEN)
+    }
   }
 }
 

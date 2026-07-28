@@ -34,6 +34,23 @@ tags:
   - name: message
     description: Message operations
 
+x-socket-events:
+  "@conversation:send":
+    description: Direct messages are checked for blocks in both directions before any message, cache, broadcast, or notification write.
+    acknowledgement:
+      $ref: "#/components/schemas/ConversationSendAcknowledgement"
+    errorEvent: "@conversation:error"
+    blockedError:
+      $ref: "#/components/schemas/ConversationSocketError"
+  "@user:block-status-changed":
+    description: Emitted to both users after a block or unblock succeeds. Clients refetch the authoritative two-way profile state.
+    payload:
+      $ref: "#/components/schemas/UserBlockStatusChanged"
+  "@conversation:group-updated":
+    description: Emitted to affected users' personal rooms after group information or membership changes. Membership cache is invalidated before this event.
+    payload:
+      $ref: "#/components/schemas/GroupUpdatedEvent"
+
 paths:
   /api/auth/register:
     post:
@@ -420,6 +437,66 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/user/profile/{username}:
+    get:
+      tags:
+        - user
+      summary: Get a public user profile
+      description: When authenticated, is_blocked means the caller blocked this profile and is_blocked_by_user means this profile blocked the caller.
+      operationId: getUserProfile
+      security:
+        - bearerAuth: []
+        - {}
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User profile retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfileResponse"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/direct/{receiver_id}:
+    post:
+      tags:
+        - conversation
+      summary: Open or create a direct conversation
+      description: Does not create or restore a direct conversation when either participant has blocked the other. Existing message history is not deleted.
+      operationId: getOrCreateDirectConversation
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: receiver_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+      responses:
+        "200":
+          description: Direct conversation opened successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "403":
+          description: Direct messaging is blocked in either direction
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/conversations/groups/search:
     get:
       tags:
@@ -466,6 +543,49 @@ paths:
                 $ref: "#/components/schemas/Error"
 
   /api/conversations/{conversation_id}:
+    patch:
+      tags:
+        - conversation
+      summary: Update group information
+      description: Only a current group admin can update the group name or avatar.
+      operationId: updateGroupInformation
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                avatar_url:
+                  type: string
+                  format: uri
+      responses:
+        "200":
+          description: Group information updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "403":
+          description: The caller is not a group admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Group not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     delete:
       tags:
         - conversation
@@ -548,6 +668,156 @@ paths:
                 $ref: "#/components/schemas/Error"
         "404":
           description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/members:
+    get:
+      tags:
+        - conversation
+      summary: Get group members
+      description: The authenticated caller must be a current member. Each member user contains only _id, name, username, and avatar.
+      operationId: getGroupMembers
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Group members retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "403":
+          description: The caller is not a group member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags:
+        - conversation
+      summary: Add group members
+      description: Any current group member can add existing users they follow. The complete list is appended in one atomic update pipeline, membership is compared by user_id, and concurrent requests cannot create duplicates or partial success. This operation emits membership sync only and does not create a system message or notification.
+      operationId: addGroupMembers
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - members
+              properties:
+                members:
+                  type: array
+                  minItems: 1
+                  uniqueItems: true
+                  items:
+                    type: string
+                    pattern: "^[a-fA-F0-9]{24}$"
+      responses:
+        "200":
+          description: Members added or already present
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Invalid, duplicate, unknown, or non-followed user IDs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The caller is not a current group member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/members/{user_id}:
+    delete:
+      tags:
+        - conversation
+      summary: Remove a group member
+      description: A current admin can remove another member, but cannot remove themselves through this endpoint.
+      operationId: removeGroupMember
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+      responses:
+        "200":
+          description: Member removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: GROUP_ADMIN_CANNOT_REMOVE_SELF; use the leave endpoint
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The caller is not a group admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Group or target member not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Membership changed concurrently
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/leave:
+    delete:
+      tags:
+        - conversation
+      summary: Leave a group
+      description: A member can leave. The sole admin cannot leave while other members remain because admin transfer is not implemented.
+      operationId: leaveGroup
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Member left the group
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "403":
+          description: The caller is not a group member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: GROUP_SOLE_ADMIN_CANNOT_LEAVE or membership changed concurrently
           content:
             application/json:
               schema:
@@ -782,6 +1052,113 @@ components:
           type: string
           format: date-time
           example: 2023-01-01T00:00:00.000Z
+        is_following:
+          type: boolean
+        is_blocked:
+          type: boolean
+          description: The authenticated caller blocked this profile.
+        is_blocked_by_user:
+          type: boolean
+          description: This profile blocked the authenticated caller.
+
+    UserProfileResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/User"
+
+    ConversationSocketError:
+      type: object
+      required:
+        - code
+        - conversation_id
+        - message
+      properties:
+        code:
+          type: string
+          enum: [DIRECT_MESSAGE_BLOCKED]
+        conversation_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        message:
+          type: string
+
+    ConversationSendAcknowledgement:
+      oneOf:
+        - type: object
+          required:
+            - success
+            - message_id
+          properties:
+            success:
+              type: boolean
+              enum: [true]
+            message_id:
+              type: string
+              pattern: "^[a-fA-F0-9]{24}$"
+        - type: object
+          required:
+            - success
+            - error
+          properties:
+            success:
+              type: boolean
+              enum: [false]
+            error:
+              type: object
+              required:
+                - code
+                - message
+              properties:
+                code:
+                  type: string
+                conversation_id:
+                  type: string
+                  pattern: "^[a-fA-F0-9]{24}$"
+                message:
+                  type: string
+
+    UserBlockStatusChanged:
+      type: object
+      required:
+        - user_ids
+      properties:
+        user_ids:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+
+    GroupUpdatedEvent:
+      type: object
+      required:
+        - conversation_id
+        - change_type
+        - actor_id
+        - affected_user_ids
+      properties:
+        conversation_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        change_type:
+          type: string
+          enum: [info_updated, members_added, member_removed, member_left]
+        actor_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        affected_user_ids:
+          type: array
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
 
     # Base response schemas
     SuccessResponse:
@@ -1129,6 +1506,10 @@ components:
             "body.email": ["Email must be valid"]
             "body.password": ["Password is required"]
           description: Detailed validation errors (optional, only present for validation failures)
+        code:
+          type: string
+          description: Stable optional application error code; clients should branch on this value instead of parsing message text.
+          example: "GROUP_SOLE_ADMIN_CANNOT_LEAVE"
       required:
         - statusCode
         - message
