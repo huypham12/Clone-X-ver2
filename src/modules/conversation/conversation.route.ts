@@ -8,6 +8,7 @@ import {
   getDirectConversationController,
   createGroupConversationController,
   deleteConversationController,
+  clearConversationHistoryController,
   unhideConversationController,
   getMessagesController,
   getMessageContextController,
@@ -26,6 +27,7 @@ import {
   addGroupMembersController,
   removeGroupMemberController,
   leaveGroupController,
+  transferAdminAndLeaveController,
   editMessageController,
   unreactMessageController,
   getMessageReactionsController,
@@ -46,7 +48,9 @@ import {
   unmuteConversationValidator,
   messageContextValidator,
   groupConversationLookupValidator,
-  groupMemberParamsValidator
+  groupMemberParamsValidator,
+  transferAdminAndLeaveValidator,
+  clearConversationHistoryValidator
 } from './conversation.validator'
 
 const conversationRouter = Router()
@@ -82,6 +86,12 @@ conversationRouter.delete(
   '/:conversation_id',
   conversationIdParamValidator,
   wrapController(deleteConversationController)
+)
+
+conversationRouter.delete(
+  '/:conversation_id/history',
+  clearConversationHistoryValidator,
+  wrapController(clearConversationHistoryController)
 )
 
 conversationRouter.post(
@@ -130,6 +140,12 @@ conversationRouter.delete(
   '/:conversation_id/leave',
   conversationIdParamValidator,
   wrapController(leaveGroupController)
+)
+
+conversationRouter.post(
+  '/:conversation_id/transfer-admin-and-leave',
+  transferAdminAndLeaveValidator,
+  wrapController(transferAdminAndLeaveController)
 )
 
 // 2. Quản lý Tin nhắn trong một hội thoại

@@ -4,6 +4,7 @@ import DatabaseService from '~/config/database.service'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import type Message from '~/schemas/Message.schema'
 import conversationAccessService, {
+  isMessageAfterHistoryCutoff,
   type ConversationType,
   type ResolvedConversation
 } from './conversation-access.service'
@@ -59,6 +60,10 @@ export class ConversationMessageAccessService {
       message.conversation_type
     )
 
+    if (!message._id || !isMessageAfterHistoryCutoff(message._id, conversation.conversation, userId)) {
+      throw new HttpError('Message not found', HTTP_STATUS.NOT_FOUND)
+    }
+
     if (options.requireSender && message.sender_id.toString() !== userId) {
       throw new HttpError('You can only perform this action on your own messages', HTTP_STATUS.FORBIDDEN)
     }
@@ -83,7 +88,11 @@ export class ConversationMessageAccessService {
     conversationId: string,
     conversationType: ConversationType
   ): Promise<Message> {
-    await this.accessService.assertConversationMember(userId, conversationId, conversationType)
+    const conversation = await this.accessService.assertConversationMember(
+      userId,
+      conversationId,
+      conversationType
+    )
 
     if (!ObjectId.isValid(messageId)) {
       throw new HttpError(
@@ -104,8 +113,18 @@ export class ConversationMessageAccessService {
     const isDeletedForUser = targetMessage?.deleted_by?.some(
       (deletedByUserId) => deletedByUserId.toString() === userId
     )
+    const isBeforeHistoryCutoff = Boolean(
+      targetMessage?._id &&
+        !isMessageAfterHistoryCutoff(targetMessage._id, conversation.conversation, userId)
+    )
 
-    if (!targetMessage || !belongsToConversation || targetMessage.status !== 'sent' || isDeletedForUser) {
+    if (
+      !targetMessage ||
+      !belongsToConversation ||
+      targetMessage.status !== 'sent' ||
+      isDeletedForUser ||
+      isBeforeHistoryCutoff
+    ) {
       throw new HttpError(
         REPLY_MESSAGE_UNAVAILABLE_MESSAGE,
         HTTP_STATUS.BAD_REQUEST,

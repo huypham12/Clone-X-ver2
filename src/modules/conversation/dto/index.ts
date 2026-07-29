@@ -48,6 +48,16 @@ export interface MessageDeletedForMeEvent {
   message_id: string
 }
 
+export interface ConversationHistoryClearedEvent {
+  conversation_id: string
+  cleared_at: string
+}
+
+export interface ConversationHistoryClearResult {
+  success: true
+  cleared_at: Date
+}
+
 export interface MessageReactionItem {
   emoji: MessageReactionEmoji
   user_id: string
@@ -120,6 +130,10 @@ export class CreateGroupConversationBodyDto {
   ) {}
 }
 
+export interface TransferAdminAndLeaveBodyDto {
+  successor_user_id: string
+}
+
 export class ReactMessageBodyDto {
   constructor(public emoji: MessageReactionEmoji) {}
 }
@@ -146,6 +160,12 @@ export class GetConversationsResponseDto extends SuccessResponseDto<any> {
 
 export class ConversationResponseDto extends SuccessResponseDto<any> {
   constructor(statusCode: number, message: string, data: any) {
+    super(statusCode, message, data)
+  }
+}
+
+export class ConversationHistoryClearResponseDto extends SuccessResponseDto<ConversationHistoryClearResult> {
+  constructor(statusCode: number, message: string, data: ConversationHistoryClearResult) {
     super(statusCode, message, data)
   }
 }

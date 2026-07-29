@@ -5,11 +5,12 @@ import Message from '~/schemas/Message.schema'
 import MediaMetadata from '~/schemas/MediaMetadata.schema'
 import notificationService from '../modules/notification/notification.service'
 import { MediaStatus, MediaType, NotificationType } from '~/constants/enums'
-import { ObjectId } from 'mongodb'
+import { Document, ObjectId } from 'mongodb'
 import { HttpError } from '~/common/http-error'
 import conversationAccessService, {
   DIRECT_MESSAGE_BLOCKED_CODE,
-  DIRECT_MESSAGE_BLOCKED_MESSAGE
+  DIRECT_MESSAGE_BLOCKED_MESSAGE,
+  getConversationHistoryCutoff
 } from '~/modules/conversation/conversation-access.service'
 import conversationMessageHydrationService from '~/modules/conversation/conversation-message-hydration.service'
 import conversationMessageAccessService, {
@@ -223,10 +224,13 @@ export const chatHandler = (io: Server, socket: Socket) => {
       // 1. Save to MongoDB
       await databaseService.messages.insertOne(newMessage)
 
-      const messageToBroadcast = await conversationMessageHydrationService.hydrateSingleMessage({
+      const messageWithMedia = {
         ...newMessage,
         medias_info
-      })
+      }
+      const messageToBroadcast = await conversationMessageHydrationService.hydrateSingleMessage(
+        messageWithMedia
+      )
 
       const firstMediaType = medias_info[0]?.type
       const messageType: MessagePreviewType =
@@ -239,14 +243,60 @@ export const chatHandler = (io: Server, socket: Socket) => {
       }
 
       // 2. Update Conversations last_message
-      const updateQuery = {
-        $set: {
-          last_message_at: newMessage.send_at,
-          last_message_preview: messagePreview,
-          last_message_overrides: [],
-          updated_at: new Date()
+      const pendingHistoryRestoreUserIds = {
+        $map: {
+          input: {
+            $filter: {
+              input: { $ifNull: ['$history_cleared_by', []] },
+              as: 'marker',
+              cond: { $eq: ['$$marker.restore_on_next_message', true] }
+            }
+          },
+          as: 'marker',
+          in: '$$marker.user_id'
         }
       }
+      const updateQuery: Document[] = [
+        {
+          $set: {
+            last_message_at: newMessage.send_at,
+            last_message_preview: messagePreview,
+            last_message_overrides: [],
+            hidden_by: {
+              $filter: {
+                input: { $ifNull: ['$hidden_by', []] },
+                as: 'hiddenUserId',
+                cond: {
+                  $eq: [{ $in: ['$$hiddenUserId', pendingHistoryRestoreUserIds] }, false]
+                }
+              }
+            },
+            history_cleared_by: {
+              $map: {
+                input: { $ifNull: ['$history_cleared_by', []] },
+                as: 'marker',
+                in: {
+                  $cond: [
+                    { $eq: ['$$marker.restore_on_next_message', true] },
+                    { $mergeObjects: ['$$marker', { restore_on_next_message: false }] },
+                    '$$marker'
+                  ]
+                }
+              }
+            },
+            muted_by: {
+              $filter: {
+                input: { $ifNull: ['$muted_by', []] },
+                as: 'mute',
+                cond: {
+                  $eq: [{ $in: ['$$mute.user_id', pendingHistoryRestoreUserIds] }, false]
+                }
+              }
+            },
+            updated_at: new Date()
+          }
+        }
+      ]
       if (conversation_type === 'direct') {
         await databaseService.directConversations.updateOne({ _id: convObjectId }, updateQuery)
       } else if (conversation_type === 'group') {
@@ -265,17 +315,45 @@ export const chatHandler = (io: Server, socket: Socket) => {
       await redisService.clientInstance.expire(redisKey, 7 * 24 * 60 * 60)
 
       // 4. Lấy danh sách members và Broadcast qua Personal Inbox
+      const currentConversation =
+        typedConversationType === 'direct'
+          ? await databaseService.directConversations.findOne(
+              { _id: convObjectId },
+              { projection: { history_cleared_by: 1 } }
+            )
+          : await databaseService.groupConversations.findOne(
+              { _id: convObjectId },
+              { projection: { members: 1, history_cleared_by: 1 } }
+            )
       if (typedConversationType === 'group') {
-        const currentGroup = await databaseService.groupConversations.findOne(
-          { _id: convObjectId },
-          { projection: { members: 1 } }
-        )
-        memberIds = currentGroup?.members.map((member) => member.user_id.toString()) ?? []
+        memberIds = currentConversation && 'members' in currentConversation
+          ? currentConversation.members.map((member) => member.user_id.toString())
+          : []
       }
 
-      if (memberIds.length > 0) {
-        io.to(memberIds).emit('@conversation:receive', messageToBroadcast)
+      const personalizedRecipientIds = new Set(
+        currentConversation?.history_cleared_by?.map((marker) => marker.user_id.toString()) ?? []
+      )
+      const sharedPayloadRecipientIds = memberIds.filter(
+        (memberId) => !personalizedRecipientIds.has(memberId)
+      )
+      if (sharedPayloadRecipientIds.length > 0) {
+        io.to(sharedPayloadRecipientIds).emit('@conversation:receive', messageToBroadcast)
       }
+      await Promise.all(
+        memberIds
+          .filter((memberId) => personalizedRecipientIds.has(memberId))
+          .map(async (memberId) => {
+            const personalizedMessage = await conversationMessageHydrationService.hydrateSingleMessage(
+              messageWithMedia,
+              memberId,
+              currentConversation
+                ? getConversationHistoryCutoff(currentConversation, memberId)
+                : undefined
+            )
+            io.to(memberId).emit('@conversation:receive', personalizedMessage)
+          })
+      )
 
       acknowledge?.({ success: true, message_id: newMessage._id?.toString() ?? '' })
 

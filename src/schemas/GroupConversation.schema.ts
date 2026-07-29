@@ -14,6 +14,13 @@ type LastMessageOverride = {
   last_message_preview: MessagePreview
 }
 
+export type HistoryClearMarker = {
+  user_id: ObjectId
+  cleared_at: Date
+  cleared_through_message_id: ObjectId | null
+  restore_on_next_message?: boolean
+}
+
 type GroupMember = {
   user_id: ObjectId
   role: 'admin' | 'member'
@@ -35,6 +42,7 @@ interface GroupConversationType {
   hidden_by?: ObjectId[]
   pinned_by?: ObjectId[]
   muted_by?: { user_id: ObjectId; until: Date | null }[]
+  history_cleared_by?: HistoryClearMarker[]
   created_at: Date
   updated_at: Date
 }
@@ -52,6 +60,7 @@ export default class GroupConversation {
   hidden_by: ObjectId[]
   pinned_by: ObjectId[]
   muted_by: { user_id: ObjectId; until: Date | null }[]
+  history_cleared_by: HistoryClearMarker[]
   created_at: Date
   updated_at: Date
 
@@ -68,6 +77,7 @@ export default class GroupConversation {
     this.hidden_by = data.hidden_by || []
     this.pinned_by = data.pinned_by || []
     this.muted_by = data.muted_by || []
+    this.history_cleared_by = data.history_cleared_by || []
     this.created_at = data.created_at || new Date()
     this.updated_at = data.updated_at || new Date()
   }

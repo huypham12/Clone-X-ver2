@@ -36,7 +36,8 @@ export class ConversationMessageHydrationService {
 
   async hydrateSenderInfo(
     messages: MessageWithMediaInfo[],
-    viewerUserId?: string
+    viewerUserId?: string,
+    historyCutoffMessageId?: ObjectId
   ): Promise<HydratedMessage[]> {
     if (messages.length === 0) return []
 
@@ -49,7 +50,10 @@ export class ConversationMessageHydrationService {
     ]
     const replyObjectIds = replyIds.map((replyId) => new this.databaseService.ObjectId(replyId))
     const replyFilter: Filter<Message> = {
-      _id: { $in: replyObjectIds },
+      _id: {
+        $in: replyObjectIds,
+        ...(historyCutoffMessageId ? { $gt: historyCutoffMessageId } : {})
+      },
       status: { $in: ['sent', 'revoked'] },
       ...(viewerUserId
         ? { deleted_by: { $ne: new this.databaseService.ObjectId(viewerUserId) } }
@@ -164,8 +168,16 @@ export class ConversationMessageHydrationService {
     })
   }
 
-  async hydrateSingleMessage(message: MessageWithMediaInfo, viewerUserId?: string): Promise<HydratedMessage> {
-    const [hydratedMessage] = await this.hydrateSenderInfo([message], viewerUserId)
+  async hydrateSingleMessage(
+    message: MessageWithMediaInfo,
+    viewerUserId?: string,
+    historyCutoffMessageId?: ObjectId
+  ): Promise<HydratedMessage> {
+    const [hydratedMessage] = await this.hydrateSenderInfo(
+      [message],
+      viewerUserId,
+      historyCutoffMessageId
+    )
     return hydratedMessage
   }
 }

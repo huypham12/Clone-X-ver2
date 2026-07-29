@@ -34,6 +34,14 @@ export const conversationIdParamValidator = validate(
   })
 )
 
+export const clearConversationHistoryValidator = validate(
+  z.object({
+    params: z.object({
+      conversation_id: objectIdString
+    })
+  })
+)
+
 export const messageSearchQueryValidator = validate(
   z.object({
     query: z.object({
@@ -141,6 +149,19 @@ export const groupMemberParamsValidator = validate(
       conversation_id: objectIdString,
       user_id: objectIdString
     })
+  })
+)
+
+export const transferAdminAndLeaveValidator = validate(
+  z.object({
+    params: z.object({
+      conversation_id: objectIdString
+    }),
+    body: z
+      .object({
+        successor_user_id: objectIdString
+      })
+      .strict()
   })
 )
 

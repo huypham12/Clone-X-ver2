@@ -68,6 +68,10 @@ x-socket-events:
     description: Emitted to affected users' personal rooms after group information or membership changes. Membership cache is invalidated before this event.
     payload:
       $ref: "#/components/schemas/GroupUpdatedEvent"
+  "@conversation:history-cleared":
+    description: Emitted only to the actor's personal room after their current history is hidden behind a stable message-ID cutoff and the shared message cache is invalidated.
+    payload:
+      $ref: "#/components/schemas/ConversationHistoryClearedEvent"
 
 paths:
   /api/auth/register:
@@ -490,7 +494,7 @@ paths:
       tags:
         - conversation
       summary: Open or create a direct conversation
-      description: Does not create or restore a direct conversation when either participant has blocked the other. Existing message history is not deleted.
+      description: Returns a normalized conversation and a server reopen timestamp so the client can open and cache it immediately. Does not create or restore a direct conversation when either participant has blocked the other. Existing message history is not deleted.
       operationId: getOrCreateDirectConversation
       security:
         - bearerAuth: []
@@ -507,7 +511,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SuccessResponse"
+                $ref: "#/components/schemas/ConversationOpenResponse"
         "403":
           description: Direct messaging is blocked in either direction
           content:
@@ -652,7 +656,7 @@ paths:
       tags:
         - conversation
       summary: Restore a conversation to your inbox
-      description: Removes only the authenticated member from hidden_by. The operation is idempotent and does not change another member's hidden state.
+      description: Removes only the authenticated member from hidden_by and returns the normalized direct/group conversation with a server reopen timestamp. The operation is idempotent and does not change another member's hidden state.
       operationId: unhideConversation
       security:
         - bearerAuth: []
@@ -664,20 +668,53 @@ paths:
           content:
             application/json:
               schema:
+                $ref: "#/components/schemas/ConversationOpenResponse"
+        "403":
+          description: The authenticated user is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/history:
+    delete:
+      tags:
+        - conversation
+      summary: Delete current conversation history for the authenticated user
+      description: Captures a stable latest-message cutoff, hides and unpins/unmutes the conversation for the caller, and leaves all physical messages and every other member's history unchanged. The first later message restores this deleted chat as a new visible conversation; a plain inbox hide remains hidden until explicitly reopened.
+      operationId: clearConversationHistoryForMe
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Current history cleared only for the authenticated member
+          content:
+            application/json:
+              schema:
                 allOf:
                   - $ref: "#/components/schemas/SuccessResponse"
                   - type: object
                     properties:
-                      message:
-                        example: "Conversation restored to your inbox successfully"
                       data:
                         type: object
                         required:
                           - success
+                          - cleared_at
                         properties:
                           success:
                             type: boolean
                             example: true
+                          cleared_at:
+                            type: string
+                            format: date-time
         "403":
           description: The authenticated user is not a conversation member
           content:
@@ -815,7 +852,7 @@ paths:
       tags:
         - conversation
       summary: Leave a group
-      description: A member can leave. The sole admin cannot leave while other members remain because admin transfer is not implemented.
+      description: A member can leave. If the caller is the sole admin and other members remain, use transfer-admin-and-leave instead.
       operationId: leaveGroup
       security:
         - bearerAuth: []
@@ -836,6 +873,56 @@ paths:
                 $ref: "#/components/schemas/Error"
         "409":
           description: GROUP_SOLE_ADMIN_CANNOT_LEAVE or membership changed concurrently
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/transfer-admin-and-leave:
+    post:
+      tags:
+        - conversation
+      summary: Transfer group admin and leave
+      description: Atomically promotes one current member to the group's only admin and removes the current sole admin. A group has at most one admin.
+      operationId: transferAdminAndLeave
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - successor_user_id
+              properties:
+                successor_user_id:
+                  type: string
+                  pattern: "^[a-fA-F0-9]{24}$"
+      responses:
+        "200":
+          description: Admin transferred and previous admin left the group
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: GROUP_ADMIN_SUCCESSOR_INVALID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The caller is not the current group admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: GROUP_ADMIN_TRANSFER_CONFLICT because admin or membership state changed concurrently
           content:
             application/json:
               schema:
@@ -1465,7 +1552,7 @@ components:
           pattern: "^[a-fA-F0-9]{24}$"
         change_type:
           type: string
-          enum: [info_updated, members_added, member_removed, member_left]
+          enum: [info_updated, members_added, member_removed, member_left, admin_transferred]
         actor_id:
           type: string
           pattern: "^[a-fA-F0-9]{24}$"
@@ -1474,6 +1561,19 @@ components:
           items:
             type: string
             pattern: "^[a-fA-F0-9]{24}$"
+
+    ConversationHistoryClearedEvent:
+      type: object
+      required:
+        - conversation_id
+        - cleared_at
+      properties:
+        conversation_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        cleared_at:
+          type: string
+          format: date-time
 
     # Base response schemas
     SuccessResponse:
@@ -1488,6 +1588,77 @@ components:
       required:
         - statusCode
         - message
+
+    ConversationSummary:
+      type: object
+      description: Actor-normalized direct or group conversation. Internal history cutoff markers and preview overrides are not exposed.
+      required:
+        - _id
+        - type
+        - last_message_at
+        - last_message_preview
+        - is_pinned
+        - created_at
+        - updated_at
+      properties:
+        _id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        type:
+          type: string
+          enum: [direct, group]
+        last_message_at:
+          type: string
+          format: date-time
+        last_message_preview:
+          type: object
+        is_pinned:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        partner_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        partner_info:
+          allOf:
+            - $ref: "#/components/schemas/MessageSenderInfo"
+          nullable: true
+        name:
+          type: string
+        avatar_url:
+          type: string
+          format: uri
+        members:
+          type: array
+          items:
+            type: object
+
+    ConversationOpenResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              type: object
+              required:
+                - success
+                - reopened_at
+                - conversation
+              properties:
+                success:
+                  type: boolean
+                  example: true
+                reopened_at:
+                  type: string
+                  format: date-time
+                conversation:
+                  $ref: "#/components/schemas/ConversationSummary"
 
     GroupConversationLookupItem:
       type: object

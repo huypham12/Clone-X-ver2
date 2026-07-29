@@ -1,3 +1,4 @@
+import { ObjectId } from 'mongodb'
 import { HttpError } from '~/common/http-error'
 import DatabaseService from '~/config/database.service'
 import { HTTP_STATUS } from '~/constants/httpStatus'
@@ -22,6 +23,27 @@ type ResolvedGroupConversation = {
 }
 
 export type ResolvedConversation = ResolvedDirectConversation | ResolvedGroupConversation
+
+type ConversationWithHistoryClear = Pick<
+  DirectConversation | GroupConversation,
+  'history_cleared_by'
+>
+
+export const getConversationHistoryCutoff = (
+  conversation: ConversationWithHistoryClear,
+  userId: string
+) =>
+  conversation.history_cleared_by?.find((marker) => marker.user_id.toString() === userId)
+    ?.cleared_through_message_id ?? undefined
+
+export const isMessageAfterHistoryCutoff = (
+  messageId: ObjectId,
+  conversation: ConversationWithHistoryClear,
+  userId: string
+) => {
+  const cutoff = getConversationHistoryCutoff(conversation, userId)
+  return !cutoff || messageId.toString() > cutoff.toString()
+}
 
 class ConversationAccessService {
   private readonly databaseService: DatabaseService

@@ -15,7 +15,9 @@ import {
   GetMessageContextResponseDto,
   MessageContextQueryDto,
   ConversationLookupQueryDto,
-  GroupConversationLookupResponseDto
+  GroupConversationLookupResponseDto,
+  ConversationHistoryClearResponseDto,
+  type TransferAdminAndLeaveBodyDto
 } from './dto'
 import { SearchQueryDto, SearchResponseDto } from '../search/dto'
 import type { TokenPayload } from '~/types/token-payload.type'
@@ -72,6 +74,22 @@ export const deleteConversationController: DeleteHandler<ConversationResponseDto
   const result = await conversationService.deleteConversation(user_id, conversation_id)
   
   const response = new ConversationResponseDto(HTTP_STATUS.OK, 'Conversation hidden from your inbox successfully', result)
+  res.status(response.statusCode).json(response)
+}
+
+export const clearConversationHistoryController: DeleteHandler<
+  ConversationHistoryClearResponseDto,
+  { conversation_id: string }
+> = async (req, res) => {
+  const { user_id } = req.decoded_authorization as TokenPayload
+  const { conversation_id } = req.params
+
+  const result = await conversationService.clearConversationHistory(user_id, conversation_id)
+  const response = new ConversationHistoryClearResponseDto(
+    HTTP_STATUS.OK,
+    'Conversation history deleted for you successfully',
+    result
+  )
   res.status(response.statusCode).json(response)
 }
 
@@ -274,6 +292,20 @@ export const leaveGroupController: DeleteHandler<SuccessResponseDto, { conversat
   const result = await conversationService.leaveGroup(user_id, conversation_id)
   
   const response = new SuccessResponseDto(HTTP_STATUS.OK, 'Leave group successfully', result)
+  res.status(response.statusCode).json(response)
+}
+
+export const transferAdminAndLeaveController: PostHandler<
+  TransferAdminAndLeaveBodyDto,
+  SuccessResponseDto,
+  { conversation_id: string }
+> = async (req, res) => {
+  const user_id = (req as any).decoded_authorization.user_id
+  const { conversation_id } = req.params
+  const { successor_user_id } = req.body
+
+  const result = await conversationService.transferAdminAndLeave(user_id, conversation_id, successor_user_id)
+  const response = new SuccessResponseDto(HTTP_STATUS.OK, 'Admin transferred and group left successfully', result)
   res.status(response.statusCode).json(response)
 }
 

@@ -9,12 +9,16 @@ import redisService from '~/config/redis.service'
 import { getIO } from '~/socket'
 import { MediaStatus, MediaType } from '~/constants/enums'
 import type User from '~/schemas/User.schema'
-import conversationAccessService, { type ConversationType } from './conversation-access.service'
+import conversationAccessService, {
+  getConversationHistoryCutoff,
+  type ConversationType
+} from './conversation-access.service'
 import conversationMessageAccessService from './conversation-message-access.service'
 import conversationMessageHydrationService from './conversation-message-hydration.service'
 import conversationMessageSyncService from './conversation-message-sync.service'
 import {
   isMessageReactionEmoji,
+  type ConversationHistoryClearedEvent,
   type MessageContextData,
   type MessageDeletedForMeEvent,
   type MessageReactionEmoji,
@@ -30,10 +34,12 @@ type DirectConversationAggregate = DirectConversation & {
   partnerInfo?: ConversationPartner
 }
 
-type GroupUpdateType = 'info_updated' | 'members_added' | 'member_removed' | 'member_left'
+type GroupUpdateType = 'info_updated' | 'members_added' | 'member_removed' | 'member_left' | 'admin_transferred'
 
 const GROUP_ADMIN_CANNOT_REMOVE_SELF_CODE = 'GROUP_ADMIN_CANNOT_REMOVE_SELF'
 const GROUP_SOLE_ADMIN_CANNOT_LEAVE_CODE = 'GROUP_SOLE_ADMIN_CANNOT_LEAVE'
+const GROUP_ADMIN_SUCCESSOR_INVALID_CODE = 'GROUP_ADMIN_SUCCESSOR_INVALID'
+const GROUP_ADMIN_TRANSFER_CONFLICT_CODE = 'GROUP_ADMIN_TRANSFER_CONFLICT'
 
 interface GroupUpdateEvent {
   conversation_id: string
@@ -44,6 +50,78 @@ interface GroupUpdateEvent {
 
 const MESSAGE_QUERY_MAX_TIME_MS = 10000
 const escapeRegularExpression = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+type MessageIdRange = { $lt?: ObjectId; $gt?: ObjectId }
+const createMessageIdRange = (cursor?: string, cutoff?: ObjectId): MessageIdRange | undefined => {
+  const range: MessageIdRange = {}
+  if (cursor) range.$lt = new ObjectId(cursor)
+  if (cutoff) range.$gt = cutoff
+  return Object.keys(range).length > 0 ? range : undefined
+}
+const isMessageAfterCutoff = (messageId: unknown, cutoff?: ObjectId) => {
+  if (!cutoff) return true
+  if (typeof messageId === 'string') return messageId > cutoff.toString()
+  return messageId instanceof ObjectId && messageId.toString() > cutoff.toString()
+}
+const createUnhideConversationPipeline = (userId: ObjectId, reopenedAt: Date): Document[] => {
+  const hasPendingHistoryRestore = {
+    $gt: [
+      {
+        $size: {
+          $filter: {
+            input: { $ifNull: ['$history_cleared_by', []] },
+            as: 'marker',
+            cond: {
+              $and: [
+                { $eq: ['$$marker.user_id', userId] },
+                { $eq: ['$$marker.restore_on_next_message', true] }
+              ]
+            }
+          }
+        }
+      },
+      0
+    ]
+  }
+
+  return [{
+    $set: {
+      hidden_by: {
+        $filter: {
+          input: { $ifNull: ['$hidden_by', []] },
+          as: 'hiddenUserId',
+          cond: { $ne: ['$$hiddenUserId', userId] }
+        }
+      },
+      history_cleared_by: {
+        $map: {
+          input: { $ifNull: ['$history_cleared_by', []] },
+          as: 'marker',
+          in: {
+            $cond: [
+              { $eq: ['$$marker.user_id', userId] },
+              { $mergeObjects: ['$$marker', { restore_on_next_message: false }] },
+              '$$marker'
+            ]
+          }
+        }
+      },
+      muted_by: {
+        $cond: [
+          hasPendingHistoryRestore,
+          {
+            $filter: {
+              input: { $ifNull: ['$muted_by', []] },
+              as: 'mute',
+              cond: { $ne: ['$$mute.user_id', userId] }
+            }
+          },
+          { $ifNull: ['$muted_by', []] }
+        ]
+      },
+      updated_at: reopenedAt
+    }
+  }]
+}
 const isMessageVisibleToUser = (message: MessageWithMediaInfo, userId: string) =>
   message.status !== 'deleted' &&
   !message.deleted_by?.some((deletedByUserId) => deletedByUserId.toString() === userId)
@@ -70,6 +148,111 @@ class ConversationService {
 
   constructor() {
     this.databaseService = new DatabaseService()
+  }
+
+  private formatDirectConversation(
+    conversationDocument: DirectConversationAggregate,
+    actorId: ObjectId
+  ) {
+    const {
+      partnerInfo,
+      last_message_overrides,
+      history_cleared_by: _historyClearedBy,
+      ...conversation
+    } = conversationDocument
+    const actorOverride = last_message_overrides?.find((override) =>
+      override.user_id.equals(actorId)
+    )
+
+    return {
+      ...conversation,
+      type: 'direct' as const,
+      last_message_at: actorOverride?.last_message_at ?? conversation.last_message_at,
+      last_message_preview: actorOverride?.last_message_preview ?? conversation.last_message_preview,
+      partner_info: partnerInfo
+        ? {
+            _id: partnerInfo._id,
+            name: partnerInfo.name,
+            username: partnerInfo.username,
+            avatar: partnerInfo.avatar
+          }
+        : null,
+      is_pinned: conversation.pinned_by?.some((id) => id.equals(actorId)) || false
+    }
+  }
+
+  private formatGroupConversation(conversationDocument: GroupConversation, actorId: ObjectId) {
+    const {
+      last_message_overrides,
+      history_cleared_by: _historyClearedBy,
+      ...conversation
+    } = conversationDocument
+    const actorOverride = last_message_overrides?.find((override) =>
+      override.user_id.equals(actorId)
+    )
+
+    return {
+      ...conversation,
+      type: 'group' as const,
+      last_message_at: actorOverride?.last_message_at ?? conversation.last_message_at,
+      last_message_preview: actorOverride?.last_message_preview ?? conversation.last_message_preview,
+      is_pinned: conversation.pinned_by?.some((id) => id.equals(actorId)) || false
+    }
+  }
+
+  private async getDirectConversationSummary(actorId: ObjectId, conversationId: ObjectId) {
+    const conversation = await this.databaseService.directConversations
+      .aggregate<DirectConversationAggregate>([
+        {
+          $match: {
+            _id: conversationId,
+            $or: [{ user1_id: actorId }, { user2_id: actorId }],
+            hidden_by: { $ne: actorId }
+          }
+        },
+        {
+          $addFields: {
+            partner_id: {
+              $cond: {
+                if: { $eq: ['$user1_id', actorId] },
+                then: '$user2_id',
+                else: '$user1_id'
+              }
+            }
+          }
+        },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'partner_id',
+            foreignField: '_id',
+            as: 'partnerInfo'
+          }
+        },
+        { $unwind: { path: '$partnerInfo', preserveNullAndEmptyArrays: true } },
+        { $limit: 1 }
+      ])
+      .next()
+
+    if (!conversation) {
+      throw new HttpError('Conversation could not be restored', HTTP_STATUS.CONFLICT)
+    }
+
+    return this.formatDirectConversation(conversation, actorId)
+  }
+
+  private async getGroupConversationSummary(actorId: ObjectId, conversationId: ObjectId) {
+    const conversation = await this.databaseService.groupConversations.findOne({
+      _id: conversationId,
+      'members.user_id': actorId,
+      hidden_by: { $ne: actorId }
+    })
+
+    if (!conversation) {
+      throw new HttpError('Conversation could not be restored', HTTP_STATUS.CONFLICT)
+    }
+
+    return this.formatGroupConversation(conversation, actorId)
   }
 
   private async invalidateGroupMemberCache(conversationId: string) {
@@ -144,7 +327,8 @@ class ConversationService {
   private async setLastMessageOverride(
     userId: string,
     deletedMessage: Message,
-    session?: ClientSession
+    session?: ClientSession,
+    historyCutoffMessageId?: ObjectId
   ): Promise<boolean> {
     if (!deletedMessage._id || !deletedMessage.send_at) return false
 
@@ -153,7 +337,8 @@ class ConversationService {
       .find({
         conversation_id: deletedMessage.conversation_id,
         status: { $in: ['sent', 'revoked'] },
-        deleted_by: { $ne: actorId }
+        deleted_by: { $ne: actorId },
+        ...(historyCutoffMessageId ? { _id: { $gt: historyCutoffMessageId } } : {})
       }, { session })
       .sort({ _id: -1 })
       .limit(1)
@@ -216,11 +401,11 @@ class ConversationService {
       message.conversation_type === 'direct'
         ? await this.databaseService.directConversations.findOne(
             { _id: message.conversation_id },
-            { projection: { last_message_at: 1, last_message_overrides: 1 } }
+            { projection: { last_message_at: 1, last_message_overrides: 1, history_cleared_by: 1 } }
           )
         : await this.databaseService.groupConversations.findOne(
             { _id: message.conversation_id },
-            { projection: { last_message_at: 1, last_message_overrides: 1 } }
+            { projection: { last_message_at: 1, last_message_overrides: 1, history_cleared_by: 1 } }
           )
     if (!conversation?.last_message_at) return
 
@@ -266,7 +451,14 @@ class ConversationService {
     }
 
     await Promise.all(
-      affectedOverrideUserIds.map((overrideUserId) => this.setLastMessageOverride(overrideUserId, message))
+      affectedOverrideUserIds.map((overrideUserId) =>
+        this.setLastMessageOverride(
+          overrideUserId,
+          message,
+          undefined,
+          getConversationHistoryCutoff(conversation, overrideUserId)
+        )
+      )
     )
   }
 
@@ -313,44 +505,12 @@ class ConversationService {
         .toArray()
     ])
 
-    // Normalize format
-    const formattedDirects = directs.map((conversationDocument) => {
-      const { partnerInfo, last_message_overrides, ...conversation } = conversationDocument
-      const actorOverride = last_message_overrides?.find((override) =>
-        override.user_id.equals(objectIdUserId)
-      )
-
-      return {
-        ...conversation,
-        type: 'direct' as const,
-        last_message_at: actorOverride?.last_message_at ?? conversation.last_message_at,
-        last_message_preview: actorOverride?.last_message_preview ?? conversation.last_message_preview,
-        partner_info: partnerInfo
-          ? {
-              _id: partnerInfo._id,
-              name: partnerInfo.name,
-              username: partnerInfo.username,
-              avatar: partnerInfo.avatar
-            }
-          : null,
-        is_pinned: conversation.pinned_by?.some((id) => id.equals(objectIdUserId)) || false
-      }
-    })
-
-    const formattedGroups = groups.map((conversationDocument) => {
-      const { last_message_overrides, ...conversation } = conversationDocument
-      const actorOverride = last_message_overrides?.find((override) =>
-        override.user_id.equals(objectIdUserId)
-      )
-
-      return {
-        ...conversation,
-        type: 'group' as const,
-        last_message_at: actorOverride?.last_message_at ?? conversation.last_message_at,
-        last_message_preview: actorOverride?.last_message_preview ?? conversation.last_message_preview,
-        is_pinned: conversation.pinned_by?.some((id) => id.equals(objectIdUserId)) || false
-      }
-    })
+    const formattedDirects = directs.map((conversation) =>
+      this.formatDirectConversation(conversation, objectIdUserId)
+    )
+    const formattedGroups = groups.map((conversation) =>
+      this.formatGroupConversation(conversation, objectIdUserId)
+    )
 
     const merged = [...formattedDirects, ...formattedGroups].sort((a, b) => {
       // 1. Sort by pinned status first
@@ -384,6 +544,9 @@ class ConversationService {
       user2_id: u2
     })
 
+    let conversationId: ObjectId
+    let reopenedAt: Date
+
     if (!conversation) {
       const newConversation = new DirectConversation({
         _id: new this.databaseService.ObjectId(),
@@ -393,15 +556,26 @@ class ConversationService {
         last_message_preview: { sender_id: id1, content: 'Conversation started', message_type: 'text' }
       })
       await this.databaseService.directConversations.insertOne(newConversation)
-      return newConversation
-    } else if (conversation.hidden_by?.some((id) => id.equals(id1))) {
-      // Reopen the conversation only for the authenticated user who initiated this request.
-      await this.databaseService.directConversations.updateOne({ _id: conversation._id }, { $pull: { hidden_by: id1 } })
+      conversationId = newConversation._id as ObjectId
+      reopenedAt = newConversation.updated_at as Date
+    } else {
+      conversationId = conversation._id
+      reopenedAt = new Date()
+      const result = await this.databaseService.directConversations.updateOne(
+        { _id: conversationId, $or: [{ user1_id: id1 }, { user2_id: id1 }] },
+        createUnhideConversationPipeline(id1, reopenedAt)
+      )
 
-      conversation.hidden_by = conversation.hidden_by.filter((id) => !id.equals(id1))
+      if (result.matchedCount !== 1) {
+        throw new HttpError('Conversation could not be opened', HTTP_STATUS.CONFLICT)
+      }
     }
 
-    return conversation
+    return {
+      success: true as const,
+      reopened_at: reopenedAt,
+      conversation: await this.getDirectConversationSummary(id1, conversationId)
+    }
   }
 
   async searchGroupConversations(userId: string, keyword: string, cursor: string | undefined, limit: number) {
@@ -441,6 +615,7 @@ class ConversationService {
     const conversationObjectId = new this.databaseService.ObjectId(conversationId)
     const access = await conversationAccessService.assertConversationMember(userId, conversationId)
 
+    const reopenedAt = new Date()
     const result =
       access.type === 'direct'
         ? await this.databaseService.directConversations.updateOne(
@@ -448,21 +623,26 @@ class ConversationService {
               _id: conversationObjectId,
               $or: [{ user1_id: objectIdUserId }, { user2_id: objectIdUserId }]
             },
-            { $pull: { hidden_by: objectIdUserId } }
+            createUnhideConversationPipeline(objectIdUserId, reopenedAt)
           )
         : await this.databaseService.groupConversations.updateOne(
             {
               _id: conversationObjectId,
               'members.user_id': objectIdUserId
             },
-            { $pull: { hidden_by: objectIdUserId } }
+            createUnhideConversationPipeline(objectIdUserId, reopenedAt)
           )
 
     if (result.matchedCount === 0) {
       throw new HttpError('You are no longer a member of this conversation', HTTP_STATUS.FORBIDDEN)
     }
 
-    return { success: true }
+    const conversation =
+      access.type === 'direct'
+        ? await this.getDirectConversationSummary(objectIdUserId, conversationObjectId)
+        : await this.getGroupConversationSummary(objectIdUserId, conversationObjectId)
+
+    return { success: true as const, reopened_at: reopenedAt, conversation }
   }
 
   async createGroupConversation(userId: string, name: string, membersIds: string[], avatar_url?: string) {
@@ -526,8 +706,117 @@ class ConversationService {
     return { success: true }
   }
 
+  async clearConversationHistory(userId: string, conversationId: string) {
+    const actorId = new this.databaseService.ObjectId(userId)
+    const conversationObjectId = new this.databaseService.ObjectId(conversationId)
+    const access = await conversationAccessService.assertConversationMember(userId, conversationId)
+    const latestMessage = await this.databaseService.messages
+      .find(
+        { conversation_id: conversationObjectId },
+        { projection: { _id: 1 } }
+      )
+      .sort({ _id: -1 })
+      .limit(1)
+      .next()
+    const clearedAt = new Date()
+    const historyMarker = {
+      user_id: actorId,
+      cleared_at: clearedAt,
+      cleared_through_message_id: latestMessage?._id ?? null,
+      restore_on_next_message: true
+    }
+    const emptyPreviewOverride = {
+      user_id: actorId,
+      last_message_at: clearedAt,
+      last_message_preview: {
+        sender_id: actorId,
+        content: 'No visible messages',
+        message_type: 'text' as const
+      }
+    }
+    const updatePipeline: Document[] = [
+      {
+        $set: {
+          history_cleared_by: {
+            $concatArrays: [
+              {
+                $filter: {
+                  input: { $ifNull: ['$history_cleared_by', []] },
+                  as: 'marker',
+                  cond: { $ne: ['$$marker.user_id', actorId] }
+                }
+              },
+              [historyMarker]
+            ]
+          },
+          hidden_by: {
+            $setUnion: [{ $ifNull: ['$hidden_by', []] }, [actorId]]
+          },
+          pinned_by: {
+            $filter: {
+              input: { $ifNull: ['$pinned_by', []] },
+              as: 'pinnedUserId',
+              cond: { $ne: ['$$pinnedUserId', actorId] }
+            }
+          },
+          muted_by: {
+            $filter: {
+              input: { $ifNull: ['$muted_by', []] },
+              as: 'mute',
+              cond: { $ne: ['$$mute.user_id', actorId] }
+            }
+          },
+          last_message_overrides: {
+            $concatArrays: [
+              {
+                $filter: {
+                  input: { $ifNull: ['$last_message_overrides', []] },
+                  as: 'override',
+                  cond: { $ne: ['$$override.user_id', actorId] }
+                }
+              },
+              [emptyPreviewOverride]
+            ]
+          },
+          updated_at: clearedAt
+        }
+      }
+    ]
+    const updateResult =
+      access.type === 'direct'
+        ? await this.databaseService.directConversations.updateOne(
+            {
+              _id: conversationObjectId,
+              $or: [{ user1_id: actorId }, { user2_id: actorId }]
+            },
+            updatePipeline
+          )
+        : await this.databaseService.groupConversations.updateOne(
+            { _id: conversationObjectId, 'members.user_id': actorId },
+            updatePipeline
+          )
+
+    if (updateResult.matchedCount !== 1) {
+      throw new HttpError('Conversation history could not be cleared', HTTP_STATUS.CONFLICT)
+    }
+
+    const historyClearedEvent: ConversationHistoryClearedEvent = {
+      conversation_id: conversationId,
+      cleared_at: clearedAt.toISOString()
+    }
+    await conversationMessageSyncService.syncActorAction(
+      conversationId,
+      userId,
+      '@conversation:history-cleared',
+      historyClearedEvent
+    )
+
+    return { success: true as const, cleared_at: clearedAt }
+  }
+
   async getMessages(userId: string, conversationId: string, cursor: string | undefined, limit: number) {
-    await conversationAccessService.assertConversationMember(userId, conversationId)
+    const access = await conversationAccessService.assertConversationMember(userId, conversationId)
+    const historyCutoffMessageId = getConversationHistoryCutoff(access.conversation, userId)
 
     const redisKey = `chat:messages:${conversationId}`
     const convId = new this.databaseService.ObjectId(conversationId)
@@ -539,7 +828,11 @@ class ConversationService {
       if (cachedMessages && cachedMessages.length > limit) {
         const visibleCachedMessages = cachedMessages
           .map((msg: string) => JSON.parse(msg) as MessageWithMediaInfo)
-          .filter((message) => isMessageVisibleToUser(message, userId))
+          .filter(
+            (message) =>
+              isMessageVisibleToUser(message, userId) &&
+              isMessageAfterCutoff(message._id, historyCutoffMessageId)
+          )
         if (visibleCachedMessages.length > limit) {
           rawMessages = visibleCachedMessages
         }
@@ -552,9 +845,8 @@ class ConversationService {
         status: { $in: ['sent', 'revoked'] },
         deleted_by: { $ne: new this.databaseService.ObjectId(userId) }
       }
-      if (cursor) {
-        matchStage._id = { $lt: new this.databaseService.ObjectId(cursor) }
-      }
+      const messageIdRange = createMessageIdRange(cursor, historyCutoffMessageId)
+      if (messageIdRange) matchStage._id = messageIdRange
 
       rawMessages = await this.databaseService.messages
         .aggregate<MessageWithMediaInfo>([
@@ -575,7 +867,8 @@ class ConversationService {
 
     const messages = await conversationMessageHydrationService.hydrateSenderInfo(
       rawMessages.slice(0, limit),
-      userId
+      userId,
+      historyCutoffMessageId
     )
 
     const has_next_page = rawMessages.length > limit
@@ -591,10 +884,14 @@ class ConversationService {
     before: number,
     after: number
   ): Promise<MessageContextData> {
-    await conversationAccessService.assertConversationMember(userId, conversationId)
+    const access = await conversationAccessService.assertConversationMember(userId, conversationId)
+    const historyCutoffMessageId = getConversationHistoryCutoff(access.conversation, userId)
 
     const conversationObjectId = new this.databaseService.ObjectId(conversationId)
     const messageObjectId = new this.databaseService.ObjectId(messageId)
+    if (!isMessageAfterCutoff(messageObjectId, historyCutoffMessageId)) {
+      throw new HttpError('Message not found in this conversation', HTTP_STATUS.NOT_FOUND)
+    }
     const target = await this.databaseService.messages.findOne({
       _id: messageObjectId,
       conversation_id: conversationObjectId,
@@ -638,9 +935,11 @@ class ConversationService {
       status: 'sent',
       deleted_by: { $ne: new this.databaseService.ObjectId(userId) }
     }
+    const olderMessageRange: MessageIdRange = { $lt: messageObjectId }
+    if (historyCutoffMessageId) olderMessageRange.$gt = historyCutoffMessageId
 
     const [olderDescending, targetMessages, newerAscending] = await Promise.all([
-      aggregateMessages({ ...baseMatch, _id: { $lt: messageObjectId } }, -1, before + 1),
+      aggregateMessages({ ...baseMatch, _id: olderMessageRange }, -1, before + 1),
       aggregateMessages({ ...baseMatch, _id: messageObjectId }, 1, 1),
       aggregateMessages({ ...baseMatch, _id: { $gt: messageObjectId } }, 1, after + 1)
     ])
@@ -658,7 +957,8 @@ class ConversationService {
 
     const messages = await conversationMessageHydrationService.hydrateSenderInfo(
       [...olderMessages, ...targetMessages, ...newerMessages],
-      userId
+      userId,
+      historyCutoffMessageId
     )
 
     return {
@@ -670,13 +970,18 @@ class ConversationService {
   }
 
   async markAsRead(userId: string, conversationId: string) {
-    await conversationAccessService.assertConversationMember(userId, conversationId)
+    const access = await conversationAccessService.assertConversationMember(userId, conversationId)
+    const historyCutoffMessageId = getConversationHistoryCutoff(access.conversation, userId)
 
     const objectIdUserId = new this.databaseService.ObjectId(userId)
     const convId = new this.databaseService.ObjectId(conversationId)
 
     await this.databaseService.messages.updateMany(
-      { conversation_id: convId, read_by: { $ne: objectIdUserId } },
+      {
+        conversation_id: convId,
+        read_by: { $ne: objectIdUserId },
+        ...(historyCutoffMessageId ? { _id: { $gt: historyCutoffMessageId } } : {})
+      },
       { $addToSet: { read_by: objectIdUserId } }
     )
 
@@ -724,10 +1029,14 @@ class ConversationService {
 
   async deleteMessage(userId: string, messageId: string) {
     const msgId = new this.databaseService.ObjectId(messageId)
-    const { message } = await conversationMessageAccessService.assertMessageAccess(userId, messageId, {
-      requireVisibleToUser: true,
-      allowedStatuses: ['sent']
-    })
+    const { message, conversation } = await conversationMessageAccessService.assertMessageAccess(
+      userId,
+      messageId,
+      {
+        requireVisibleToUser: true,
+        allowedStatuses: ['sent']
+      }
+    )
     const actorId = new this.databaseService.ObjectId(userId)
     const session = this.databaseService.startSession()
 
@@ -742,7 +1051,12 @@ class ConversationService {
           throw new HttpError('Message state changed before it could be deleted', HTTP_STATUS.CONFLICT)
         }
 
-        const previewUpdated = await this.setLastMessageOverride(userId, message, session)
+        const previewUpdated = await this.setLastMessageOverride(
+          userId,
+          message,
+          session,
+          getConversationHistoryCutoff(conversation.conversation, userId)
+        )
         if (!previewUpdated) {
           throw new HttpError('Conversation preview could not be updated', HTTP_STATUS.CONFLICT)
         }
@@ -877,7 +1191,8 @@ class ConversationService {
   }
 
   async searchMessages(userId: string, conversationId: string, q: string, cursor: string | undefined, limit: number) {
-    await conversationAccessService.assertConversationMember(userId, conversationId)
+    const access = await conversationAccessService.assertConversationMember(userId, conversationId)
+    const historyCutoffMessageId = getConversationHistoryCutoff(access.conversation, userId)
 
     const convId = new this.databaseService.ObjectId(conversationId)
     const matchStage: Filter<Message> = {
@@ -886,9 +1201,8 @@ class ConversationService {
       deleted_by: { $ne: new this.databaseService.ObjectId(userId) },
       $text: { $search: q }
     }
-    if (cursor) {
-      matchStage._id = { $lt: new this.databaseService.ObjectId(cursor) }
-    }
+    const messageIdRange = createMessageIdRange(cursor, historyCutoffMessageId)
+    if (messageIdRange) matchStage._id = messageIdRange
 
     const matchedMessages: MessageWithMediaInfo[] = await this.databaseService.messages
       .find(matchStage, { maxTimeMS: MESSAGE_QUERY_MAX_TIME_MS })
@@ -899,7 +1213,8 @@ class ConversationService {
     const has_next_page = matchedMessages.length > limit
     const messages = await conversationMessageHydrationService.hydrateSenderInfo(
       matchedMessages.slice(0, limit),
-      userId
+      userId,
+      historyCutoffMessageId
     )
     const next_cursor = has_next_page ? (messages[messages.length - 1]?._id?.toString() ?? null) : null
 
@@ -907,7 +1222,8 @@ class ConversationService {
   }
 
   async getConversationMedia(userId: string, conversationId: string, cursor: string | undefined, limit: number) {
-    await conversationAccessService.assertConversationMember(userId, conversationId)
+    const access = await conversationAccessService.assertConversationMember(userId, conversationId)
+    const historyCutoffMessageId = getConversationHistoryCutoff(access.conversation, userId)
 
     const convId = new this.databaseService.ObjectId(conversationId)
     const matchStage: Filter<Message> = {
@@ -916,9 +1232,8 @@ class ConversationService {
       deleted_by: { $ne: new this.databaseService.ObjectId(userId) },
       media_ids: { $exists: true, $not: { $size: 0 } }
     }
-    if (cursor) {
-      matchStage._id = { $lt: new this.databaseService.ObjectId(cursor) }
-    }
+    const messageIdRange = createMessageIdRange(cursor, historyCutoffMessageId)
+    if (messageIdRange) matchStage._id = messageIdRange
 
     const messages = await this.databaseService.messages
       .aggregate<MessageWithMediaInfo>([
@@ -959,7 +1274,8 @@ class ConversationService {
     const has_next_page = messages.length > limit
     const pageMessages = await conversationMessageHydrationService.hydrateSenderInfo(
       messages.slice(0, limit),
-      userId
+      userId,
+      historyCutoffMessageId
     )
     const next_cursor = has_next_page ? (pageMessages[pageMessages.length - 1]?._id?.toString() ?? null) : null
 
@@ -978,24 +1294,40 @@ class ConversationService {
     }
 
     const muteObj = { user_id: uId, until }
+    const mutedAt = new Date()
+    const muteUpdatePipeline: Document[] = [
+      {
+        $set: {
+          muted_by: {
+            $concatArrays: [
+              {
+                $filter: {
+                  input: { $ifNull: ['$muted_by', []] },
+                  as: 'mute',
+                  cond: { $ne: ['$$mute.user_id', uId] }
+                }
+              },
+              [muteObj]
+            ]
+          },
+          updated_at: mutedAt
+        }
+      }
+    ]
 
     if (access.type === 'direct') {
       await this.databaseService.directConversations.updateOne(
-        { _id: convId, $or: [{ user1_id: uId }, { user2_id: uId }] },
-        { $pull: { muted_by: { user_id: uId } } as any }
-      )
-      await this.databaseService.directConversations.updateOne(
-        { _id: convId, $or: [{ user1_id: uId }, { user2_id: uId }] },
-        { $push: { muted_by: muteObj } as any }
+        {
+          _id: convId,
+          $or: [{ user1_id: uId }, { user2_id: uId }],
+          hidden_by: { $ne: uId }
+        },
+        muteUpdatePipeline
       )
     } else {
       await this.databaseService.groupConversations.updateOne(
-        { _id: convId, 'members.user_id': uId },
-        { $pull: { muted_by: { user_id: uId } } as any }
-      )
-      await this.databaseService.groupConversations.updateOne(
-        { _id: convId, 'members.user_id': uId },
-        { $push: { muted_by: muteObj } as any }
+        { _id: convId, 'members.user_id': uId, hidden_by: { $ne: uId } },
+        muteUpdatePipeline
       )
     }
     return { success: true, until }
@@ -1341,6 +1673,134 @@ class ConversationService {
       change_type: 'member_left',
       actor_id: userId,
       affected_user_ids: [userId]
+    })
+
+    return { success: true }
+  }
+
+  async transferAdminAndLeave(adminId: string, conversationId: string, successorUserId: string) {
+    if (adminId === successorUserId) {
+      throw new HttpError(
+        'Choose another group member as the new admin',
+        HTTP_STATUS.BAD_REQUEST,
+        undefined,
+        GROUP_ADMIN_SUCCESSOR_INVALID_CODE
+      )
+    }
+
+    const convId = new this.databaseService.ObjectId(conversationId)
+    const adminObjectId = new this.databaseService.ObjectId(adminId)
+    const successorObjectId = new this.databaseService.ObjectId(successorUserId)
+    const access = await conversationAccessService.assertGroupAdmin(adminId, conversationId)
+    const successor = access.conversation.members.find((member) => member.user_id.equals(successorObjectId))
+    const adminCount = access.conversation.members.filter((member) => member.role === 'admin').length
+
+    if (!successor || successor.role !== 'member') {
+      throw new HttpError(
+        'The selected successor is not an eligible group member',
+        HTTP_STATUS.BAD_REQUEST,
+        undefined,
+        GROUP_ADMIN_SUCCESSOR_INVALID_CODE
+      )
+    }
+
+    if (adminCount !== 1) {
+      throw new HttpError(
+        'Group admin state changed; refresh and try again',
+        HTTP_STATUS.CONFLICT,
+        undefined,
+        GROUP_ADMIN_TRANSFER_CONFLICT_CODE
+      )
+    }
+
+    const updatedAt = new Date()
+    const result = await this.databaseService.groupConversations.updateOne(
+      {
+        _id: convId,
+        members: { $elemMatch: { user_id: adminObjectId, role: 'admin' } },
+        $and: [
+          { members: { $elemMatch: { user_id: successorObjectId, role: 'member' } } },
+          {
+            $expr: {
+              $eq: [
+                {
+                  $size: {
+                    $filter: {
+                      input: '$members',
+                      as: 'member',
+                      cond: { $eq: ['$$member.role', 'admin'] }
+                    }
+                  }
+                },
+                1
+              ]
+            }
+          }
+        ]
+      },
+      [
+        {
+          $set: {
+            members: {
+              $map: {
+                input: {
+                  $filter: {
+                    input: '$members',
+                    as: 'member',
+                    cond: { $ne: ['$$member.user_id', adminObjectId] }
+                  }
+                },
+                as: 'member',
+                in: {
+                  $cond: [
+                    { $eq: ['$$member.user_id', successorObjectId] },
+                    { $mergeObjects: ['$$member', { role: 'admin' }] },
+                    '$$member'
+                  ]
+                }
+              }
+            },
+            hidden_by: {
+              $filter: {
+                input: { $ifNull: ['$hidden_by', []] },
+                as: 'hiddenUserId',
+                cond: { $ne: ['$$hiddenUserId', adminObjectId] }
+              }
+            },
+            pinned_by: {
+              $filter: {
+                input: { $ifNull: ['$pinned_by', []] },
+                as: 'pinnedUserId',
+                cond: { $ne: ['$$pinnedUserId', adminObjectId] }
+              }
+            },
+            muted_by: {
+              $filter: {
+                input: { $ifNull: ['$muted_by', []] },
+                as: 'mute',
+                cond: { $ne: ['$$mute.user_id', adminObjectId] }
+              }
+            },
+            updated_at: updatedAt
+          }
+        }
+      ]
+    )
+
+    if (result.modifiedCount === 0) {
+      throw new HttpError(
+        'Group membership changed; refresh and choose the new admin again',
+        HTTP_STATUS.CONFLICT,
+        undefined,
+        GROUP_ADMIN_TRANSFER_CONFLICT_CODE
+      )
+    }
+
+    await this.syncGroupMembership(access.memberIds, {
+      conversation_id: conversationId,
+      change_type: 'admin_transferred',
+      actor_id: adminId,
+      affected_user_ids: [adminId, successorUserId]
     })
 
     return { success: true }

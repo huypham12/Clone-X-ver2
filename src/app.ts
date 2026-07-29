@@ -2,10 +2,18 @@ import express from 'express'
 import { createServer } from 'http'
 import { initSocket } from './socket'
 import DatabaseService from './config/database.service'
-import { envConfig } from './config/getEnvConfig'
+import { envConfig, isProduction } from './config/getEnvConfig'
 import redisService from './config/redis.service'
 import '~/queues/video.queue' // Khởi động video worker
-import { authRouter, userRouter, mediaRouter, tweetRouter, conversationRouter, searchRouter, notificationRouter } from './modules'
+import {
+  authRouter,
+  userRouter,
+  mediaRouter,
+  tweetRouter,
+  conversationRouter,
+  searchRouter,
+  notificationRouter
+} from './modules'
 import { errorHandler } from './middleware/error-handler.middleware'
 import rateLimit from 'express-rate-limit'
 import helmet from 'helmet'
@@ -23,7 +31,9 @@ const main = async () => {
   const PORT = envConfig.app.port || 3000
   const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 phút
-    max: 100, // giới hạn 100 request / IP / 15 phút
+    // Một trang có thể gọi nhiều endpoint song song khi phát triển. Giữ giới hạn
+    // chặt trên production nhưng tránh khóa nhầm localhost trong lúc hot reload.
+    max: isProduction ? 100 : 10_000,
     message: 'Bạn đã gửi quá nhiều request. Vui lòng thử lại sau 15 phút.',
     standardHeaders: true, // gửi các header rate limit (RateLimit-*)
     legacyHeaders: false // bỏ x-RateLimit-*
@@ -55,9 +65,10 @@ const main = async () => {
 
     await redisService.connect()
 
+    // CORS phải chạy trước rate limiter để cả phản hồi 429 cũng có CORS headers.
+    app.use(cors({ origin: true, credentials: true })) // Cho phép origin hiện tại và gửi kèm cookie
     app.use(limiter)
     app.use(helmet())
-    app.use(cors({ origin: true, credentials: true })) // Cho phép origin hiện tại và gửi kèm cookie
     app.use(express.json())
     app.use('/api/auth', authRouter)
     app.use('/api/user', userRouter)
