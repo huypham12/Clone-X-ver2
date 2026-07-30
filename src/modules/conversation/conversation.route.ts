@@ -31,7 +31,10 @@ import {
   editMessageController,
   unreactMessageController,
   getMessageReactionsController,
-  forwardMessageController
+  forwardMessageController,
+  getConversationUnreadSummaryController,
+  grantGroupAdminController,
+  revokeGroupAdminController
 } from './conversation.controller'
 import { 
   paginationValidator, 
@@ -50,7 +53,8 @@ import {
   groupConversationLookupValidator,
   groupMemberParamsValidator,
   transferAdminAndLeaveValidator,
-  clearConversationHistoryValidator
+  clearConversationHistoryValidator,
+  markConversationReadValidator
 } from './conversation.validator'
 
 const conversationRouter = Router()
@@ -62,6 +66,11 @@ conversationRouter.use(accessTokenValidator, authenticateAccessToken)
 conversationRouter.get(
   '/', 
   wrapController(getConversationsController)
+)
+
+conversationRouter.get(
+  '/unread-summary',
+  wrapController(getConversationUnreadSummaryController)
 )
 
 conversationRouter.get(
@@ -148,6 +157,18 @@ conversationRouter.post(
   wrapController(transferAdminAndLeaveController)
 )
 
+conversationRouter.post(
+  '/:conversation_id/admins/:user_id',
+  groupMemberParamsValidator,
+  wrapController(grantGroupAdminController)
+)
+
+conversationRouter.delete(
+  '/:conversation_id/admins/:user_id',
+  groupMemberParamsValidator,
+  wrapController(revokeGroupAdminController)
+)
+
 // 2. Quản lý Tin nhắn trong một hội thoại
 conversationRouter.get(
   '/:conversation_id/messages',
@@ -178,6 +199,7 @@ conversationRouter.get(
 
 conversationRouter.post(
   '/:conversation_id/read',
+  markConversationReadValidator,
   wrapController(markReadController)
 )
 

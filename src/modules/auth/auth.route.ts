@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import DatabaseService from '~/config/database.service'
+import { databaseService } from '~/config/database.service'
 import { AuthController } from './auth.controller'
 import { AuthService } from './services/auth.service'
 import { wrapController } from '~/utils/wrap-controller'
@@ -21,7 +21,6 @@ import {
 } from '../../middleware/verify.middleware'
 
 const authRouter = Router()
-const databaseService = new DatabaseService() // vì export bằng class nên phải khởi tạo
 const emailService = new EmailService()
 const authService = new AuthService(databaseService, emailService)
 const authController = new AuthController(authService, emailService)

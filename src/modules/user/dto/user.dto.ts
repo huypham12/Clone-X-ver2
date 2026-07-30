@@ -28,6 +28,15 @@ export interface UserPrivateDTO extends UserPublicDTO {
   verify?: UserVerifyStatus
 }
 
+export interface FollowNotificationPreferenceBodyDto {
+  posts: boolean
+}
+
+export interface FollowNotificationPreferenceData {
+  followed_user_id: string
+  posts: boolean
+}
+
 export class UserResponseDto extends SuccessResponseDto<UserPublicDTO[] | UserPrivateDTO[]> {
   constructor(user: UserPublicDTO | UserPrivateDTO | UserPublicDTO[] | UserPrivateDTO[]) {
     super(HTTP_STATUS.OK, MESSAGES.GET_USER_PROFILE_SUCCESS, Array.isArray(user) ? user : [user])

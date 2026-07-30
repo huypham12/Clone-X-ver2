@@ -82,7 +82,7 @@ export type MessageWithMediaInfo = Message & {
   medias_info?: ConversationMediaInfo[]
 }
 
-export type PublicMessageWithMediaInfo = Omit<MessageWithMediaInfo, 'deleted_by'>
+export type PublicMessageWithMediaInfo = Omit<MessageWithMediaInfo, 'deleted_by' | 'client_payload_hash'>
 
 export type HydratedMessage = PublicMessageWithMediaInfo & {
   sender_info: MessageSenderInfo | null
@@ -128,6 +128,22 @@ export class CreateGroupConversationBodyDto {
     public members: string[],
     public avatar_url?: string
   ) {}
+}
+
+export interface MarkConversationReadBodyDto {
+  message_id?: string
+}
+
+export interface ForwardMessageBodyDto {
+  conversation_ids: string[]
+  client_operation_id?: string
+}
+
+export interface ConversationUnreadSummaryData {
+  unread_conversation_count: number
+  total_unread_message_count: number
+  version: number
+  updated_at: Date
 }
 
 export interface TransferAdminAndLeaveBodyDto {

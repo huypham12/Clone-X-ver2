@@ -1,6 +1,6 @@
 import { ObjectId } from 'mongodb'
 import { HttpError } from '~/common/http-error'
-import DatabaseService from '~/config/database.service'
+import DatabaseService, { databaseService as sharedDatabaseService } from '~/config/database.service'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import type DirectConversation from '~/schemas/DirectConversation.schema'
 import type GroupConversation from '~/schemas/GroupConversation.schema'
@@ -48,8 +48,8 @@ export const isMessageAfterHistoryCutoff = (
 class ConversationAccessService {
   private readonly databaseService: DatabaseService
 
-  constructor() {
-    this.databaseService = new DatabaseService()
+  constructor(databaseService: DatabaseService = sharedDatabaseService) {
+    this.databaseService = databaseService
   }
 
   async resolveConversation(

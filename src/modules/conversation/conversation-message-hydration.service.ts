@@ -1,5 +1,5 @@
 import { Filter, ObjectId } from 'mongodb'
-import DatabaseService from '~/config/database.service'
+import DatabaseService, { databaseService as sharedDatabaseService } from '~/config/database.service'
 import { MediaType } from '~/constants/enums'
 import type Message from '~/schemas/Message.schema'
 import { isMessageReactionEmoji } from './dto'
@@ -24,13 +24,14 @@ const isReplyMediaType = (type: MediaType): type is MessageReplyMediaType =>
 const omitPrivateVisibility = (message: MessageWithMediaInfo): PublicMessageWithMediaInfo => {
   const publicMessage = { ...message }
   Reflect.deleteProperty(publicMessage, 'deleted_by')
+  Reflect.deleteProperty(publicMessage, 'client_payload_hash')
   return publicMessage
 }
 
 export class ConversationMessageHydrationService {
   private readonly databaseService: DatabaseService
 
-  constructor(databaseService: DatabaseService = new DatabaseService()) {
+  constructor(databaseService: DatabaseService = sharedDatabaseService) {
     this.databaseService = databaseService
   }
 

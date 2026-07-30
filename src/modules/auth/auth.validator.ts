@@ -4,11 +4,9 @@ import { HttpError } from '~/common/http-error'
 import { MESSAGES } from '~/constants/messages'
 import { verifyToken } from '~/utils/jwt'
 import { hashPassword } from '~/utils/crypto'
-import DatabaseService from '~/config/database.service'
+import { databaseService } from '~/config/database.service'
 import { ObjectId } from 'mongodb'
 import { TokenExpiredError } from 'jsonwebtoken'
-
-const databaseService = new DatabaseService()
 
 // Schema cho password
 const passwordSchema = z

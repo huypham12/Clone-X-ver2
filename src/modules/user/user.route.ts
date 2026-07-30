@@ -1,15 +1,18 @@
 import { Router } from 'express'
-import DatabaseService from '~/config/database.service'
+import { databaseService } from '~/config/database.service'
 import { UserController } from './user.controller'
 import { UserService } from './user.service'
 import { wrapController } from '~/utils/wrap-controller'
 import { authenticateAccessToken, verifiedUserValidator, isUserLoggedInValidator } from '~/middleware/verify.middleware'
 import { accessTokenValidator } from '../auth/auth.validator'
-import { updateMeValidator } from './user.validator'
+import {
+  followedUserIdValidator,
+  followNotificationPreferenceValidator,
+  updateMeValidator
+} from './user.validator'
 import { paginationValidator } from '../tweet/tweet.validator'
 
 const userRouter = Router()
-const databaseService = new DatabaseService()
 const userService = new UserService(databaseService)
 const userController = new UserController(userService)
 
@@ -28,7 +31,11 @@ userRouter.get(
   authenticateAccessToken,
   wrapController(userController.getFriendsController)
 )
-userRouter.get('/profile/:username', isUserLoggedInValidator(authenticateAccessToken), wrapController(userController.getProfileController))
+userRouter.get(
+  '/profile/:username',
+  isUserLoggedInValidator(authenticateAccessToken),
+  wrapController(userController.getProfileController)
+)
 userRouter.patch(
   '/me',
   accessTokenValidator,
@@ -53,6 +60,15 @@ userRouter.delete(
   wrapController(userController.unblockUserController)
 )
 
+userRouter.patch(
+  '/:followed_user_id/follow-notification-preferences',
+  accessTokenValidator,
+  authenticateAccessToken,
+  verifiedUserValidator,
+  followNotificationPreferenceValidator,
+  wrapController(userController.updateFollowNotificationPreferenceController)
+)
+
 userRouter.get(
   '/blocked-users',
   accessTokenValidator,
@@ -66,16 +82,16 @@ userRouter.post(
   accessTokenValidator,
   authenticateAccessToken,
   verifiedUserValidator,
+  followedUserIdValidator,
   wrapController(userController.followUserController)
 )
-
-
 
 userRouter.delete(
   '/:followed_user_id/follow',
   accessTokenValidator,
   authenticateAccessToken,
   verifiedUserValidator,
+  followedUserIdValidator,
   wrapController(userController.unfollowUserController)
 )
 

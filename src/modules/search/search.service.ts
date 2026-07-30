@@ -1,12 +1,12 @@
-import DatabaseService from '~/config/database.service'
+import DatabaseService, { databaseService as sharedDatabaseService } from '~/config/database.service'
 import redisService from '~/config/redis.service'
 import { getParentTweetLookupStages, getIsRetweetedLookupStages } from '~/utils/aggregation'
 
 class SearchService {
   private databaseService: DatabaseService
 
-  constructor() {
-    this.databaseService = new DatabaseService()
+  constructor(databaseService: DatabaseService = sharedDatabaseService) {
+    this.databaseService = databaseService
   }
 
   async searchUsers(q: string, cursor: string | undefined, limit: number, user_id?: string) {

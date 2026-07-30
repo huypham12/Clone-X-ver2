@@ -1,21 +1,46 @@
-import DatabaseService from '~/config/database.service'
+import DatabaseService, { databaseService as sharedDatabaseService } from '~/config/database.service'
 import { ClientSession, Document, Filter, ObjectId } from 'mongodb'
+import { randomUUID } from 'crypto'
 import DirectConversation from '~/schemas/DirectConversation.schema'
 import GroupConversation from '~/schemas/GroupConversation.schema'
-import Message from '~/schemas/Message.schema'
+import type Message from '~/schemas/Message.schema'
 import { HttpError } from '~/common/http-error'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import redisService from '~/config/redis.service'
 import { getIO } from '~/socket'
-import { MediaStatus, MediaType } from '~/constants/enums'
+import {
+  ConversationSystemEventType,
+  MediaStatus,
+  MediaType,
+  MessageKind,
+  NotificationTargetType,
+  NotificationType
+} from '~/constants/enums'
 import type User from '~/schemas/User.schema'
 import conversationAccessService, {
   getConversationHistoryCutoff,
+  isMessageAfterHistoryCutoff,
   type ConversationType
 } from './conversation-access.service'
 import conversationMessageAccessService from './conversation-message-access.service'
 import conversationMessageHydrationService from './conversation-message-hydration.service'
 import conversationMessageSyncService from './conversation-message-sync.service'
+import conversationMessageCommandService, {
+  type ConversationMessageCommandService
+} from './conversation-message-command.service'
+import conversationMessageDeliveryService, {
+  type ConversationMessageDeliveryService
+} from './conversation-message-delivery.service'
+import conversationReadService, { type ConversationReadService } from './conversation-read.service'
+import conversationSystemMessageService, {
+  type ConversationSystemMessageService
+} from './conversation-system-message.service'
+import { envConfig } from '~/config/getEnvConfig'
+import { DomainAggregateType, DomainEventType } from '~/modules/events/domain-event.type'
+import { OutboxDomainEventPublisher } from '~/modules/events/outbox.publisher'
+import type { TransactionalDomainEventPublisher } from '~/modules/events/domain-event.publisher'
+import type { OutboxInsertResult } from '~/modules/events/outbox.repository'
+import { NotificationLifecycleGuardService } from '~/modules/notification/notification-lifecycle-guard.service'
 import {
   isMessageReactionEmoji,
   type ConversationHistoryClearedEvent,
@@ -34,7 +59,22 @@ type DirectConversationAggregate = DirectConversation & {
   partnerInfo?: ConversationPartner
 }
 
-type GroupUpdateType = 'info_updated' | 'members_added' | 'member_removed' | 'member_left' | 'admin_transferred'
+type GroupUpdateType =
+  | 'info_updated'
+  | 'group_created'
+  | 'members_added'
+  | 'member_removed'
+  | 'member_left'
+  | 'admin_granted'
+  | 'admin_revoked'
+  | 'admin_transferred'
+
+type ReactionMutationOutcome = {
+  changed: boolean
+  conversationId: string
+  memberIds: string[]
+  state: MessageReactionState
+}
 
 const GROUP_ADMIN_CANNOT_REMOVE_SELF_CODE = 'GROUP_ADMIN_CANNOT_REMOVE_SELF'
 const GROUP_SOLE_ADMIN_CANNOT_LEAVE_CODE = 'GROUP_SOLE_ADMIN_CANNOT_LEAVE'
@@ -146,8 +186,18 @@ const createMessageReactionState = (reactions: Message['reactions']): MessageRea
 class ConversationService {
   private databaseService: DatabaseService
 
-  constructor() {
-    this.databaseService = new DatabaseService()
+  constructor(
+    databaseService: DatabaseService = sharedDatabaseService,
+    private readonly messageCommandService: ConversationMessageCommandService = conversationMessageCommandService,
+    private readonly messageDeliveryService: ConversationMessageDeliveryService = conversationMessageDeliveryService,
+    private readonly readService: ConversationReadService = conversationReadService,
+    private readonly systemMessageService: ConversationSystemMessageService = conversationSystemMessageService,
+    private readonly outboxPublisher: TransactionalDomainEventPublisher<OutboxInsertResult> = new OutboxDomainEventPublisher(),
+    private readonly lifecycleGuard: NotificationLifecycleGuardService = new NotificationLifecycleGuardService(
+      databaseService
+    )
+  ) {
+    this.databaseService = databaseService
   }
 
   private formatDirectConversation(
@@ -291,6 +341,78 @@ class ConversationService {
     this.emitGroupUpdate([...recipientIds, ...currentMemberIds], event)
   }
 
+  private async createGroupActivityInTransaction(
+    input: {
+      conversation_id: ObjectId
+      actor_id: ObjectId
+      recipient_ids: ObjectId[]
+      affected_user_ids: ObjectId[]
+      system_event_type: ConversationSystemEventType
+      notification_type:
+        | NotificationType.GroupAdd
+        | NotificationType.GroupKick
+        | NotificationType.AdminGranted
+        | NotificationType.AdminRevoked
+        | null
+      direct_recipient_ids: ObjectId[]
+      occurred_at: Date
+      context?: Record<string, unknown>
+    },
+    session: ClientSession
+  ) {
+    if (
+      !envConfig.features.notificationOutboxEnabled ||
+      !envConfig.features.notificationGroupManagementEnabled
+    ) {
+      return undefined
+    }
+    const result = await this.systemMessageService.createInTransaction(
+      {
+        actor_id: input.actor_id,
+        conversation_id: input.conversation_id,
+        system_event_type: input.system_event_type,
+        affected_user_ids: input.affected_user_ids,
+        recipient_ids: input.recipient_ids,
+        context: input.context,
+        occurred_at: input.occurred_at
+      },
+      session
+    )
+    const messageId = result.message._id
+    if (!messageId) throw new Error('System message is missing its identity')
+    await this.outboxPublisher.publish(
+      {
+        event_id: `group-management:${messageId.toHexString()}`,
+        type: DomainEventType.GroupManagementChanged,
+        aggregate_type: DomainAggregateType.Conversation,
+        aggregate_id: input.conversation_id,
+        actor_id: input.actor_id,
+        occurred_at: input.occurred_at,
+        payload: {
+          conversation_id: input.conversation_id,
+          system_message_id: messageId,
+          system_event_type: input.system_event_type,
+          affected_user_ids: input.affected_user_ids,
+          direct_recipient_ids: input.direct_recipient_ids,
+          notification_type: input.notification_type,
+          source_type: 'GROUP_EVENT',
+          source_id: messageId.toHexString()
+        }
+      },
+      { session }
+    )
+    return result
+  }
+
+  private async deliverGroupActivity(
+    result: Awaited<ReturnType<ConversationService['createGroupActivityInTransaction']>>
+  ): Promise<void> {
+    if (!result) return
+    await this.messageDeliveryService.deliver(result).catch((error: unknown) => {
+      console.error('Could not deliver committed group system message:', error)
+    })
+  }
+
   private async buildLastMessagePreview(message: Message, session?: ClientSession) {
     if (message.status === 'revoked') {
       return {
@@ -394,23 +516,23 @@ class ConversationService {
     return result.matchedCount === 1
   }
 
-  private async syncLastMessagePreviewAfterRevoke(message: Message): Promise<void> {
+  private async syncLastMessagePreviewAfterRevoke(message: Message, session?: ClientSession): Promise<void> {
     if (!message._id || !message.send_at) return
 
     const conversation =
       message.conversation_type === 'direct'
         ? await this.databaseService.directConversations.findOne(
             { _id: message.conversation_id },
-            { projection: { last_message_at: 1, last_message_overrides: 1, history_cleared_by: 1 } }
+            { projection: { last_message_at: 1, last_message_overrides: 1, history_cleared_by: 1 }, session }
           )
         : await this.databaseService.groupConversations.findOne(
             { _id: message.conversation_id },
-            { projection: { last_message_at: 1, last_message_overrides: 1, history_cleared_by: 1 } }
+            { projection: { last_message_at: 1, last_message_overrides: 1, history_cleared_by: 1 }, session }
           )
     if (!conversation?.last_message_at) return
 
     const latestSentMessage = await this.databaseService.messages
-      .find({ conversation_id: message.conversation_id, status: 'sent' })
+      .find({ conversation_id: message.conversation_id, status: 'sent' }, { session })
       .sort({ _id: -1 })
       .limit(1)
       .next()
@@ -424,7 +546,7 @@ class ConversationService {
 
     if (!latestSentMessage || latestSentMessage._id.toString() <= message._id.toString()) {
       const lastMessagePreview = latestSentMessage
-        ? await this.buildLastMessagePreview(latestSentMessage)
+        ? await this.buildLastMessagePreview(latestSentMessage, session)
         : {
             message_id: message._id,
             sender_id: message.sender_id,
@@ -444,9 +566,9 @@ class ConversationService {
       }
 
       if (message.conversation_type === 'direct') {
-        await this.databaseService.directConversations.updateOne(filter, update)
+        await this.databaseService.directConversations.updateOne(filter, update, { session })
       } else {
-        await this.databaseService.groupConversations.updateOne(filter, update)
+        await this.databaseService.groupConversations.updateOne(filter, update, { session })
       }
     }
 
@@ -455,7 +577,7 @@ class ConversationService {
         this.setLastMessageOverride(
           overrideUserId,
           message,
-          undefined,
+          session,
           getConversationHistoryCutoff(conversation, overrideUserId)
         )
       )
@@ -505,14 +627,33 @@ class ConversationService {
         .toArray()
     ])
 
-    const formattedDirects = directs.map((conversation) =>
-      this.formatDirectConversation(conversation, objectIdUserId)
-    )
-    const formattedGroups = groups.map((conversation) =>
-      this.formatGroupConversation(conversation, objectIdUserId)
-    )
+    const formattedDirects = directs
+      .map((conversation) => this.formatDirectConversation(conversation, objectIdUserId))
+      .filter((conversation): conversation is typeof conversation & { _id: ObjectId } =>
+        conversation._id instanceof ObjectId
+      )
+    const formattedGroups = groups
+      .map((conversation) => this.formatGroupConversation(conversation, objectIdUserId))
+      .filter((conversation): conversation is typeof conversation & { _id: ObjectId } =>
+        conversation._id instanceof ObjectId
+      )
 
-    const merged = [...formattedDirects, ...formattedGroups].sort((a, b) => {
+    const readStates = await this.readService.getConversationStates(
+      userId,
+      [...formattedDirects, ...formattedGroups].map((conversation) => conversation._id)
+    )
+    const readStateByConversation = new Map(
+      readStates.map((state) => [state.conversation_id.toHexString(), state])
+    )
+    const merged = [...formattedDirects, ...formattedGroups].map((conversation) => {
+      const state = readStateByConversation.get(conversation._id.toHexString())
+      return {
+        ...conversation,
+        unread_message_count: state?.unread_message_count ?? 0,
+        last_read_message_id: state?.last_read_message_id ?? null,
+        last_read_at: state?.last_read_at ?? null
+      }
+    }).sort((a, b) => {
       // 1. Sort by pinned status first
       if (a.is_pinned && !b.is_pinned) return -1
       if (!a.is_pinned && b.is_pinned) return 1
@@ -657,6 +798,14 @@ class ConversationService {
     if (uniqueMembers.length < 3) {
       throw new HttpError('Group must have at least 3 members', HTTP_STATUS.BAD_REQUEST)
     }
+    if (uniqueMembers.length > envConfig.conversation.maxGroupMembers) {
+      throw new HttpError(
+        `Group cannot exceed ${envConfig.conversation.maxGroupMembers} members`,
+        HTTP_STATUS.BAD_REQUEST,
+        undefined,
+        'GROUP_MEMBER_LIMIT_EXCEEDED'
+      )
+    }
 
     const existingMembersCount = await this.databaseService.users.countDocuments({
       _id: { $in: uniqueMembers }
@@ -665,6 +814,7 @@ class ConversationService {
       throw new HttpError('One or more group members do not exist', HTTP_STATUS.BAD_REQUEST)
     }
 
+    const createdAt = new Date()
     const newGroup = new GroupConversation({
       _id: new this.databaseService.ObjectId(),
       name,
@@ -674,15 +824,65 @@ class ConversationService {
       members: uniqueMembers.map((id) => ({
         user_id: id,
         role: id.equals(creatorId) ? 'admin' : 'member',
-        joined_at: new Date()
+        joined_at: createdAt
       })),
-      last_message_at: new Date(),
+      last_message_at: createdAt,
       last_message_preview: { sender_id: creatorId, content: 'Group created', message_type: 'text' },
-      created_at: new Date(),
-      updated_at: new Date()
+      created_at: createdAt,
+      updated_at: createdAt
     })
-
-    await this.databaseService.groupConversations.insertOne(newGroup)
+    const session = this.databaseService.startSession()
+    let activity: Awaited<ReturnType<ConversationService['createGroupActivityInTransaction']>> = undefined
+    try {
+      await session.withTransaction(async () => {
+        await this.databaseService.groupConversations.insertOne(newGroup, { session })
+        await this.readService.initializeMembership(
+          newGroup._id,
+          'group',
+          uniqueMembers,
+          null,
+          newGroup.created_at,
+          session
+        )
+        const addedMembers = uniqueMembers.filter((id) => !id.equals(creatorId))
+        const createdActivity = await this.createGroupActivityInTransaction(
+          {
+            conversation_id: newGroup._id,
+            actor_id: creatorId,
+            recipient_ids: uniqueMembers,
+            affected_user_ids: addedMembers,
+            system_event_type: ConversationSystemEventType.GroupCreated,
+            notification_type: NotificationType.GroupAdd,
+            direct_recipient_ids: addedMembers,
+            occurred_at: createdAt,
+            context: { group_name: name }
+          },
+          session
+        )
+        activity = createdActivity
+        if (createdActivity) {
+          const systemMessageId = createdActivity.message._id
+          if (!systemMessageId) throw new Error('Group system message is missing its identity')
+          newGroup.last_message_at = createdActivity.message.send_at ?? createdAt
+          newGroup.last_message_preview = {
+            message_id: systemMessageId,
+            sender_id: createdActivity.message.sender_id,
+            content: createdActivity.message.content.substring(0, 50),
+            message_type: 'text'
+          }
+          newGroup.updated_at = createdActivity.message.send_at ?? createdAt
+        }
+      })
+    } finally {
+      await session.endSession()
+    }
+    await this.deliverGroupActivity(activity)
+    await this.syncGroupMembership(uniqueMembers.map((id) => id.toHexString()), {
+      conversation_id: newGroup._id.toHexString(),
+      change_type: 'group_created',
+      actor_id: userId,
+      affected_user_ids: uniqueMembers.filter((id) => !id.equals(creatorId)).map((id) => id.toHexString())
+    })
     return newGroup
   }
 
@@ -710,94 +910,109 @@ class ConversationService {
     const actorId = new this.databaseService.ObjectId(userId)
     const conversationObjectId = new this.databaseService.ObjectId(conversationId)
     const access = await conversationAccessService.assertConversationMember(userId, conversationId)
-    const latestMessage = await this.databaseService.messages
-      .find(
-        { conversation_id: conversationObjectId },
-        { projection: { _id: 1 } }
-      )
-      .sort({ _id: -1 })
-      .limit(1)
-      .next()
     const clearedAt = new Date()
-    const historyMarker = {
-      user_id: actorId,
-      cleared_at: clearedAt,
-      cleared_through_message_id: latestMessage?._id ?? null,
-      restore_on_next_message: true
-    }
-    const emptyPreviewOverride = {
-      user_id: actorId,
-      last_message_at: clearedAt,
-      last_message_preview: {
-        sender_id: actorId,
-        content: 'No visible messages',
-        message_type: 'text' as const
-      }
-    }
-    const updatePipeline: Document[] = [
-      {
-        $set: {
-          history_cleared_by: {
-            $concatArrays: [
-              {
-                $filter: {
-                  input: { $ifNull: ['$history_cleared_by', []] },
-                  as: 'marker',
-                  cond: { $ne: ['$$marker.user_id', actorId] }
-                }
-              },
-              [historyMarker]
-            ]
-          },
-          hidden_by: {
-            $setUnion: [{ $ifNull: ['$hidden_by', []] }, [actorId]]
-          },
-          pinned_by: {
-            $filter: {
-              input: { $ifNull: ['$pinned_by', []] },
-              as: 'pinnedUserId',
-              cond: { $ne: ['$$pinnedUserId', actorId] }
-            }
-          },
-          muted_by: {
-            $filter: {
-              input: { $ifNull: ['$muted_by', []] },
-              as: 'mute',
-              cond: { $ne: ['$$mute.user_id', actorId] }
-            }
-          },
-          last_message_overrides: {
-            $concatArrays: [
-              {
-                $filter: {
-                  input: { $ifNull: ['$last_message_overrides', []] },
-                  as: 'override',
-                  cond: { $ne: ['$$override.user_id', actorId] }
-                }
-              },
-              [emptyPreviewOverride]
-            ]
-          },
-          updated_at: clearedAt
+    const session = this.databaseService.startSession()
+    let readMutation: Awaited<ReturnType<ConversationReadService['clearForHistoryInTransaction']>> | undefined
+    try {
+      await session.withTransaction(async () => {
+        const latestMessage = await this.databaseService.messages
+          .find({ conversation_id: conversationObjectId }, { session, projection: { _id: 1 } })
+          .sort({ _id: -1 })
+          .limit(1)
+          .next()
+        const historyMarker = {
+          user_id: actorId,
+          cleared_at: clearedAt,
+          cleared_through_message_id: latestMessage?._id ?? null,
+          restore_on_next_message: true
         }
-      }
-    ]
-    const updateResult =
-      access.type === 'direct'
-        ? await this.databaseService.directConversations.updateOne(
-            {
-              _id: conversationObjectId,
-              $or: [{ user1_id: actorId }, { user2_id: actorId }]
-            },
-            updatePipeline
-          )
-        : await this.databaseService.groupConversations.updateOne(
-            { _id: conversationObjectId, 'members.user_id': actorId },
-            updatePipeline
-          )
+        const emptyPreviewOverride = {
+          user_id: actorId,
+          last_message_at: clearedAt,
+          last_message_preview: {
+            sender_id: actorId,
+            content: 'No visible messages',
+            message_type: 'text' as const
+          }
+        }
+        const updatePipeline: Document[] = [
+          {
+            $set: {
+              history_cleared_by: {
+                $concatArrays: [
+                  {
+                    $filter: {
+                      input: { $ifNull: ['$history_cleared_by', []] },
+                      as: 'marker',
+                      cond: { $ne: ['$$marker.user_id', actorId] }
+                    }
+                  },
+                  [historyMarker]
+                ]
+              },
+              hidden_by: {
+                $setUnion: [{ $ifNull: ['$hidden_by', []] }, [actorId]]
+              },
+              pinned_by: {
+                $filter: {
+                  input: { $ifNull: ['$pinned_by', []] },
+                  as: 'pinnedUserId',
+                  cond: { $ne: ['$$pinnedUserId', actorId] }
+                }
+              },
+              muted_by: {
+                $filter: {
+                  input: { $ifNull: ['$muted_by', []] },
+                  as: 'mute',
+                  cond: { $ne: ['$$mute.user_id', actorId] }
+                }
+              },
+              last_message_overrides: {
+                $concatArrays: [
+                  {
+                    $filter: {
+                      input: { $ifNull: ['$last_message_overrides', []] },
+                      as: 'override',
+                      cond: { $ne: ['$$override.user_id', actorId] }
+                    }
+                  },
+                  [emptyPreviewOverride]
+                ]
+              },
+              updated_at: clearedAt
+            }
+          }
+        ]
+        const updateResult =
+          access.type === 'direct'
+            ? await this.databaseService.directConversations.updateOne(
+                {
+                  _id: conversationObjectId,
+                  $or: [{ user1_id: actorId }, { user2_id: actorId }]
+                },
+                updatePipeline,
+                { session }
+              )
+            : await this.databaseService.groupConversations.updateOne(
+                { _id: conversationObjectId, 'members.user_id': actorId },
+                updatePipeline,
+                { session }
+              )
 
-    if (updateResult.matchedCount !== 1) {
-      throw new HttpError('Conversation history could not be cleared', HTTP_STATUS.CONFLICT)
+        if (updateResult.matchedCount !== 1) {
+          throw new HttpError('Conversation history could not be cleared', HTTP_STATUS.CONFLICT)
+        }
+        readMutation = await this.readService.clearForHistoryInTransaction(
+          conversationObjectId,
+          access.type,
+          actorId,
+          latestMessage?._id ?? null,
+          clearedAt,
+          session
+        )
+      })
+    } finally {
+      await session.endSession()
     }
 
     const historyClearedEvent: ConversationHistoryClearedEvent = {
@@ -810,6 +1025,8 @@ class ConversationService {
       '@conversation:history-cleared',
       historyClearedEvent
     )
+
+    if (readMutation) this.messageDeliveryService.emitReadState(readMutation)
 
     return { success: true as const, cleared_at: clearedAt }
   }
@@ -969,23 +1186,29 @@ class ConversationService {
     }
   }
 
-  async markAsRead(userId: string, conversationId: string) {
-    const access = await conversationAccessService.assertConversationMember(userId, conversationId)
-    const historyCutoffMessageId = getConversationHistoryCutoff(access.conversation, userId)
+  async markAsRead(userId: string, conversationId: string, messageId?: string) {
+    const result = await this.readService.markRead(userId, conversationId, messageId)
+    this.messageDeliveryService.emitReadState(result)
+    return {
+      success: true as const,
+      conversation_id: conversationId,
+      last_read_message_id: result.read_state.last_read_message_id,
+      last_read_at: result.read_state.last_read_at,
+      unread_message_count: result.read_state.unread_message_count,
+      unread_conversation_count: result.summary.unread_conversation_count,
+      total_unread_message_count: result.summary.total_unread_message_count,
+      version: result.summary.version
+    }
+  }
 
-    const objectIdUserId = new this.databaseService.ObjectId(userId)
-    const convId = new this.databaseService.ObjectId(conversationId)
-
-    await this.databaseService.messages.updateMany(
-      {
-        conversation_id: convId,
-        read_by: { $ne: objectIdUserId },
-        ...(historyCutoffMessageId ? { _id: { $gt: historyCutoffMessageId } } : {})
-      },
-      { $addToSet: { read_by: objectIdUserId } }
-    )
-
-    return { success: true }
+  async getUnreadSummary(userId: string) {
+    const summary = await this.readService.getSummary(userId)
+    return {
+      unread_conversation_count: summary.unread_conversation_count,
+      total_unread_message_count: summary.total_unread_message_count,
+      version: summary.version,
+      updated_at: summary.updated_at
+    }
   }
 
   async revokeMessage(userId: string, messageId: string) {
@@ -995,24 +1218,59 @@ class ConversationService {
       messageId,
       { requireSender: true, allowedStatuses: ['sent'] }
     )
-    const updateResult = await this.databaseService.messages.updateOne(
-      { _id: msgId, sender_id: new this.databaseService.ObjectId(userId), status: 'sent' },
-      {
-        $set: {
-          status: 'revoked',
-          content: '',
-          media_ids: [],
-          reactions: []
-        },
-        $unset: { reply_to_message_id: '' }
-      }
-    )
-    if (updateResult.modifiedCount !== 1) {
-      throw new HttpError('Message state changed before it could be revoked', HTTP_STATUS.CONFLICT)
+    if (message.kind === MessageKind.System) {
+      throw new HttpError('System messages cannot be revoked', HTTP_STATUS.BAD_REQUEST)
+    }
+    const actorId = new this.databaseService.ObjectId(userId)
+    const occurredAt = new Date()
+    const session = this.databaseService.startSession()
+    try {
+      await session.withTransaction(async () => {
+        if (envConfig.features.notificationOutboxEnabled) {
+          await this.lifecycleGuard.markTargetHidden(NotificationTargetType.Message, msgId, occurredAt, session)
+        }
+        const updateResult = await this.databaseService.messages.updateOne(
+          { _id: msgId, sender_id: actorId, status: 'sent' },
+          {
+            $set: {
+              status: 'revoked',
+              content: '',
+              media_ids: [],
+              reactions: []
+            },
+            $unset: { reply_to_message_id: '' }
+          },
+          { session }
+        )
+        if (updateResult.modifiedCount !== 1) {
+          throw new HttpError('Message state changed before it could be revoked', HTTP_STATUS.CONFLICT)
+        }
+        await this.syncLastMessagePreviewAfterRevoke(message, session)
+        if (envConfig.features.notificationOutboxEnabled) {
+          await this.outboxPublisher.publish(
+            {
+              event_id: randomUUID(),
+              type: DomainEventType.MessageRevoked,
+              aggregate_type: DomainAggregateType.Message,
+              aggregate_id: msgId,
+              actor_id: actorId,
+              occurred_at: occurredAt,
+              payload: {
+                message_id: msgId,
+                conversation_id: message.conversation_id,
+                source_type: 'MESSAGE',
+                source_id: msgId.toHexString()
+              }
+            },
+            { session }
+          )
+        }
+      })
+    } finally {
+      await session.endSession()
     }
 
     const conversationId = message.conversation_id.toString()
-    await this.syncLastMessagePreviewAfterRevoke(message)
     const revokedEvent: MessageRevokedEvent = {
       conversation_id: conversationId,
       message_id: messageId
@@ -1038,10 +1296,14 @@ class ConversationService {
       }
     )
     const actorId = new this.databaseService.ObjectId(userId)
+    const occurredAt = new Date()
     const session = this.databaseService.startSession()
 
     try {
       await session.withTransaction(async () => {
+        if (envConfig.features.notificationOutboxEnabled) {
+          await this.lifecycleGuard.touchTarget(NotificationTargetType.Message, msgId, occurredAt, session)
+        }
         const updateResult = await this.databaseService.messages.updateOne(
           { _id: msgId, status: 'sent', deleted_by: { $ne: actorId } },
           { $addToSet: { deleted_by: actorId } },
@@ -1059,6 +1321,26 @@ class ConversationService {
         )
         if (!previewUpdated) {
           throw new HttpError('Conversation preview could not be updated', HTTP_STATUS.CONFLICT)
+        }
+        if (envConfig.features.notificationOutboxEnabled) {
+          await this.outboxPublisher.publish(
+            {
+              event_id: randomUUID(),
+              type: DomainEventType.MessageDeletedForRecipient,
+              aggregate_type: DomainAggregateType.Message,
+              aggregate_id: msgId,
+              actor_id: actorId,
+              occurred_at: occurredAt,
+              payload: {
+                message_id: msgId,
+                conversation_id: message.conversation_id,
+                recipient_id: actorId,
+                source_type: 'MESSAGE',
+                source_id: `${msgId.toHexString()}:${actorId.toHexString()}`
+              }
+            },
+            { session }
+          )
         }
       })
     } finally {
@@ -1087,56 +1369,97 @@ class ConversationService {
 
     const objectIdUserId = new this.databaseService.ObjectId(userId)
     const msgId = new this.databaseService.ObjectId(messageId)
-
-    const { message, conversation } = await conversationMessageAccessService.assertMessageAccess(
-      userId,
-      messageId,
-      { requireVisibleToUser: true, allowedStatuses: ['sent'] }
-    )
-    const reactionUpdatePipeline: Document[] = [
-      {
-        $set: {
-          reactions: {
-            $concatArrays: [
-              {
-                $filter: {
-                  input: { $ifNull: ['$reactions', []] },
-                  as: 'reaction',
-                  cond: { $ne: ['$$reaction.user_id', objectIdUserId] }
-                }
-              },
-              [{ emoji, user_id: objectIdUserId }]
-            ]
+    const useReactionNotification =
+      envConfig.features.notificationOutboxEnabled && envConfig.features.notificationMessageReactionEnabled
+    const occurredAt = new Date()
+    const eventId = randomUUID()
+    const session = this.databaseService.startSession()
+    let outcome: ReactionMutationOutcome | undefined
+    try {
+      await session.withTransaction(async () => {
+        const context = await this.loadReactionMutationContext(objectIdUserId, msgId, session)
+        const existingReaction = context.message.reactions.find((reaction) => reaction.user_id.equals(objectIdUserId))
+        if (existingReaction?.emoji === emoji) {
+          outcome = {
+            changed: false,
+            conversationId: context.message.conversation_id.toHexString(),
+            memberIds: context.memberIds,
+            state: createMessageReactionState(context.message.reactions)
           }
+          return
         }
-      }
-    ]
-    const updatedMessage = await this.databaseService.messages.findOneAndUpdate(
-      {
-        _id: msgId,
-        status: 'sent',
-        deleted_by: { $ne: objectIdUserId }
-      },
-      reactionUpdatePipeline,
-      { returnDocument: 'after', projection: { reactions: 1 } }
-    )
-    if (!updatedMessage) {
-      throw new HttpError('Message state changed before it could be reacted to', HTTP_STATUS.CONFLICT)
-    }
 
-    const conversationId = message.conversation_id.toString()
-    const reactionState = createMessageReactionState(updatedMessage.reactions)
+        const updatedMessage = await this.databaseService.messages.findOneAndUpdate(
+          { _id: msgId, status: 'sent', deleted_by: { $ne: objectIdUserId } },
+          [
+            {
+              $set: {
+                reactions: {
+                  $concatArrays: [
+                    {
+                      $filter: {
+                        input: { $ifNull: ['$reactions', []] },
+                        as: 'reaction',
+                        cond: { $ne: ['$$reaction.user_id', objectIdUserId] }
+                      }
+                    },
+                    [{ emoji, user_id: objectIdUserId }]
+                  ]
+                }
+              }
+            }
+          ],
+          { returnDocument: 'after', projection: { reactions: 1 }, session }
+        )
+        if (!updatedMessage) {
+          throw new HttpError('Message state changed before it could be reacted to', HTTP_STATUS.CONFLICT)
+        }
+        if (useReactionNotification) {
+          await this.outboxPublisher.publish(
+            {
+              event_id: eventId,
+              type: DomainEventType.MessageReactionChanged,
+              aggregate_type: DomainAggregateType.Message,
+              aggregate_id: msgId,
+              actor_id: objectIdUserId,
+              occurred_at: occurredAt,
+              payload: {
+                message_id: msgId,
+                conversation_id: context.message.conversation_id,
+                conversation_type: context.message.conversation_type,
+                emoji,
+                source_type: 'MESSAGE_REACTION',
+                source_id: `${msgId.toHexString()}:${objectIdUserId.toHexString()}`
+              }
+            },
+            { session }
+          )
+        }
+        outcome = {
+          changed: true,
+          conversationId: context.message.conversation_id.toHexString(),
+          memberIds: context.memberIds,
+          state: createMessageReactionState(updatedMessage.reactions)
+        }
+      })
+    } finally {
+      await session.endSession()
+    }
+    if (!outcome) throw new Error('Reaction transaction committed without a result')
+    const reactionState = outcome.state
     const reactionEvent: MessageReactionUpdatedEvent = {
-      conversation_id: conversationId,
+      conversation_id: outcome.conversationId,
       message_id: messageId,
       ...reactionState
     }
-    await conversationMessageSyncService.syncConversationAction(
-      conversationId,
-      conversation.memberIds,
-      '@message:reaction-updated',
-      reactionEvent
-    )
+    if (outcome.changed) {
+      await conversationMessageSyncService.syncConversationAction(
+        outcome.conversationId,
+        outcome.memberIds,
+        '@message:reaction-updated',
+        reactionEvent
+      )
+    }
 
     return reactionState
   }
@@ -1453,6 +1776,16 @@ class ConversationService {
     if (uniqueMemberIds.some((memberId) => !followedUserIds.has(memberId))) {
       throw new HttpError('You can only add users you follow', HTTP_STATUS.BAD_REQUEST)
     }
+    const currentMemberIds = new Set(access.memberIds)
+    const projectedMemberCount = currentMemberIds.size + uniqueMemberIds.filter((id) => !currentMemberIds.has(id)).length
+    if (projectedMemberCount > envConfig.conversation.maxGroupMembers) {
+      throw new HttpError(
+        `Group cannot exceed ${envConfig.conversation.maxGroupMembers} members`,
+        HTTP_STATUS.BAD_REQUEST,
+        undefined,
+        'GROUP_MEMBER_LIMIT_EXCEEDED'
+      )
+    }
 
     const joinedAt = new Date()
     const requestedMembers = memberObjectIds.map((memberObjectId) => ({
@@ -1460,47 +1793,101 @@ class ConversationService {
       role: 'member' as const,
       joined_at: joinedAt
     }))
-    const previousGroup = await this.databaseService.groupConversations.findOneAndUpdate(
-      {
-        _id: convId,
-        'members.user_id': userObjectId
-      },
-      [
-        {
-          $set: {
-            members: {
-              $concatArrays: [
-                '$members',
-                {
-                  $filter: {
-                    input: requestedMembers,
-                    as: 'requestedMember',
-                    cond: { $not: [{ $in: ['$$requestedMember.user_id', '$members.user_id'] }] }
-                  }
-                }
+    const session = this.databaseService.startSession()
+    let addedMemberIds: string[] = []
+    let activity: Awaited<ReturnType<ConversationService['createGroupActivityInTransaction']>> = undefined
+    try {
+      await session.withTransaction(async () => {
+        const previousGroup = await this.databaseService.groupConversations.findOneAndUpdate(
+          {
+            _id: convId,
+            'members.user_id': userObjectId,
+            $expr: {
+              $lte: [
+                { $size: { $setUnion: ['$members.user_id', memberObjectIds] } },
+                envConfig.conversation.maxGroupMembers
               ]
-            },
-            hidden_by: {
-              $filter: {
-                input: { $ifNull: ['$hidden_by', []] },
-                as: 'hiddenUserId',
-                cond: { $not: [{ $in: ['$$hiddenUserId', memberObjectIds] }] }
+            }
+          },
+          [
+            {
+              $set: {
+                members: {
+                  $concatArrays: [
+                    '$members',
+                    {
+                      $filter: {
+                        input: requestedMembers,
+                        as: 'requestedMember',
+                        cond: { $not: [{ $in: ['$$requestedMember.user_id', '$members.user_id'] }] }
+                      }
+                    }
+                  ]
+                },
+                hidden_by: {
+                  $filter: {
+                    input: { $ifNull: ['$hidden_by', []] },
+                    as: 'hiddenUserId',
+                    cond: { $not: [{ $in: ['$$hiddenUserId', memberObjectIds] }] }
+                  }
+                },
+                updated_at: joinedAt
               }
-            },
-            updated_at: joinedAt
-          }
-        }
-      ],
-      { returnDocument: 'before', projection: { members: 1 } }
-    )
+            }
+          ],
+          { returnDocument: 'before', projection: { members: 1 }, session }
+        )
 
-    if (!previousGroup) {
-      throw new HttpError('Only current group members can add members', HTTP_STATUS.FORBIDDEN)
+        if (!previousGroup) {
+          throw new HttpError(
+            'Group membership changed or the member limit was reached',
+            HTTP_STATUS.CONFLICT,
+            undefined,
+            'GROUP_MEMBER_LIMIT_CONFLICT'
+          )
+        }
+        const previousMemberIds = new Set(previousGroup.members.map((member) => member.user_id.toString()))
+        addedMemberIds = uniqueMemberIds.filter((memberId) => !previousMemberIds.has(memberId))
+        if (addedMemberIds.length === 0) return
+
+        const latestMessage = await this.databaseService.messages
+          .find({ conversation_id: convId }, { session, projection: { _id: 1 } })
+          .sort({ _id: -1 })
+          .limit(1)
+          .next()
+        const addedObjectIds = addedMemberIds.map((id) => new this.databaseService.ObjectId(id))
+        await this.readService.initializeMembership(
+          convId,
+          'group',
+          addedObjectIds,
+          latestMessage?._id ?? null,
+          joinedAt,
+          session
+        )
+        const currentGroup = await this.databaseService.groupConversations.findOne(
+          { _id: convId },
+          { projection: { members: 1 }, session }
+        )
+        if (!currentGroup) throw new HttpError('Group conversation not found', HTTP_STATUS.NOT_FOUND)
+        activity = await this.createGroupActivityInTransaction(
+          {
+            conversation_id: convId,
+            actor_id: userObjectId,
+            recipient_ids: currentGroup.members.map((member) => member.user_id),
+            affected_user_ids: addedObjectIds,
+            system_event_type: ConversationSystemEventType.MemberAdded,
+            notification_type: NotificationType.GroupAdd,
+            direct_recipient_ids: addedObjectIds,
+            occurred_at: joinedAt
+          },
+          session
+        )
+      })
+    } finally {
+      await session.endSession()
     }
 
-    const previousMemberIds = new Set(previousGroup.members.map((member) => member.user_id.toString()))
-    const addedMemberIds = uniqueMemberIds.filter((memberId) => !previousMemberIds.has(memberId))
-
+    await this.deliverGroupActivity(activity)
     if (addedMemberIds.length > 0) {
       await this.syncGroupMembership([...access.memberIds, ...addedMemberIds], {
         conversation_id: conversationId,
@@ -1532,52 +1919,91 @@ class ConversationService {
       throw new HttpError('Group member not found', HTTP_STATUS.NOT_FOUND)
     }
 
-    const result = await this.databaseService.groupConversations.updateOne(
-      {
-        _id: convId,
-        members: { $elemMatch: { user_id: adminObjectId, role: 'admin' } },
-        'members.user_id': uId
-      },
-      [
-        {
-          $set: {
-            members: {
-              $filter: {
-                input: '$members',
-                as: 'member',
-                cond: { $ne: ['$$member.user_id', uId] }
+    const updatedAt = new Date()
+    const session = this.databaseService.startSession()
+    let readMutation: Awaited<ReturnType<ConversationReadService['clearMembershipInTransaction']>> = null
+    let activity: Awaited<ReturnType<ConversationService['createGroupActivityInTransaction']>> = undefined
+    try {
+      await session.withTransaction(async () => {
+        const result = await this.databaseService.groupConversations.updateOne(
+          {
+            _id: convId,
+            members: { $elemMatch: { user_id: adminObjectId, role: 'admin' } },
+            'members.user_id': uId
+          },
+          [
+            {
+              $set: {
+                members: {
+                  $filter: {
+                    input: '$members',
+                    as: 'member',
+                    cond: { $ne: ['$$member.user_id', uId] }
+                  }
+                },
+                hidden_by: {
+                  $filter: {
+                    input: { $ifNull: ['$hidden_by', []] },
+                    as: 'hiddenUserId',
+                    cond: { $ne: ['$$hiddenUserId', uId] }
+                  }
+                },
+                pinned_by: {
+                  $filter: {
+                    input: { $ifNull: ['$pinned_by', []] },
+                    as: 'pinnedUserId',
+                    cond: { $ne: ['$$pinnedUserId', uId] }
+                  }
+                },
+                muted_by: {
+                  $filter: {
+                    input: { $ifNull: ['$muted_by', []] },
+                    as: 'mute',
+                    cond: { $ne: ['$$mute.user_id', uId] }
+                  }
+                },
+                updated_at: updatedAt
               }
-            },
-            hidden_by: {
-              $filter: {
-                input: { $ifNull: ['$hidden_by', []] },
-                as: 'hiddenUserId',
-                cond: { $ne: ['$$hiddenUserId', uId] }
-              }
-            },
-            pinned_by: {
-              $filter: {
-                input: { $ifNull: ['$pinned_by', []] },
-                as: 'pinnedUserId',
-                cond: { $ne: ['$$pinnedUserId', uId] }
-              }
-            },
-            muted_by: {
-              $filter: {
-                input: { $ifNull: ['$muted_by', []] },
-                as: 'mute',
-                cond: { $ne: ['$$mute.user_id', uId] }
-              }
-            },
-            updated_at: new Date()
-          }
-        }
-      ]
-    )
+            }
+          ],
+          { session }
+        )
 
-    if (result.modifiedCount === 0) {
-      throw new HttpError('Group membership changed. Refresh and try again', HTTP_STATUS.CONFLICT)
+        if (result.modifiedCount === 0) {
+          throw new HttpError('Group membership changed. Refresh and try again', HTTP_STATUS.CONFLICT)
+        }
+        readMutation = await this.readService.clearMembershipInTransaction(
+          convId,
+          'group',
+          uId,
+          updatedAt,
+          session
+        )
+        const currentGroup = await this.databaseService.groupConversations.findOne(
+          { _id: convId },
+          { projection: { members: 1 }, session }
+        )
+        if (!currentGroup) throw new HttpError('Group conversation not found', HTTP_STATUS.NOT_FOUND)
+        activity = await this.createGroupActivityInTransaction(
+          {
+            conversation_id: convId,
+            actor_id: adminObjectId,
+            recipient_ids: currentGroup.members.map((member) => member.user_id),
+            affected_user_ids: [uId],
+            system_event_type: ConversationSystemEventType.MemberKicked,
+            notification_type: NotificationType.GroupKick,
+            direct_recipient_ids: [uId],
+            occurred_at: updatedAt
+          },
+          session
+        )
+      })
+    } finally {
+      await session.endSession()
     }
+
+    if (readMutation) this.messageDeliveryService.emitReadState(readMutation)
+    await this.deliverGroupActivity(activity)
 
     await this.syncGroupMembership(access.memberIds, {
       conversation_id: conversationId,
@@ -1620,53 +2046,92 @@ class ConversationService {
             ]
           }
         : {}
-    const result = await this.databaseService.groupConversations.updateOne(
-      { _id: convId, 'members.user_id': uId, ...adminLeaveGuard },
-      [
-        {
-          $set: {
-            members: {
-              $filter: {
-                input: '$members',
-                as: 'member',
-                cond: { $ne: ['$$member.user_id', uId] }
+    const updatedAt = new Date()
+    const session = this.databaseService.startSession()
+    let readMutation: Awaited<ReturnType<ConversationReadService['clearMembershipInTransaction']>> = null
+    let activity: Awaited<ReturnType<ConversationService['createGroupActivityInTransaction']>> = undefined
+    try {
+      await session.withTransaction(async () => {
+        const result = await this.databaseService.groupConversations.updateOne(
+          { _id: convId, 'members.user_id': uId, ...adminLeaveGuard },
+          [
+            {
+              $set: {
+                members: {
+                  $filter: {
+                    input: '$members',
+                    as: 'member',
+                    cond: { $ne: ['$$member.user_id', uId] }
+                  }
+                },
+                hidden_by: {
+                  $filter: {
+                    input: { $ifNull: ['$hidden_by', []] },
+                    as: 'hiddenUserId',
+                    cond: { $ne: ['$$hiddenUserId', uId] }
+                  }
+                },
+                pinned_by: {
+                  $filter: {
+                    input: { $ifNull: ['$pinned_by', []] },
+                    as: 'pinnedUserId',
+                    cond: { $ne: ['$$pinnedUserId', uId] }
+                  }
+                },
+                muted_by: {
+                  $filter: {
+                    input: { $ifNull: ['$muted_by', []] },
+                    as: 'mute',
+                    cond: { $ne: ['$$mute.user_id', uId] }
+                  }
+                },
+                updated_at: updatedAt
               }
-            },
-            hidden_by: {
-              $filter: {
-                input: { $ifNull: ['$hidden_by', []] },
-                as: 'hiddenUserId',
-                cond: { $ne: ['$$hiddenUserId', uId] }
-              }
-            },
-            pinned_by: {
-              $filter: {
-                input: { $ifNull: ['$pinned_by', []] },
-                as: 'pinnedUserId',
-                cond: { $ne: ['$$pinnedUserId', uId] }
-              }
-            },
-            muted_by: {
-              $filter: {
-                input: { $ifNull: ['$muted_by', []] },
-                as: 'mute',
-                cond: { $ne: ['$$mute.user_id', uId] }
-              }
-            },
-            updated_at: new Date()
-          }
-        }
-      ]
-    )
+            }
+          ],
+          { session }
+        )
 
-    if (result.modifiedCount === 0) {
-      throw new HttpError(
-        'Group membership changed; refresh and try again',
-        HTTP_STATUS.CONFLICT,
-        undefined,
-        GROUP_SOLE_ADMIN_CANNOT_LEAVE_CODE
-      )
+        if (result.modifiedCount === 0) {
+          throw new HttpError(
+            'Group membership changed; refresh and try again',
+            HTTP_STATUS.CONFLICT,
+            undefined,
+            GROUP_SOLE_ADMIN_CANNOT_LEAVE_CODE
+          )
+        }
+        readMutation = await this.readService.clearMembershipInTransaction(
+          convId,
+          'group',
+          uId,
+          updatedAt,
+          session
+        )
+        const currentGroup = await this.databaseService.groupConversations.findOne(
+          { _id: convId },
+          { projection: { members: 1 }, session }
+        )
+        if (!currentGroup) throw new HttpError('Group conversation not found', HTTP_STATUS.NOT_FOUND)
+        activity = await this.createGroupActivityInTransaction(
+          {
+            conversation_id: convId,
+            actor_id: uId,
+            recipient_ids: currentGroup.members.map((member) => member.user_id),
+            affected_user_ids: [uId],
+            system_event_type: ConversationSystemEventType.MemberLeft,
+            notification_type: null,
+            direct_recipient_ids: [],
+            occurred_at: updatedAt
+          },
+          session
+        )
+      })
+    } finally {
+      await session.endSession()
     }
+
+    if (readMutation) this.messageDeliveryService.emitReadState(readMutation)
+    await this.deliverGroupActivity(activity)
 
     await this.syncGroupMembership(access.memberIds, {
       conversation_id: conversationId,
@@ -1714,87 +2179,125 @@ class ConversationService {
     }
 
     const updatedAt = new Date()
-    const result = await this.databaseService.groupConversations.updateOne(
-      {
-        _id: convId,
-        members: { $elemMatch: { user_id: adminObjectId, role: 'admin' } },
-        $and: [
-          { members: { $elemMatch: { user_id: successorObjectId, role: 'member' } } },
+    const session = this.databaseService.startSession()
+    let readMutation: Awaited<ReturnType<ConversationReadService['clearMembershipInTransaction']>> = null
+    let activity: Awaited<ReturnType<ConversationService['createGroupActivityInTransaction']>> = undefined
+    try {
+      await session.withTransaction(async () => {
+        const result = await this.databaseService.groupConversations.updateOne(
           {
-            $expr: {
-              $eq: [
-                {
-                  $size: {
-                    $filter: {
-                      input: '$members',
-                      as: 'member',
-                      cond: { $eq: ['$$member.role', 'admin'] }
-                    }
-                  }
-                },
-                1
-              ]
-            }
-          }
-        ]
-      },
-      [
-        {
-          $set: {
-            members: {
-              $map: {
-                input: {
-                  $filter: {
-                    input: '$members',
-                    as: 'member',
-                    cond: { $ne: ['$$member.user_id', adminObjectId] }
-                  }
-                },
-                as: 'member',
-                in: {
-                  $cond: [
-                    { $eq: ['$$member.user_id', successorObjectId] },
-                    { $mergeObjects: ['$$member', { role: 'admin' }] },
-                    '$$member'
+            _id: convId,
+            members: { $elemMatch: { user_id: adminObjectId, role: 'admin' } },
+            $and: [
+              { members: { $elemMatch: { user_id: successorObjectId, role: 'member' } } },
+              {
+                $expr: {
+                  $eq: [
+                    {
+                      $size: {
+                        $filter: {
+                          input: '$members',
+                          as: 'member',
+                          cond: { $eq: ['$$member.role', 'admin'] }
+                        }
+                      }
+                    },
+                    1
                   ]
                 }
               }
-            },
-            hidden_by: {
-              $filter: {
-                input: { $ifNull: ['$hidden_by', []] },
-                as: 'hiddenUserId',
-                cond: { $ne: ['$$hiddenUserId', adminObjectId] }
+            ]
+          },
+          [
+            {
+              $set: {
+                members: {
+                  $map: {
+                    input: {
+                      $filter: {
+                        input: '$members',
+                        as: 'member',
+                        cond: { $ne: ['$$member.user_id', adminObjectId] }
+                      }
+                    },
+                    as: 'member',
+                    in: {
+                      $cond: [
+                        { $eq: ['$$member.user_id', successorObjectId] },
+                        { $mergeObjects: ['$$member', { role: 'admin' }] },
+                        '$$member'
+                      ]
+                    }
+                  }
+                },
+                hidden_by: {
+                  $filter: {
+                    input: { $ifNull: ['$hidden_by', []] },
+                    as: 'hiddenUserId',
+                    cond: { $ne: ['$$hiddenUserId', adminObjectId] }
+                  }
+                },
+                pinned_by: {
+                  $filter: {
+                    input: { $ifNull: ['$pinned_by', []] },
+                    as: 'pinnedUserId',
+                    cond: { $ne: ['$$pinnedUserId', adminObjectId] }
+                  }
+                },
+                muted_by: {
+                  $filter: {
+                    input: { $ifNull: ['$muted_by', []] },
+                    as: 'mute',
+                    cond: { $ne: ['$$mute.user_id', adminObjectId] }
+                  }
+                },
+                updated_at: updatedAt
               }
-            },
-            pinned_by: {
-              $filter: {
-                input: { $ifNull: ['$pinned_by', []] },
-                as: 'pinnedUserId',
-                cond: { $ne: ['$$pinnedUserId', adminObjectId] }
-              }
-            },
-            muted_by: {
-              $filter: {
-                input: { $ifNull: ['$muted_by', []] },
-                as: 'mute',
-                cond: { $ne: ['$$mute.user_id', adminObjectId] }
-              }
-            },
-            updated_at: updatedAt
-          }
-        }
-      ]
-    )
+            }
+          ],
+          { session }
+        )
 
-    if (result.modifiedCount === 0) {
-      throw new HttpError(
-        'Group membership changed; refresh and choose the new admin again',
-        HTTP_STATUS.CONFLICT,
-        undefined,
-        GROUP_ADMIN_TRANSFER_CONFLICT_CODE
-      )
+        if (result.modifiedCount === 0) {
+          throw new HttpError(
+            'Group membership changed; refresh and choose the new admin again',
+            HTTP_STATUS.CONFLICT,
+            undefined,
+            GROUP_ADMIN_TRANSFER_CONFLICT_CODE
+          )
+        }
+        readMutation = await this.readService.clearMembershipInTransaction(
+          convId,
+          'group',
+          adminObjectId,
+          updatedAt,
+          session
+        )
+        const currentGroup = await this.databaseService.groupConversations.findOne(
+          { _id: convId },
+          { projection: { members: 1 }, session }
+        )
+        if (!currentGroup) throw new HttpError('Group conversation not found', HTTP_STATUS.NOT_FOUND)
+        activity = await this.createGroupActivityInTransaction(
+          {
+            conversation_id: convId,
+            actor_id: adminObjectId,
+            recipient_ids: currentGroup.members.map((member) => member.user_id),
+            affected_user_ids: [adminObjectId, successorObjectId],
+            system_event_type: ConversationSystemEventType.AdminTransferredAndLeft,
+            notification_type: NotificationType.AdminGranted,
+            direct_recipient_ids: [successorObjectId],
+            occurred_at: updatedAt
+          },
+          session
+        )
+      })
+    } finally {
+      await session.endSession()
     }
+
+    if (readMutation) this.messageDeliveryService.emitReadState(readMutation)
+    await this.deliverGroupActivity(activity)
 
     await this.syncGroupMembership(access.memberIds, {
       conversation_id: conversationId,
@@ -1806,12 +2309,189 @@ class ConversationService {
     return { success: true }
   }
 
+  async grantGroupAdmin(adminId: string, conversationId: string, userId: string) {
+    const conversationObjectId = new this.databaseService.ObjectId(conversationId)
+    const actorId = new this.databaseService.ObjectId(adminId)
+    const affectedUserId = new this.databaseService.ObjectId(userId)
+    await conversationAccessService.assertGroupAdmin(adminId, conversationId)
+    const occurredAt = new Date()
+    const session = this.databaseService.startSession()
+    let activity: Awaited<ReturnType<ConversationService['createGroupActivityInTransaction']>> = undefined
+    try {
+      await session.withTransaction(async () => {
+        const result = await this.databaseService.groupConversations.updateOne(
+          {
+            _id: conversationObjectId,
+            members: { $elemMatch: { user_id: actorId, role: 'admin' } },
+            $and: [{ members: { $elemMatch: { user_id: affectedUserId, role: 'member' } } }]
+          },
+          [
+            {
+              $set: {
+                members: {
+                  $map: {
+                    input: '$members',
+                    as: 'member',
+                    in: {
+                      $cond: [
+                        { $eq: ['$$member.user_id', affectedUserId] },
+                        { $mergeObjects: ['$$member', { role: 'admin' }] },
+                        '$$member'
+                      ]
+                    }
+                  }
+                },
+                updated_at: occurredAt
+              }
+            }
+          ],
+          { session }
+        )
+        if (result.modifiedCount !== 1) {
+          throw new HttpError(
+            'Group member or admin state changed; refresh and try again',
+            HTTP_STATUS.CONFLICT,
+            undefined,
+            'GROUP_ADMIN_GRANT_CONFLICT'
+          )
+        }
+        const currentGroup = await this.databaseService.groupConversations.findOne(
+          { _id: conversationObjectId },
+          { projection: { members: 1 }, session }
+        )
+        if (!currentGroup) throw new HttpError('Group conversation not found', HTTP_STATUS.NOT_FOUND)
+        activity = await this.createGroupActivityInTransaction(
+          {
+            conversation_id: conversationObjectId,
+            actor_id: actorId,
+            recipient_ids: currentGroup.members.map((member) => member.user_id),
+            affected_user_ids: [affectedUserId],
+            system_event_type: ConversationSystemEventType.AdminGranted,
+            notification_type: NotificationType.AdminGranted,
+            direct_recipient_ids: [affectedUserId],
+            occurred_at: occurredAt
+          },
+          session
+        )
+      })
+    } finally {
+      await session.endSession()
+    }
+    await this.deliverGroupActivity(activity)
+    await this.syncGroupMembership([adminId, userId], {
+      conversation_id: conversationId,
+      change_type: 'admin_granted',
+      actor_id: adminId,
+      affected_user_ids: [userId]
+    })
+    return { success: true }
+  }
+
+  async revokeGroupAdmin(adminId: string, conversationId: string, userId: string) {
+    const conversationObjectId = new this.databaseService.ObjectId(conversationId)
+    const actorId = new this.databaseService.ObjectId(adminId)
+    const affectedUserId = new this.databaseService.ObjectId(userId)
+    await conversationAccessService.assertGroupAdmin(adminId, conversationId)
+    const occurredAt = new Date()
+    const session = this.databaseService.startSession()
+    let activity: Awaited<ReturnType<ConversationService['createGroupActivityInTransaction']>> = undefined
+    try {
+      await session.withTransaction(async () => {
+        const result = await this.databaseService.groupConversations.updateOne(
+          {
+            _id: conversationObjectId,
+            members: { $elemMatch: { user_id: actorId, role: 'admin' } },
+            $and: [
+              { members: { $elemMatch: { user_id: affectedUserId, role: 'admin' } } },
+              {
+                $expr: {
+                  $gt: [
+                    {
+                      $size: {
+                        $filter: {
+                          input: '$members',
+                          as: 'member',
+                          cond: { $eq: ['$$member.role', 'admin'] }
+                        }
+                      }
+                    },
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          [
+            {
+              $set: {
+                members: {
+                  $map: {
+                    input: '$members',
+                    as: 'member',
+                    in: {
+                      $cond: [
+                        { $eq: ['$$member.user_id', affectedUserId] },
+                        { $mergeObjects: ['$$member', { role: 'member' }] },
+                        '$$member'
+                      ]
+                    }
+                  }
+                },
+                updated_at: occurredAt
+              }
+            }
+          ],
+          { session }
+        )
+        if (result.modifiedCount !== 1) {
+          throw new HttpError(
+            'Admin state changed or this is the sole admin',
+            HTTP_STATUS.CONFLICT,
+            undefined,
+            'GROUP_ADMIN_REVOKE_CONFLICT'
+          )
+        }
+        const currentGroup = await this.databaseService.groupConversations.findOne(
+          { _id: conversationObjectId },
+          { projection: { members: 1 }, session }
+        )
+        if (!currentGroup) throw new HttpError('Group conversation not found', HTTP_STATUS.NOT_FOUND)
+        activity = await this.createGroupActivityInTransaction(
+          {
+            conversation_id: conversationObjectId,
+            actor_id: actorId,
+            recipient_ids: currentGroup.members.map((member) => member.user_id),
+            affected_user_ids: [affectedUserId],
+            system_event_type: ConversationSystemEventType.AdminRevoked,
+            notification_type: NotificationType.AdminRevoked,
+            direct_recipient_ids: [affectedUserId],
+            occurred_at: occurredAt
+          },
+          session
+        )
+      })
+    } finally {
+      await session.endSession()
+    }
+    await this.deliverGroupActivity(activity)
+    await this.syncGroupMembership([adminId, userId], {
+      conversation_id: conversationId,
+      change_type: 'admin_revoked',
+      actor_id: adminId,
+      affected_user_ids: [userId]
+    })
+    return { success: true }
+  }
+
   async editMessage(userId: string, messageId: string, content: string) {
     const objectIdUserId = new this.databaseService.ObjectId(userId)
     const msgId = new this.databaseService.ObjectId(messageId)
 
     const message = await this.databaseService.messages.findOne({ _id: msgId })
     if (!message) throw new HttpError('Message not found', HTTP_STATUS.NOT_FOUND)
+    if (message.kind === MessageKind.System) {
+      throw new HttpError('System messages cannot be edited', HTTP_STATUS.BAD_REQUEST)
+    }
 
     if (!message.sender_id.equals(objectIdUserId)) {
       throw new HttpError('You can only edit your own messages', HTTP_STATUS.FORBIDDEN)
@@ -1835,52 +2515,130 @@ class ConversationService {
     const objectIdUserId = new this.databaseService.ObjectId(userId)
     const msgId = new this.databaseService.ObjectId(messageId)
 
-    const { message, conversation } = await conversationMessageAccessService.assertMessageAccess(
-      userId,
-      messageId,
-      { requireVisibleToUser: true, allowedStatuses: ['sent'] }
-    )
-    const reactionUpdatePipeline: Document[] = [
-      {
-        $set: {
-          reactions: {
-            $filter: {
-              input: { $ifNull: ['$reactions', []] },
-              as: 'reaction',
-              cond: { $ne: ['$$reaction.user_id', objectIdUserId] }
-            }
+    const useReactionNotification =
+      envConfig.features.notificationOutboxEnabled && envConfig.features.notificationMessageReactionEnabled
+    const occurredAt = new Date()
+    const eventId = randomUUID()
+    const session = this.databaseService.startSession()
+    let outcome: ReactionMutationOutcome | undefined
+    try {
+      await session.withTransaction(async () => {
+        const context = await this.loadReactionMutationContext(objectIdUserId, msgId, session)
+        const existingReaction = context.message.reactions.find((reaction) => reaction.user_id.equals(objectIdUserId))
+        if (!existingReaction) {
+          outcome = {
+            changed: false,
+            conversationId: context.message.conversation_id.toHexString(),
+            memberIds: context.memberIds,
+            state: createMessageReactionState(context.message.reactions)
           }
+          return
         }
-      }
-    ]
-    const updatedMessage = await this.databaseService.messages.findOneAndUpdate(
-      {
-        _id: msgId,
-        status: 'sent',
-        deleted_by: { $ne: objectIdUserId }
-      },
-      reactionUpdatePipeline,
-      { returnDocument: 'after', projection: { reactions: 1 } }
-    )
-    if (!updatedMessage) {
-      throw new HttpError('Message state changed before its reaction could be removed', HTTP_STATUS.CONFLICT)
-    }
 
-    const conversationId = message.conversation_id.toString()
-    const reactionState = createMessageReactionState(updatedMessage.reactions)
+        const updatedMessage = await this.databaseService.messages.findOneAndUpdate(
+          { _id: msgId, status: 'sent', deleted_by: { $ne: objectIdUserId } },
+          [
+            {
+              $set: {
+                reactions: {
+                  $filter: {
+                    input: { $ifNull: ['$reactions', []] },
+                    as: 'reaction',
+                    cond: { $ne: ['$$reaction.user_id', objectIdUserId] }
+                  }
+                }
+              }
+            }
+          ],
+          { returnDocument: 'after', projection: { reactions: 1 }, session }
+        )
+        if (!updatedMessage) {
+          throw new HttpError('Message state changed before its reaction could be removed', HTTP_STATUS.CONFLICT)
+        }
+        if (useReactionNotification) {
+          await this.outboxPublisher.publish(
+            {
+              event_id: eventId,
+              type: DomainEventType.MessageReactionRemoved,
+              aggregate_type: DomainAggregateType.Message,
+              aggregate_id: msgId,
+              actor_id: objectIdUserId,
+              occurred_at: occurredAt,
+              payload: {
+                message_id: msgId,
+                conversation_id: context.message.conversation_id,
+                conversation_type: context.message.conversation_type,
+                source_type: 'MESSAGE_REACTION',
+                source_id: `${msgId.toHexString()}:${objectIdUserId.toHexString()}`
+              }
+            },
+            { session }
+          )
+        }
+        outcome = {
+          changed: true,
+          conversationId: context.message.conversation_id.toHexString(),
+          memberIds: context.memberIds,
+          state: createMessageReactionState(updatedMessage.reactions)
+        }
+      })
+    } finally {
+      await session.endSession()
+    }
+    if (!outcome) throw new Error('Unreact transaction committed without a result')
+    const reactionState = outcome.state
     const reactionEvent: MessageReactionUpdatedEvent = {
-      conversation_id: conversationId,
+      conversation_id: outcome.conversationId,
       message_id: messageId,
       ...reactionState
     }
-    await conversationMessageSyncService.syncConversationAction(
-      conversationId,
-      conversation.memberIds,
-      '@message:reaction-updated',
-      reactionEvent
-    )
+    if (outcome.changed) {
+      await conversationMessageSyncService.syncConversationAction(
+        outcome.conversationId,
+        outcome.memberIds,
+        '@message:reaction-updated',
+        reactionEvent
+      )
+    }
 
     return reactionState
+  }
+
+  private async loadReactionMutationContext(actorId: ObjectId, messageId: ObjectId, session: ClientSession) {
+    const message = await this.databaseService.messages.findOne({ _id: messageId }, { session })
+    if (!message) throw new HttpError('Message not found', HTTP_STATUS.NOT_FOUND)
+    if (message.kind === MessageKind.System) {
+      throw new HttpError('System messages do not support reactions', HTTP_STATUS.BAD_REQUEST)
+    }
+
+    const conversation =
+      message.conversation_type === 'direct'
+        ? await this.databaseService.directConversations.findOne(
+            { _id: message.conversation_id, $or: [{ user1_id: actorId }, { user2_id: actorId }] },
+            { session }
+          )
+        : await this.databaseService.groupConversations.findOne(
+            { _id: message.conversation_id, 'members.user_id': actorId },
+            { session }
+          )
+    if (!conversation) {
+      throw new HttpError('You are not a member of this conversation', HTTP_STATUS.FORBIDDEN)
+    }
+    if (!message._id || !isMessageAfterHistoryCutoff(message._id, conversation, actorId.toHexString())) {
+      throw new HttpError('Message not found', HTTP_STATUS.NOT_FOUND)
+    }
+    if (message.status !== 'sent' || message.deleted_by.some((id) => id.equals(actorId))) {
+      throw new HttpError('Message is not available for this action', HTTP_STATUS.BAD_REQUEST)
+    }
+    const memberIds =
+      message.conversation_type === 'direct'
+        ? 'user1_id' in conversation
+          ? [conversation.user1_id.toHexString(), conversation.user2_id.toHexString()]
+          : []
+        : 'members' in conversation
+          ? conversation.members.map((member) => member.user_id.toHexString())
+          : []
+    return { message, memberIds }
   }
 
   async getMessageReactions(userId: string, messageId: string) {
@@ -1927,141 +2685,19 @@ class ConversationService {
     return message.filter((reaction) => isMessageReactionEmoji(reaction.emoji))
   }
 
-  async forwardMessage(userId: string, messageId: string, conversationIds: string[]) {
-    const senderId = new this.databaseService.ObjectId(userId)
-    const msgId = new this.databaseService.ObjectId(messageId)
-
-    const originalMessage = await this.databaseService.messages.findOne({ _id: msgId })
-    if (!originalMessage) {
-      throw new HttpError('Original message not found', HTTP_STATUS.NOT_FOUND)
-    }
-
-    await conversationAccessService.assertConversationMember(
-      userId,
-      originalMessage.conversation_id.toString(),
-      originalMessage.conversation_type
-    )
-
-    if (originalMessage.status !== 'sent') {
-      throw new HttpError('Only sent messages can be forwarded', HTTP_STATUS.BAD_REQUEST)
-    }
-    if (originalMessage.deleted_by?.some((deletedByUserId) => deletedByUserId.toString() === userId)) {
-      throw new HttpError('Message is not available for this action', HTTP_STATUS.BAD_REQUEST)
-    }
-
-    const normalizedConversationIds = conversationIds.map((conversationId) =>
-      new this.databaseService.ObjectId(conversationId).toString()
-    )
-    const targetConversations = await Promise.all(
-      normalizedConversationIds.map((conversationId) =>
-        conversationAccessService.assertConversationMember(userId, conversationId)
-      )
-    )
-
-    await Promise.all(
-      targetConversations.map((targetConversation) => {
-        if (targetConversation.type !== 'direct') return Promise.resolve()
-
-        const partnerId = targetConversation.memberIds.find((memberId) => memberId !== userId)
-        if (!partnerId) {
-          throw new HttpError('Direct conversation partner not found', HTTP_STATUS.NOT_FOUND)
-        }
-
-        return conversationAccessService.assertDirectMessagingAllowed(userId, partnerId)
-      })
-    )
-
-    const targetConversationTypeById = new Map(
-      normalizedConversationIds.map((conversationId, index) => [conversationId, targetConversations[index].type])
-    )
-
-    const firstMedia = originalMessage.media_ids?.[0]
-      ? await this.databaseService.medias.findOne({ _id: originalMessage.media_ids[0] })
-      : null
-    const forwardedMessageType =
-      firstMedia?.type === MediaType.Image ||
-      firstMedia?.type === MediaType.Video ||
-      firstMedia?.type === MediaType.Audio
-        ? firstMedia.type
-        : firstMedia
-          ? ('file' as const)
-          : ('text' as const)
-
-    const newMessages = normalizedConversationIds.map((conversationId) => {
-      const conversationType = targetConversationTypeById.get(conversationId)
-
-      if (!conversationType) {
-        throw new HttpError('Conversation not found', HTTP_STATUS.NOT_FOUND)
-      }
-
-      const newMessage = new Message({
-        _id: new this.databaseService.ObjectId(),
-        conversation_id: new this.databaseService.ObjectId(conversationId),
-        conversation_type: conversationType,
-        sender_id: senderId,
-        content: originalMessage.content,
-        media_ids: originalMessage.media_ids,
-        send_at: new Date(),
-        read_by: [],
-        reactions: [],
-        status: 'sent',
-        ...{ is_forwarded: true }
-      })
-      return newMessage
+  async forwardMessage(
+    userId: string,
+    messageId: string,
+    conversationIds: string[],
+    clientOperationId?: string
+  ) {
+    const results = await this.messageCommandService.forward({
+      sender_id: userId,
+      origin_message_id: messageId,
+      conversation_ids: conversationIds,
+      client_operation_id: clientOperationId
     })
-
-    if (newMessages.length > 0) {
-      await conversationAccessService.assertConversationMember(
-        userId,
-        originalMessage.conversation_id.toString(),
-        originalMessage.conversation_type
-      )
-      await Promise.all(
-        normalizedConversationIds.map((conversationId) =>
-          conversationAccessService.assertConversationMember(userId, conversationId)
-        )
-      )
-
-      await this.databaseService.messages.insertMany(newMessages)
-
-      // Update last_message_preview for all conversations
-      const updatePromises = normalizedConversationIds.map((conversationId, index) => {
-        const conversationObjectId = new this.databaseService.ObjectId(conversationId)
-        const forwardedMessage = newMessages[index]
-        if (!forwardedMessage?._id) {
-          throw new HttpError('Forwarded message could not be created', HTTP_STATUS.INTERNAL_SERVER_ERROR)
-        }
-        const preview = {
-          message_id: forwardedMessage._id,
-          sender_id: senderId,
-          content: originalMessage.content,
-          message_type: forwardedMessageType
-        }
-        const update = {
-          $set: {
-            last_message_at: forwardedMessage.send_at ?? new Date(),
-            last_message_preview: preview,
-            last_message_overrides: [],
-            updated_at: new Date()
-          }
-        }
-
-        if (targetConversationTypeById.get(conversationId) === 'direct') {
-          return this.databaseService.directConversations.updateOne(
-            { _id: conversationObjectId, $or: [{ user1_id: senderId }, { user2_id: senderId }] },
-            update
-          )
-        }
-
-        return this.databaseService.groupConversations.updateOne(
-          { _id: conversationObjectId, 'members.user_id': senderId },
-          update
-        )
-      })
-
-      await Promise.all(updatePromises)
-    }
-
+    await Promise.allSettled(results.map((result) => this.messageDeliveryService.deliver(result)))
     return { success: true }
   }
 }

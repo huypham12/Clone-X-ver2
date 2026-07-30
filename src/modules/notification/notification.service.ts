@@ -1,85 +1,157 @@
-import { ObjectId } from 'mongodb'
-import DatabaseService from '~/config/database.service'
-import { Notification } from '~/schemas'
+import { randomUUID } from 'crypto'
+import DatabaseService, { databaseService as sharedDatabaseService } from '~/config/database.service'
 import { NotificationType } from '~/constants/enums'
-import { getIO } from '~/socket'
+import { HttpError } from '~/common/http-error'
+import { HTTP_STATUS } from '~/constants/httpStatus'
+import type { NotificationPageData } from './dto'
+import { NotificationRepository } from './notification.repository'
+import { NotificationQueryService } from './notification-query.service'
+import { NotificationPolicyService } from './notification-policy.service'
+import { NotificationDeliveryService } from './notification-delivery.service'
+import { InlineDomainEventPublisher } from '~/modules/events/domain-event.publisher'
+import { DomainAggregateType, DomainEventType } from '~/modules/events/domain-event.type'
+import { NotificationEventHandler } from './notification-event.handler'
+import type { NotificationEventHandlerResult } from './notification-event.type'
+import { NotificationUnreadService } from './notification-unread.service'
 
-class NotificationService {
-  private databaseService: DatabaseService
+export class NotificationService {
+  private readonly databaseService: DatabaseService
+  private readonly repository: NotificationRepository
+  private readonly queryService: NotificationQueryService
+  private readonly inlinePublisher: InlineDomainEventPublisher<NotificationEventHandlerResult>
+  private readonly deliveryService: NotificationDeliveryService
+  private readonly unreadService: NotificationUnreadService
+  private readonly eventHandler: NotificationEventHandler
 
-  constructor() {
-    this.databaseService = new DatabaseService()
-  }
-
-  async createNotification(
-    recipient_id: string,
-    sender_id: string | null,
-    type: NotificationType,
-    target_id?: string
+  constructor(
+    databaseService: DatabaseService = sharedDatabaseService,
+    repository: NotificationRepository = new NotificationRepository(databaseService),
+    queryService: NotificationQueryService = new NotificationQueryService(databaseService, repository),
+    policyService: NotificationPolicyService = new NotificationPolicyService(databaseService),
+    deliveryService: NotificationDeliveryService = new NotificationDeliveryService(),
+    eventHandler: NotificationEventHandler = new NotificationEventHandler(repository, policyService, deliveryService),
+    inlinePublisher: InlineDomainEventPublisher<NotificationEventHandlerResult> = new InlineDomainEventPublisher(
+      eventHandler
+    ),
+    unreadService: NotificationUnreadService = new NotificationUnreadService(databaseService)
   ) {
-    if (recipient_id === sender_id) return null // Don't notify self
-
-    const notification = new Notification({
-      recipient_id: new this.databaseService.ObjectId(recipient_id),
-      sender_id: sender_id ? new this.databaseService.ObjectId(sender_id) : null,
-      type,
-      target_id: target_id ? new this.databaseService.ObjectId(target_id) : undefined
-    })
-
-    const result = await this.databaseService.notifications.insertOne(notification)
-    notification._id = result.insertedId
-
-    // Real-time socket event
-    try {
-      getIO().to(recipient_id).emit('@notification:new', notification)
-    } catch (error) {
-      console.error('Socket not initialized yet or error emitting notification')
-    }
-
-    return notification
+    this.databaseService = databaseService
+    this.repository = repository
+    this.queryService = queryService
+    this.inlinePublisher = inlinePublisher
+    this.deliveryService = deliveryService
+    this.unreadService = unreadService
+    this.eventHandler = eventHandler
   }
 
-  async getNotifications(userId: string, cursor: string | undefined, limit: number) {
-    const recipientId = new this.databaseService.ObjectId(userId)
-    const matchStage: any = { recipient_id: recipientId }
-    if (cursor) {
-      matchStage._id = { $lt: new this.databaseService.ObjectId(cursor) }
+  /** @deprecated Compatibility facade only. Production business flows publish typed outbox events. */
+  async createNotification(recipient_id: string, sender_id: string | null, type: NotificationType, target_id?: string) {
+    const eventId = randomUUID()
+    const recipientId = new this.databaseService.ObjectId(recipient_id)
+    const actorId = sender_id ? new this.databaseService.ObjectId(sender_id) : null
+    const targetId = target_id ? new this.databaseService.ObjectId(target_id) : null
+    const event = {
+      event_id: eventId,
+      type: DomainEventType.LegacyNotificationRequested,
+      aggregate_type: DomainAggregateType.LegacyNotification,
+      aggregate_id: targetId ?? recipientId,
+      actor_id: actorId,
+      occurred_at: new Date(),
+      payload: {
+        recipient_id: recipientId,
+        notification_type: type,
+        target_id: targetId,
+        source_type: 'LEGACY',
+        source_id: eventId
+      }
+    } as const
+    let result: NotificationEventHandlerResult | undefined
+    const session = this.databaseService.startSession()
+    try {
+      await session.withTransaction(async () => {
+        result = await this.inlinePublisher.publish(event, { session, deliver: false })
+      })
+    } finally {
+      await session.endSession()
     }
+    if (!result) throw new Error('Notification transaction committed without a handler result')
+    this.eventHandler.deliverAfterCommit(result)
+    return result.status === 'batch' ? null : result.notification
+  }
 
-    const notifications = await this.databaseService.notifications
-      .find(matchStage)
-      .sort({ _id: -1 })
-      .limit(limit)
-      .toArray()
-
-    const unreadCount = await this.databaseService.notifications.countDocuments({
-      recipient_id: recipientId,
-      is_read: false
-    })
-
-    const has_next_page = notifications.length === limit
-    const next_cursor = has_next_page ? notifications[notifications.length - 1]._id.toString() : null
-
-    return { notifications, unreadCount, next_cursor, has_next_page }
+  async getNotifications(userId: string, cursor: string | undefined, limit: number): Promise<NotificationPageData> {
+    return this.queryService.getNotifications(userId, cursor, limit)
   }
 
   async markAllAsRead(userId: string) {
-    const result = await this.databaseService.notifications.updateMany(
-      { recipient_id: new this.databaseService.ObjectId(userId), is_read: false },
-      { $set: { is_read: true } }
-    )
-    return { updatedCount: result.modifiedCount }
+    const recipientId = new this.databaseService.ObjectId(userId)
+    const readAt = new Date()
+    const cutoff = { created_at: readAt, _id: new this.databaseService.ObjectId() }
+    const session = this.databaseService.startSession()
+    let result: Awaited<ReturnType<NotificationRepository['markAllAsRead']>> | undefined
+    try {
+      await session.withTransaction(async () => {
+        result = await this.repository.markAllAsRead(recipientId, readAt, cutoff, { session })
+      })
+    } finally {
+      await session.endSession()
+    }
+    if (!result) throw new Error('Notification read-all transaction returned no result')
+    this.deliveryService.deliverReadState(userId, {
+      action: 'read_all',
+      notification_id: null,
+      read_at: readAt,
+      updated_count: result.updated_count,
+      unread_count: result.unread_state.unread_count,
+      version: result.unread_state.version
+    })
+    return {
+      updatedCount: result.updated_count,
+      unreadCount: result.unread_state.unread_count,
+      version: result.unread_state.version
+    }
   }
 
   async markAsRead(userId: string, notificationId: string) {
-    const result = await this.databaseService.notifications.updateOne(
-      {
-        _id: new this.databaseService.ObjectId(notificationId),
-        recipient_id: new this.databaseService.ObjectId(userId)
-      },
-      { $set: { is_read: true } }
-    )
-    return { success: result.modifiedCount > 0 }
+    const recipientId = new this.databaseService.ObjectId(userId)
+    const readAt = new Date()
+    const session = this.databaseService.startSession()
+    let result: Awaited<ReturnType<NotificationRepository['markAsRead']>> | undefined
+    try {
+      await session.withTransaction(async () => {
+        result = await this.repository.markAsRead(
+          recipientId,
+          new this.databaseService.ObjectId(notificationId),
+          readAt,
+          { session }
+        )
+      })
+    } finally {
+      await session.endSession()
+    }
+    if (!result) throw new Error('Notification mark-read transaction returned no result')
+    if (!result.exists) {
+      throw new HttpError('Notification not found', HTTP_STATUS.NOT_FOUND)
+    }
+
+    this.deliveryService.deliverReadState(userId, {
+      action: 'mark_one',
+      notification_id: notificationId,
+      read_at: readAt,
+      updated_count: result.transitioned ? 1 : 0,
+      unread_count: result.unread_state.unread_count,
+      version: result.unread_state.version
+    })
+    return {
+      success: true as const,
+      unreadCount: result.unread_state.unread_count,
+      version: result.unread_state.version
+    }
+  }
+
+  async getUnreadCount(userId: string) {
+    const state = await this.unreadService.get(new this.databaseService.ObjectId(userId))
+    return { unreadCount: state.unread_count, version: state.version, updated_at: state.updated_at }
   }
 }
 

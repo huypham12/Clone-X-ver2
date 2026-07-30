@@ -1,6 +1,6 @@
 import { ObjectId } from 'mongodb'
 import { HttpError } from '~/common/http-error'
-import DatabaseService from '~/config/database.service'
+import DatabaseService, { databaseService as sharedDatabaseService } from '~/config/database.service'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import type Message from '~/schemas/Message.schema'
 import conversationAccessService, {
@@ -31,7 +31,7 @@ export class ConversationMessageAccessService {
   private readonly accessService: Pick<typeof conversationAccessService, 'assertConversationMember'>
 
   constructor(
-    databaseService: DatabaseService = new DatabaseService(),
+    databaseService: DatabaseService = sharedDatabaseService,
     accessService: Pick<typeof conversationAccessService, 'assertConversationMember'> = conversationAccessService
   ) {
     this.databaseService = databaseService

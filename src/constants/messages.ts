@@ -3,6 +3,7 @@ export const MESSAGES = {
   REGISTER_SUCCESS: 'Register success',
   REGISTER_SUCCESS_WITH_VERIFY_EMAIL: 'Register success, please check your email to verify your account',
   CANNOT_BLOCK_YOURSELF: 'Cannot block yourself',
+  CANNOT_FOLLOW_YOURSELF: 'Cannot follow yourself',
   FOLLOW_RELATION_NOT_FOUND: 'Follow relation not found',
   USER_NOT_BLOCKED: 'User not blocked',
   LOGIN_SUCCESS: 'Login success',

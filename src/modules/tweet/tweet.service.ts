@@ -1,16 +1,41 @@
-import { ObjectId } from 'mongodb'
-import DatabaseService from '~/config/database.service'
+import { randomUUID } from 'crypto'
+import { ObjectId, type ClientSession, type Filter } from 'mongodb'
+import { databaseService } from '~/config/database.service'
+import { envConfig } from '~/config/getEnvConfig'
 import redisService from '~/config/redis.service'
 import { Tweet, Hashtag, Like, Bookmark, NewsFeed } from '~/schemas'
-import { TweetType, NotificationType, TweetAudience, MediaStatus } from '~/constants/enums'
-import notificationService from '../notification/notification.service'
+import { TweetType, TweetAudience, MediaStatus, NotificationTargetType } from '~/constants/enums'
 import { getParentTweetLookupStages, getIsRetweetedLookupStages } from '~/utils/aggregation'
 import { HttpError } from '~/common/http-error'
 import { HTTP_STATUS } from '~/constants/httpStatus'
+import { TweetMentionService } from './tweet-mention.service'
+import { OutboxDomainEventPublisher } from '~/modules/events/outbox.publisher'
+import { DomainAggregateType, DomainEventType } from '~/modules/events/domain-event.type'
+import { NotificationLifecycleGuardService } from '~/modules/notification/notification-lifecycle-guard.service'
 
-const databaseService = new DatabaseService()
+interface CreateTweetInput {
+  type: TweetType
+  audience: TweetAudience
+  content: string
+  parent_id: string | ObjectId | null
+  hashtags: string[]
+  mentions: ObjectId[]
+  medias: Array<string | ObjectId>
+}
+
+interface UpdateTweetInput {
+  audience?: TweetAudience
+  content?: string
+  hashtags?: string[]
+  mentions?: ObjectId[]
+  medias?: Array<string | ObjectId>
+}
 
 class TweetService {
+  private readonly mentionService = new TweetMentionService(databaseService)
+  private readonly outboxPublisher = new OutboxDomainEventPublisher()
+  private readonly lifecycleGuard = new NotificationLifecycleGuardService(databaseService)
+
   private async validateTweetMedia(user_id: string, medias: Array<string | ObjectId> = []) {
     const mediaIds = medias.map((id) => new ObjectId(id))
     if (mediaIds.length === 0) return mediaIds
@@ -36,155 +61,177 @@ class TweetService {
     return mediaIds
   }
 
-  async createTweet(user_id: string, body: any) {
+  async createTweet(user_id: string, body: CreateTweetInput) {
     const { type, audience, content, parent_id, hashtags, mentions, medias } = body
     const mediaIds = await this.validateTweetMedia(user_id, medias)
+    const actorId = new ObjectId(user_id)
+    const tweetId = new ObjectId()
+    const occurredAt = new Date()
+    const parentId = parent_id ? new ObjectId(parent_id) : null
+    const useTweetOutbox =
+      envConfig.features.notificationOutboxEnabled && envConfig.features.notificationTweetOutboxEnabled
+    const useSocialAggregation =
+      envConfig.features.notificationOutboxEnabled && envConfig.features.notificationSocialAggregationEnabled
+    const session = databaseService.startSession()
+    let transactionResult: { tweet: Tweet; finalMentions: ObjectId[]; parentOwnerId: ObjectId | null } | undefined
 
-    const hashtagIds = await this.processHashtags(hashtags)
-    
-    // Parse Mentions from content
-    const parsedUsernames = content?.match(/@(\w+)/g)?.map((m: string) => m.slice(1)) || []
-    let finalMentions = [...(mentions || [])]
-    if (parsedUsernames.length > 0) {
-      const mentionedUsers = await databaseService.users
-        .find({ username: { $in: parsedUsernames } })
-        .toArray()
-      finalMentions = [...new Set([...finalMentions, ...mentionedUsers.map(u => u._id.toString())])]
-    }
+    try {
+      transactionResult = await session.withTransaction(async () => {
+        const hashtagIds = await this.processHashtags(hashtags, session)
+        const finalMentions = await this.mentionService.resolve(content, mentions ?? [], actorId, session)
+        const tweet = new Tweet({
+          _id: tweetId,
+          user_id: actorId,
+          type,
+          audience,
+          content,
+          parent_id: parentId,
+          hashtags: hashtagIds,
+          mentions: finalMentions,
+          media_ids: mediaIds,
+          created_at: occurredAt,
+          updated_at: occurredAt
+        })
+        await databaseService.tweets.insertOne(tweet, { session })
+        let parentOwnerId: ObjectId | null = null
 
-    const tweet = new Tweet({
-      user_id: new ObjectId(user_id),
-      type,
-      audience,
-      content,
-      parent_id,
-      hashtags: hashtagIds,
-      mentions: finalMentions.map(id => new ObjectId(id)),
-      media_ids: mediaIds
-    })
+        if (parentId) {
+          const incField =
+            type === TweetType.Retweet ? 'retweet_count' : type === TweetType.Comment ? 'reply_count' : 'quote_count'
+          await databaseService.tweets.updateOne({ _id: parentId }, { $inc: { [incField]: 1 } }, { session })
+          const parentTweet = await databaseService.tweets.findOne(
+            { _id: parentId },
+            { projection: { user_id: 1 }, session }
+          )
+          parentOwnerId = parentTweet?.user_id ?? null
+        }
 
-    const result = await databaseService.tweets.insertOne(tweet)
-    const tweet_id = result.insertedId
-
-    // 1. Tăng biến đếm của tweet cha nếu có & Gửi thông báo
-    if (parent_id) {
-      const incField =
-        type === TweetType.Retweet ? 'retweet_count' : type === TweetType.Comment ? 'reply_count' : 'quote_count'
-
-      await databaseService.tweets.updateOne({ _id: new ObjectId(parent_id) }, { $inc: { [incField]: 1 } })
-      
-      // Xóa cache của parent tweet
-      await redisService.del(`tweet:${parent_id}`)
-
-      // Lấy owner của parent tweet để gửi thông báo
-      const parentTweet = await databaseService.tweets.findOne({ _id: new ObjectId(parent_id) })
-      if (parentTweet && parentTweet.user_id.toString() !== user_id) {
-        let notiType = NotificationType.Reply
-        if (type === TweetType.Retweet) notiType = NotificationType.Retweet
-        if (type === TweetType.QuoteTweet) notiType = NotificationType.Quote
-
-        await notificationService.createNotification(
-          parentTweet.user_id.toString(),
-          user_id,
-          notiType,
-          tweet_id.toString()
+        await databaseService.newsFeeds.insertOne(
+          new NewsFeed({ user_id: actorId, tweet_id: tweetId, created_at: occurredAt }),
+          { session }
         )
-      }
-    }
+        const followers = await databaseService.followers
+          .find({ followed_user_id: actorId }, { projection: { follow_user_id: 1 }, session })
+          .toArray()
+        if (followers.length > 0) {
+          await databaseService.newsFeeds.insertMany(
+            followers.map(
+              (follower) =>
+                new NewsFeed({ user_id: follower.follow_user_id, tweet_id: tweetId, created_at: occurredAt })
+            ),
+            { session }
+          )
+        }
 
-    // Gửi thông báo Mention
-    for (const mentionId of finalMentions) {
-      if (mentionId !== user_id) {
-        await notificationService.createNotification(
-          mentionId.toString(),
-          user_id,
-          NotificationType.Mention,
-          tweet_id.toString()
-        )
-      }
-    }
-
-    // 2. Thêm vào NewsFeed của người dùng tạo tweet
-    await databaseService.newsFeeds.insertOne(
-      new NewsFeed({
-        user_id: new ObjectId(user_id),
-        tweet_id,
-        created_at: new Date()
+        if (type === TweetType.Retweet && useSocialAggregation && parentId) {
+          await this.outboxPublisher.publish(
+            {
+              event_id: randomUUID(),
+              type: DomainEventType.TweetReposted,
+              aggregate_type: DomainAggregateType.TweetInteraction,
+              aggregate_id: tweetId,
+              actor_id: actorId,
+              occurred_at: occurredAt,
+              payload: {
+                relation_id: tweetId,
+                tweet_id: parentId,
+                source_type: 'RETWEET',
+                source_id: tweetId.toHexString()
+              }
+            },
+            { session }
+          )
+        } else if (useTweetOutbox) {
+          await this.outboxPublisher.publish(
+            {
+              event_id: randomUUID(),
+              type: DomainEventType.TweetCreated,
+              aggregate_type: DomainAggregateType.Tweet,
+              aggregate_id: tweetId,
+              actor_id: actorId,
+              occurred_at: occurredAt,
+              payload: {
+                tweet_id: tweetId,
+                tweet_type: type,
+                audience,
+                parent_id: parentId,
+                mention_ids: finalMentions,
+                source_type: 'TWEET',
+                source_id: tweetId.toHexString()
+              }
+            },
+            { session }
+          )
+        }
+        return { tweet, finalMentions, parentOwnerId }
       })
-    )
-
-    // 3. Thực hiện Fan-out: đẩy tweet vào newsfeed của những người theo dõi user này
-    const followers = await databaseService.followers
-      .find({ followed_user_id: new ObjectId(user_id) })
-      .toArray()
-      
-    if (followers.length > 0) {
-      const newsFeeds = followers.map(
-        (follower) =>
-          new NewsFeed({
-            user_id: follower.follow_user_id,
-            tweet_id,
-            created_at: new Date()
-          })
-      )
-      await databaseService.newsFeeds.insertMany(newsFeeds)
+    } catch (error: unknown) {
+      if (type === TweetType.Retweet && this.isDuplicateKeyError(error)) {
+        throw new HttpError('Tweet already retweeted', HTTP_STATUS.CONFLICT)
+      }
+      throw error
+    } finally {
+      await session.endSession()
     }
 
-    return { ...tweet, _id: tweet_id }
+    if (!transactionResult) throw new Error('Tweet transaction committed without a tweet result')
+    const { tweet: createdTweet } = transactionResult
+    if (parentId) await redisService.del(`tweet:${parentId.toHexString()}`)
+
+    return { ...createdTweet, _id: tweetId }
   }
 
   async getTweet(tweet_id: string, user_id?: string) {
     const incField = user_id ? 'user_views' : 'guest_views'
-    
+
     // Tăng view count trong DB (fire and forget, không ảnh hưởng tốc độ)
-    databaseService.tweets.updateOne(
-      { _id: new ObjectId(tweet_id) },
-      { $inc: { [incField]: 1 } }
-    ).catch(console.error)
+    databaseService.tweets.updateOne({ _id: new ObjectId(tweet_id) }, { $inc: { [incField]: 1 } }).catch(console.error)
 
     // Aggregate to get full details (author, hashtags, media)
-    const tweet = await databaseService.tweets.aggregate([
-      { $match: { _id: new ObjectId(tweet_id) } },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'user_id',
-          foreignField: '_id',
-          as: 'author'
-        }
-      },
-      {
-        $lookup: {
-          from: 'hashtags',
-          localField: 'hashtags',
-          foreignField: '_id',
-          as: 'hashtags_info'
-        }
-      },
-      {
-        $lookup: {
-          from: 'medias',
-          localField: 'medias',
-          foreignField: '_id',
-          as: 'medias_info'
-        }
-      },
-      {
-        $unwind: {
-          path: '$author',
-          preserveNullAndEmptyArrays: true
-        }
-      },
-      {
-        $project: {
-          'author.password': 0,
-          'author.email_verify_token': 0,
-          'author.forgot_password_token': 0
-        }
-      },
-      ...getParentTweetLookupStages(user_id),
-      ...getIsRetweetedLookupStages(user_id ?? null)
-    ]).toArray()
+    const tweet = await databaseService.tweets
+      .aggregate([
+        { $match: { _id: new ObjectId(tweet_id) } },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'user_id',
+            foreignField: '_id',
+            as: 'author'
+          }
+        },
+        {
+          $lookup: {
+            from: 'hashtags',
+            localField: 'hashtags',
+            foreignField: '_id',
+            as: 'hashtags_info'
+          }
+        },
+        {
+          $lookup: {
+            from: 'medias',
+            localField: 'medias',
+            foreignField: '_id',
+            as: 'medias_info'
+          }
+        },
+        {
+          $unwind: {
+            path: '$author',
+            preserveNullAndEmptyArrays: true
+          }
+        },
+        {
+          $project: {
+            'author.password': 0,
+            'author.email_verify_token': 0,
+            'author.forgot_password_token': 0
+          }
+        },
+        ...getParentTweetLookupStages(user_id),
+        ...getIsRetweetedLookupStages(user_id ?? null)
+      ])
+      .toArray()
 
     const tweetDetail: any = tweet[0] || null
 
@@ -207,74 +254,157 @@ class TweetService {
   }
 
   async likeTweet(user_id: string, tweet_id: string) {
-    const result = await databaseService.likes.updateOne(
-      { user_id: new ObjectId(user_id), tweet_id: new ObjectId(tweet_id) },
-      { $setOnInsert: new Like({ user_id: new ObjectId(user_id), tweet_id: new ObjectId(tweet_id) }) },
-      { upsert: true }
-    )
-    
-    if (result.upsertedCount > 0) {
-      // update like count in tweet
-      await databaseService.tweets.updateOne(
-        { _id: new ObjectId(tweet_id) },
-        { $inc: { like_count: 1 } }
-      )
-
-      // Create Notification
-      const tweet = await databaseService.tweets.findOne({ _id: new ObjectId(tweet_id) })
-      if (tweet && tweet.user_id.toString() !== user_id) {
-        await notificationService.createNotification(
-          tweet.user_id.toString(),
-          user_id,
-          NotificationType.Like,
-          tweet_id
+    const actorId = new ObjectId(user_id)
+    const tweetId = new ObjectId(tweet_id)
+    const likeDocument = new Like({ user_id: actorId, tweet_id: tweetId })
+    const likeId = likeDocument._id
+    if (!likeId) throw new Error('Like relation was created without an ID')
+    const useSocialAggregation =
+      envConfig.features.notificationOutboxEnabled && envConfig.features.notificationSocialAggregationEnabled
+    const session = databaseService.startSession()
+    let like: Like | null = null
+    let created = false
+    try {
+      await session.withTransaction(async () => {
+        const target = await databaseService.tweets.findOne(
+          { _id: tweetId },
+          { projection: { user_id: 1 }, session }
         )
-      }
-      await redisService.del(`tweet:${tweet_id}`)
-    }
+        if (!target) throw new HttpError('Tweet not found', HTTP_STATUS.NOT_FOUND)
+        const result = await databaseService.likes.findOneAndUpdate(
+          { user_id: actorId, tweet_id: tweetId },
+          { $setOnInsert: likeDocument },
+          { upsert: true, returnDocument: 'after', includeResultMetadata: true, session }
+        )
+        like = result.value
+        created = result.lastErrorObject?.upserted !== undefined
+        if (!like) throw new Error('Like upsert returned no document')
+        if (!created) return
 
-    const like = await databaseService.likes.findOne({ user_id: new ObjectId(user_id), tweet_id: new ObjectId(tweet_id) })
+        await databaseService.tweets.updateOne({ _id: tweetId }, { $inc: { like_count: 1 } }, { session })
+        if (useSocialAggregation) {
+          await this.outboxPublisher.publish(
+            {
+              event_id: randomUUID(),
+              type: DomainEventType.TweetLiked,
+              aggregate_type: DomainAggregateType.TweetInteraction,
+              aggregate_id: likeId,
+              actor_id: actorId,
+              occurred_at: likeDocument.created_at,
+              payload: {
+                relation_id: likeId,
+                tweet_id: tweetId,
+                source_type: 'LIKE',
+                source_id: likeId.toHexString()
+              }
+            },
+            { session }
+          )
+        }
+      })
+    } finally {
+      await session.endSession()
+    }
+    if (!like) throw new Error('Like transaction committed without a result')
+    if (created) await redisService.del(`tweet:${tweet_id}`)
     return like
   }
 
   async unlikeTweet(user_id: string, tweet_id: string) {
-    const result = await databaseService.likes.findOneAndDelete({
-      user_id: new ObjectId(user_id),
-      tweet_id: new ObjectId(tweet_id)
-    })
-    
-    if (result) {
-      await databaseService.tweets.updateOne(
-        { _id: new ObjectId(tweet_id) },
-        { $inc: { like_count: -1 } }
-      )
-      await redisService.del(`tweet:${tweet_id}`)
+    const actorId = new ObjectId(user_id)
+    const tweetId = new ObjectId(tweet_id)
+    const useSocialAggregation =
+      envConfig.features.notificationOutboxEnabled && envConfig.features.notificationSocialAggregationEnabled
+    const session = databaseService.startSession()
+    let removed: Like | null = null
+    try {
+      await session.withTransaction(async () => {
+        removed = await databaseService.likes.findOneAndDelete(
+          { user_id: actorId, tweet_id: tweetId },
+          { session }
+        )
+        if (!removed) return
+        const removedId = removed._id
+        if (!removedId) throw new Error('Removed like relation has no ID')
+        await databaseService.tweets.updateOne(
+          { _id: tweetId },
+          [{ $set: { like_count: { $max: [0, { $subtract: [{ $ifNull: ['$like_count', 0] }, 1] }] } } }],
+          { session }
+        )
+        if (useSocialAggregation) {
+          await this.outboxPublisher.publish(
+            {
+              event_id: randomUUID(),
+              type: DomainEventType.TweetUnliked,
+              aggregate_type: DomainAggregateType.TweetInteraction,
+              aggregate_id: removedId,
+              actor_id: actorId,
+              occurred_at: new Date(),
+              payload: {
+                relation_id: removedId,
+                tweet_id: tweetId,
+                source_type: 'LIKE',
+                source_id: removedId.toHexString()
+              }
+            },
+            { session }
+          )
+        }
+      })
+    } finally {
+      await session.endSession()
     }
-    return result
+    if (removed) await redisService.del(`tweet:${tweet_id}`)
+    return removed
   }
 
   async unretweet(user_id: string, tweet_id: string) {
-    const result = await databaseService.tweets.findOneAndDelete({
-      user_id: new ObjectId(user_id),
-      parent_id: new ObjectId(tweet_id),
-      type: TweetType.Retweet
-    })
-    
-    if (result) {
-      await databaseService.tweets.updateOne(
-        { _id: new ObjectId(tweet_id) },
-        { $inc: { retweet_count: -1 } }
-      )
-      
-      // Clear cache of the parent tweet
-      await redisService.del(`tweet:${tweet_id}`)
-      
-      // Remove from NewsFeed
-      await databaseService.newsFeeds.deleteMany({
-        tweet_id: result._id
+    const actorId = new ObjectId(user_id)
+    const tweetId = new ObjectId(tweet_id)
+    const useSocialAggregation =
+      envConfig.features.notificationOutboxEnabled && envConfig.features.notificationSocialAggregationEnabled
+    const session = databaseService.startSession()
+    let removed: Tweet | null = null
+    try {
+      await session.withTransaction(async () => {
+        removed = await databaseService.tweets.findOneAndDelete(
+          { user_id: actorId, parent_id: tweetId, type: TweetType.Retweet },
+          { session }
+        )
+        if (!removed) return
+        const removedId = removed._id
+        if (!removedId) throw new Error('Removed retweet relation has no ID')
+        await databaseService.tweets.updateOne(
+          { _id: tweetId },
+          [{ $set: { retweet_count: { $max: [0, { $subtract: [{ $ifNull: ['$retweet_count', 0] }, 1] }] } } }],
+          { session }
+        )
+        await databaseService.newsFeeds.deleteMany({ tweet_id: removed._id }, { session })
+        if (useSocialAggregation) {
+          await this.outboxPublisher.publish(
+            {
+              event_id: randomUUID(),
+              type: DomainEventType.TweetUndoRepost,
+              aggregate_type: DomainAggregateType.TweetInteraction,
+              aggregate_id: removedId,
+              actor_id: actorId,
+              occurred_at: new Date(),
+              payload: {
+                relation_id: removedId,
+                tweet_id: tweetId,
+                source_type: 'RETWEET',
+                source_id: removedId.toHexString()
+              }
+            },
+            { session }
+          )
+        }
       })
+    } finally {
+      await session.endSession()
     }
-    return result
+    if (removed) await redisService.del(`tweet:${tweet_id}`)
+    return removed
   }
 
   async bookmarkTweet(user_id: string, tweet_id: string) {
@@ -283,16 +413,16 @@ class TweetService {
       { $setOnInsert: new Bookmark({ user_id: new ObjectId(user_id), tweet_id: new ObjectId(tweet_id) }) },
       { upsert: true }
     )
-    
+
     if (result.upsertedCount > 0) {
-      await databaseService.tweets.updateOne(
-        { _id: new ObjectId(tweet_id) },
-        { $inc: { bookmark_count: 1 } }
-      )
+      await databaseService.tweets.updateOne({ _id: new ObjectId(tweet_id) }, { $inc: { bookmark_count: 1 } })
       await redisService.del(`tweet:${tweet_id}`)
     }
 
-    const bookmark = await databaseService.bookmarks.findOne({ user_id: new ObjectId(user_id), tweet_id: new ObjectId(tweet_id) })
+    const bookmark = await databaseService.bookmarks.findOne({
+      user_id: new ObjectId(user_id),
+      tweet_id: new ObjectId(tweet_id)
+    })
     return bookmark
   }
 
@@ -301,19 +431,16 @@ class TweetService {
       user_id: new ObjectId(user_id),
       tweet_id: new ObjectId(tweet_id)
     })
-    
+
     if (result) {
-      await databaseService.tweets.updateOne(
-        { _id: new ObjectId(tweet_id) },
-        { $inc: { bookmark_count: -1 } }
-      )
+      await databaseService.tweets.updateOne({ _id: new ObjectId(tweet_id) }, { $inc: { bookmark_count: -1 } })
       await redisService.del(`tweet:${tweet_id}`)
     }
     return result
   }
 
   async getBookmarks(user_id: string, cursor: string | undefined, limit: number) {
-    const matchStage: any = { user_id: new ObjectId(user_id) }
+    const matchStage: Filter<Bookmark> = { user_id: new ObjectId(user_id) }
     if (cursor) {
       matchStage._id = { $lt: new ObjectId(cursor) }
     }
@@ -371,10 +498,7 @@ class TweetService {
               {
                 $match: {
                   $expr: {
-                    $and: [
-                      { $eq: ['$tweet_id', '$$tweet_id'] },
-                      { $eq: ['$user_id', new ObjectId(user_id)] }
-                    ]
+                    $and: [{ $eq: ['$tweet_id', '$$tweet_id'] }, { $eq: ['$user_id', new ObjectId(user_id)] }]
                   }
                 }
               }
@@ -390,10 +514,7 @@ class TweetService {
               {
                 $match: {
                   $expr: {
-                    $and: [
-                      { $eq: ['$tweet_id', '$$tweet_id'] },
-                      { $eq: ['$user_id', new ObjectId(user_id)] }
-                    ]
+                    $and: [{ $eq: ['$tweet_id', '$$tweet_id'] }, { $eq: ['$user_id', new ObjectId(user_id)] }]
                   }
                 }
               }
@@ -432,7 +553,7 @@ class TweetService {
     const has_next_page = bookmarks.length === limit
     const next_cursor = has_next_page ? bookmarks[bookmarks.length - 1].bookmarkId?.toString() : null
 
-    const tweets = bookmarks.map(b => {
+    const tweets = bookmarks.map((b) => {
       const { bookmarkId, ...rest } = b
       return rest
     })
@@ -441,7 +562,7 @@ class TweetService {
   }
 
   async getTweetLikes(tweet_id: string, cursor: string | undefined, limit: number) {
-    const matchStage: any = { tweet_id: new ObjectId(tweet_id) }
+    const matchStage: Filter<Like> = { tweet_id: new ObjectId(tweet_id) }
     if (cursor) {
       matchStage._id = { $lt: new ObjectId(cursor) }
     }
@@ -474,7 +595,7 @@ class TweetService {
     const has_next_page = likes.length === limit
     const next_cursor = has_next_page ? likes[likes.length - 1].likeId?.toString() : null
 
-    const users = likes.map(l => {
+    const users = likes.map((l) => {
       const { likeId, ...rest } = l
       return rest
     })
@@ -494,55 +615,57 @@ class TweetService {
     user_id?: string
   }) {
     const blockedUserIds = await this.getBlockedUserIds(user_id)
-    const matchStage: any = { 
-      parent_id: new ObjectId(tweet_id),
-      $or: [
-        { audience: 0 },
-        { $and: [{ audience: 1 }, { user_id: user_id ? new ObjectId(user_id) : null }] }
-      ]
-    }
+    const matchStage: Filter<Tweet> = user_id
+      ? {
+          parent_id: new ObjectId(tweet_id),
+          $or: [
+            { audience: TweetAudience.Everyone },
+            { $and: [{ audience: TweetAudience.TwitterCircle }, { user_id: new ObjectId(user_id) }] }
+          ]
+        }
+      : { parent_id: new ObjectId(tweet_id), audience: TweetAudience.Everyone }
     if (cursor) {
       matchStage._id = { $lt: new ObjectId(cursor) }
     }
-    
+
     const pipeline: any[] = [
-        { $match: matchStage },
-        {
-          $lookup: {
-            from: 'users',
-            localField: 'user_id',
-            foreignField: '_id',
-            as: 'author'
-          }
-        },
-        {
-          $lookup: {
-            from: 'medias',
-            localField: 'medias',
-            foreignField: '_id',
-            as: 'medias_info'
-          }
-        },
-        {
-          $match: { 'user_id': { $nin: blockedUserIds } }
-        },
-        {
-          $unwind: {
-            path: '$author',
-            preserveNullAndEmptyArrays: true
-          }
-        },
-        {
-          $project: {
-            'author.password': 0,
-            'author.email_verify_token': 0,
-            'author.forgot_password_token': 0
-          }
-        },
-        ...getParentTweetLookupStages(user_id),
-        { $sort: { _id: -1 } },
-        { $limit: limit }
-      ];
+      { $match: matchStage },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'user_id',
+          foreignField: '_id',
+          as: 'author'
+        }
+      },
+      {
+        $lookup: {
+          from: 'medias',
+          localField: 'medias',
+          foreignField: '_id',
+          as: 'medias_info'
+        }
+      },
+      {
+        $match: { user_id: { $nin: blockedUserIds } }
+      },
+      {
+        $unwind: {
+          path: '$author',
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $project: {
+          'author.password': 0,
+          'author.email_verify_token': 0,
+          'author.forgot_password_token': 0
+        }
+      },
+      ...getParentTweetLookupStages(user_id),
+      { $sort: { _id: -1 } },
+      { $limit: limit }
+    ]
 
     if (user_id) {
       pipeline.push(
@@ -555,10 +678,7 @@ class TweetService {
               {
                 $match: {
                   $expr: {
-                    $and: [
-                      { $eq: ['$tweet_id', '$$tweet_id'] },
-                      { $eq: ['$user_id', new ObjectId(user_id)] }
-                    ]
+                    $and: [{ $eq: ['$tweet_id', '$$tweet_id'] }, { $eq: ['$user_id', new ObjectId(user_id)] }]
                   }
                 }
               }
@@ -574,10 +694,7 @@ class TweetService {
               {
                 $match: {
                   $expr: {
-                    $and: [
-                      { $eq: ['$tweet_id', '$$tweet_id'] },
-                      { $eq: ['$user_id', new ObjectId(user_id)] }
-                    ]
+                    $and: [{ $eq: ['$tweet_id', '$$tweet_id'] }, { $eq: ['$user_id', new ObjectId(user_id)] }]
                   }
                 }
               }
@@ -609,14 +726,14 @@ class TweetService {
             likes: 0
           }
         }
-      );
+      )
     }
 
-    const tweets = await databaseService.tweets.aggregate(pipeline).toArray();
-      
+    const tweets = await databaseService.tweets.aggregate(pipeline).toArray()
+
     const has_next_page = tweets.length === limit
     const next_cursor = has_next_page ? tweets[tweets.length - 1]._id?.toString() : null
-    
+
     return {
       tweets,
       next_cursor,
@@ -630,7 +747,7 @@ class TweetService {
     if (cursor) {
       matchStage._id = { $lt: new ObjectId(cursor) }
     }
-    
+
     const feeds = await databaseService.newsFeeds
       .aggregate([
         { $match: matchStage },
@@ -699,10 +816,7 @@ class TweetService {
               {
                 $match: {
                   $expr: {
-                    $and: [
-                      { $eq: ['$tweet_id', '$$tweet_id'] },
-                      { $eq: ['$user_id', new ObjectId(user_id)] }
-                    ]
+                    $and: [{ $eq: ['$tweet_id', '$$tweet_id'] }, { $eq: ['$user_id', new ObjectId(user_id)] }]
                   }
                 }
               }
@@ -718,10 +832,7 @@ class TweetService {
               {
                 $match: {
                   $expr: {
-                    $and: [
-                      { $eq: ['$tweet_id', '$$tweet_id'] },
-                      { $eq: ['$user_id', new ObjectId(user_id)] }
-                    ]
+                    $and: [{ $eq: ['$tweet_id', '$$tweet_id'] }, { $eq: ['$user_id', new ObjectId(user_id)] }]
                   }
                 }
               }
@@ -756,12 +867,12 @@ class TweetService {
         { $replaceRoot: { newRoot: { $mergeObjects: ['$tweet', { newsFeedId: '$_id' }] } } }
       ])
       .toArray()
-      
+
     const has_next_page = feeds.length === limit
     const next_cursor = has_next_page ? feeds[feeds.length - 1].newsFeedId?.toString() : null
-    
+
     return {
-      tweets: feeds.map(feed => {
+      tweets: feeds.map((feed) => {
         const { newsFeedId, ...rest } = feed
         return rest
       }),
@@ -772,9 +883,9 @@ class TweetService {
 
   async getForYouFeeds({ user_id, cursor, limit }: { user_id: string; cursor?: string; limit: number }) {
     const blockedUserIds = await this.getBlockedUserIds(user_id)
-    
+
     // For You: Latest tweets globally, excluding retweets and comments, from users not blocked
-    const matchStage: any = { 
+    const matchStage: Filter<Tweet> = {
       user_id: { $nin: blockedUserIds },
       type: { $in: [TweetType.Tweet, TweetType.QuoteTweet] },
       audience: TweetAudience.Everyone
@@ -783,7 +894,7 @@ class TweetService {
     if (cursor) {
       matchStage._id = { $lt: new ObjectId(cursor) }
     }
-    
+
     const tweets = await databaseService.tweets
       .aggregate([
         { $match: matchStage },
@@ -828,10 +939,7 @@ class TweetService {
               {
                 $match: {
                   $expr: {
-                    $and: [
-                      { $eq: ['$tweet_id', '$$tweet_id'] },
-                      { $eq: ['$user_id', new ObjectId(user_id)] }
-                    ]
+                    $and: [{ $eq: ['$tweet_id', '$$tweet_id'] }, { $eq: ['$user_id', new ObjectId(user_id)] }]
                   }
                 }
               }
@@ -847,10 +955,7 @@ class TweetService {
               {
                 $match: {
                   $expr: {
-                    $and: [
-                      { $eq: ['$tweet_id', '$$tweet_id'] },
-                      { $eq: ['$user_id', new ObjectId(user_id)] }
-                    ]
+                    $and: [{ $eq: ['$tweet_id', '$$tweet_id'] }, { $eq: ['$user_id', new ObjectId(user_id)] }]
                   }
                 }
               }
@@ -884,10 +989,10 @@ class TweetService {
         }
       ])
       .toArray()
-      
+
     const has_next_page = tweets.length === limit
     const next_cursor = has_next_page ? tweets[tweets.length - 1]._id?.toString() : null
-    
+
     return {
       tweets,
       next_cursor,
@@ -897,49 +1002,56 @@ class TweetService {
 
   private async getBlockedUserIds(user_id?: string): Promise<ObjectId[]> {
     if (!user_id) return []
-    const blockedList = await databaseService.userBlocks.find({
-      $or: [
-        { user_id: new ObjectId(user_id) },
-        { blocked_user_id: new ObjectId(user_id) }
-      ]
-    }).toArray()
-    
-    return blockedList.map(block => 
-      block.user_id.toString() === user_id ? block.blocked_user_id : block.user_id
-    )
+    const blockedList = await databaseService.userBlocks
+      .find({
+        $or: [{ user_id: new ObjectId(user_id) }, { blocked_user_id: new ObjectId(user_id) }]
+      })
+      .toArray()
+
+    return blockedList.map((block) => (block.user_id.toString() === user_id ? block.blocked_user_id : block.user_id))
   }
 
-  private async processHashtags(hashtags: string[]): Promise<ObjectId[]> {
+  private async processHashtags(hashtags: string[], session?: ClientSession): Promise<ObjectId[]> {
     if (hashtags.length === 0) return []
 
     const hashtagObjectIds: ObjectId[] = []
-    
-    // Tìm các hashtag đã tồn tại
-    const existingHashtags = await databaseService.hashtags.find({
-      normalized_name: { $in: hashtags.map(h => h.toLowerCase()) }
-    }).toArray()
+    const normalizedNames = [...new Set(hashtags.map((hashtag) => hashtag.toLowerCase()))]
 
-    const existingNames = existingHashtags.map(h => h.normalized_name)
-    const newNames = hashtags.map(h => h.toLowerCase()).filter(name => !existingNames.includes(name))
+    // Tìm các hashtag đã tồn tại
+    const existingHashtags = await databaseService.hashtags
+      .find(
+        {
+          normalized_name: { $in: normalizedNames }
+        },
+        { session }
+      )
+      .toArray()
+
+    const existingNames = existingHashtags.map((hashtag) => hashtag.normalized_name)
+    const newNames = normalizedNames.filter((name) => !existingNames.includes(name))
 
     // Cập nhật post_count cho các hashtag đã tồn tại
     if (existingNames.length > 0) {
       await databaseService.hashtags.updateMany(
         { normalized_name: { $in: existingNames } },
-        { $inc: { post_count: 1 } }
+        { $inc: { post_count: 1 } },
+        { session }
       )
-      hashtagObjectIds.push(...existingHashtags.map(h => h._id))
+      hashtagObjectIds.push(...existingHashtags.map((h) => h._id))
     }
 
     // Insert mới các hashtag chưa có
     if (newNames.length > 0) {
-      const newHashtagDocs = newNames.map(name => new Hashtag({
-        normalized_name: name,
-        post_count: 1
-      }))
-      
-      const insertResult = await databaseService.hashtags.insertMany(newHashtagDocs)
-      Object.values(insertResult.insertedIds).forEach(id => {
+      const newHashtagDocs = newNames.map(
+        (name) =>
+          new Hashtag({
+            normalized_name: name,
+            post_count: 1
+          })
+      )
+
+      const insertResult = await databaseService.hashtags.insertMany(newHashtagDocs, { session })
+      Object.values(insertResult.insertedIds).forEach((id) => {
         hashtagObjectIds.push(id)
       })
     }
@@ -947,95 +1059,182 @@ class TweetService {
     return hashtagObjectIds
   }
 
-  async updateTweet(user_id: string, tweet_id: string, body: any) {
-    const tweet = await databaseService.tweets.findOne({ _id: new ObjectId(tweet_id) })
-    if (!tweet) {
-      throw new Error('Tweet not found')
-    }
+  async updateTweet(user_id: string, tweet_id: string, body: UpdateTweetInput) {
+    const actorId = new ObjectId(user_id)
+    const tweetId = new ObjectId(tweet_id)
+    const mediaIds = body.medias !== undefined ? await this.validateTweetMedia(user_id, body.medias) : undefined
+    const useNotificationOutbox = envConfig.features.notificationOutboxEnabled
+    const createTweetNotifications = envConfig.features.notificationTweetOutboxEnabled
+    const occurredAt = new Date()
+    const session = databaseService.startSession()
+    try {
+      await session.withTransaction(async () => {
+        if (envConfig.features.notificationOutboxEnabled) {
+          await this.lifecycleGuard.touchTarget(NotificationTargetType.Tweet, tweetId, occurredAt, session)
+        }
+        const tweet = await databaseService.tweets.findOne({ _id: tweetId }, { session })
+        if (!tweet) throw new Error('Tweet not found')
+        if (!tweet.user_id.equals(actorId)) throw new Error('You do not have permission to edit this tweet')
 
-    if (tweet.user_id.toString() !== user_id) {
-      throw new Error('You do not have permission to edit this tweet')
-    }
+        if (
+          useNotificationOutbox &&
+          body.audience !== undefined &&
+          tweet.audience !== body.audience
+        ) {
+          if (body.audience === TweetAudience.Everyone) {
+            await this.lifecycleGuard.markTargetRestored(
+              NotificationTargetType.Tweet,
+              tweetId,
+              occurredAt,
+              session
+            )
+          } else if (tweet.audience === TweetAudience.Everyone) {
+            await this.lifecycleGuard.markTargetHidden(
+              NotificationTargetType.Tweet,
+              tweetId,
+              occurredAt,
+              session
+            )
+          }
+        }
 
-    const updateData: any = {
-      updated_at: new Date()
-    }
+        const updateData: Partial<Tweet> = { updated_at: occurredAt }
+        if (body.audience !== undefined) updateData.audience = body.audience
+        if (body.content !== undefined) {
+          if (tweet.type === TweetType.Retweet) throw new Error('Retweet cannot have content')
+          updateData.content = body.content
+        }
+        if (body.hashtags !== undefined) updateData.hashtags = await this.processHashtags(body.hashtags, session)
+        if (mediaIds !== undefined) updateData.medias = mediaIds
 
-    if (body.audience !== undefined) {
-      updateData.audience = body.audience
-    }
+        let currentMentions = tweet.mentions
+        if (body.mentions !== undefined) {
+          if (tweet.type === TweetType.Retweet) throw new Error('Retweet cannot have mentions')
+          currentMentions = await this.mentionService.resolve(
+            body.content !== undefined ? body.content : tweet.content,
+            body.mentions,
+            actorId,
+            session
+          )
+          updateData.mentions = currentMentions
+        }
 
-    if (body.content !== undefined) {
-      if (tweet.type === TweetType.Retweet) {
-        throw new Error('Retweet cannot have content')
-      }
-      updateData.content = body.content
-    }
+        await databaseService.tweets.updateOne({ _id: tweetId }, { $set: updateData }, { session })
+        const previousMentionIds = new Map(tweet.mentions.map((id) => [id.toHexString(), id]))
+        const currentMentionMap = new Map(currentMentions.map((id) => [id.toHexString(), id]))
+        const addedMentionIds = [...currentMentionMap.entries()]
+          .filter(([id]) => !previousMentionIds.has(id))
+          .map(([, id]) => id)
+        const removedMentionIds = [...previousMentionIds.entries()]
+          .filter(([id]) => !currentMentionMap.has(id))
+          .map(([, id]) => id)
+        const visibilityRevoked =
+          tweet.audience === TweetAudience.Everyone &&
+          body.audience !== undefined &&
+          body.audience !== TweetAudience.Everyone
 
-    if (body.hashtags !== undefined) {
-      updateData.hashtags = await this.processHashtags(body.hashtags)
+        if (
+          useNotificationOutbox &&
+          ((createTweetNotifications && addedMentionIds.length > 0) ||
+            removedMentionIds.length > 0 ||
+            visibilityRevoked)
+        ) {
+          await this.outboxPublisher.publish(
+            {
+              event_id: randomUUID(),
+              type: DomainEventType.TweetMentionsChanged,
+              aggregate_type: DomainAggregateType.Tweet,
+              aggregate_id: tweetId,
+              actor_id: actorId,
+              occurred_at: occurredAt,
+              payload: {
+                tweet_id: tweetId,
+                added_mention_ids: createTweetNotifications ? addedMentionIds : [],
+                removed_mention_ids: removedMentionIds,
+                current_mention_ids: currentMentions,
+                visibility_revoked: visibilityRevoked,
+                source_type: 'TWEET',
+                source_id: tweetId.toHexString()
+              }
+            },
+            { session }
+          )
+        }
+      })
+    } finally {
+      await session.endSession()
     }
-
-    if (body.mentions !== undefined) {
-      // Parse Mentions from content if content is provided
-      const content = body.content !== undefined ? body.content : tweet.content
-      const parsedUsernames = content?.match(/@(\w+)/g)?.map((m: string) => m.slice(1)) || []
-      
-      let finalMentions = [...body.mentions]
-      if (parsedUsernames.length > 0) {
-        const mentionedUsers = await databaseService.users
-          .find({ username: { $in: parsedUsernames } })
-          .toArray()
-        finalMentions = [...new Set([...finalMentions, ...mentionedUsers.map(u => u._id)])]
-      }
-      updateData.mentions = finalMentions
-    }
-
-    if (body.medias !== undefined) {
-      updateData.medias = await this.validateTweetMedia(user_id, body.medias)
-    }
-
-    await databaseService.tweets.updateOne(
-      { _id: new ObjectId(tweet_id) },
-      { $set: updateData }
-    )
 
     await redisService.del(`tweet:${tweet_id}`)
-    
     return this.getTweet(tweet_id, user_id)
   }
 
   async deleteTweet(user_id: string, tweet_id: string) {
-    const tweet = await databaseService.tweets.findOne({ _id: new ObjectId(tweet_id) })
-    if (!tweet) {
-      throw new Error('Tweet not found') // Ideal to throw custom Error with HTTP status here, assuming generic error handler catches it
+    const actorId = new ObjectId(user_id)
+    const tweetId = new ObjectId(tweet_id)
+    const occurredAt = new Date()
+    const session = databaseService.startSession()
+    let parentIdString: string | null = null
+    try {
+      await session.withTransaction(async () => {
+        if (envConfig.features.notificationOutboxEnabled) {
+          await this.lifecycleGuard.markTargetHidden(NotificationTargetType.Tweet, tweetId, occurredAt, session)
+        }
+        const tweet = await databaseService.tweets.findOne({ _id: tweetId }, { session })
+        if (!tweet) throw new Error('Tweet not found')
+        if (!tweet.user_id.equals(actorId)) throw new Error('You do not have permission to delete this tweet')
+        parentIdString = tweet.parent_id?.toHexString() ?? null
+
+        const deleted = await databaseService.tweets.deleteOne({ _id: tweetId, user_id: actorId }, { session })
+        if (deleted.deletedCount !== 1) throw new Error('Tweet state changed before it could be deleted')
+        await Promise.all([
+          databaseService.likes.deleteMany({ tweet_id: tweetId }, { session }),
+          databaseService.bookmarks.deleteMany({ tweet_id: tweetId }, { session }),
+          databaseService.newsFeeds.deleteMany({ tweet_id: tweetId }, { session })
+        ])
+
+        if (tweet.parent_id) {
+          const incField =
+            tweet.type === TweetType.Retweet
+              ? 'retweet_count'
+              : tweet.type === TweetType.Comment
+                ? 'reply_count'
+                : 'quote_count'
+          await databaseService.tweets.updateOne({ _id: tweet.parent_id }, { $inc: { [incField]: -1 } }, { session })
+        }
+
+        if (envConfig.features.notificationOutboxEnabled) {
+          await this.outboxPublisher.publish(
+            {
+              event_id: randomUUID(),
+              type: DomainEventType.TweetDeleted,
+              aggregate_type: DomainAggregateType.Tweet,
+              aggregate_id: tweetId,
+              actor_id: actorId,
+              occurred_at: occurredAt,
+              payload: {
+                tweet_id: tweetId,
+                tweet_type: tweet.type,
+                parent_id: tweet.parent_id,
+                source_type: 'TWEET',
+                source_id: tweetId.toHexString()
+              }
+            },
+            { session }
+          )
+        }
+      })
+    } finally {
+      await session.endSession()
     }
 
-    if (tweet.user_id.toString() !== user_id) {
-      throw new Error('You do not have permission to delete this tweet')
-    }
-
-    // Xóa Tweet
-    await databaseService.tweets.deleteOne({ _id: new ObjectId(tweet_id) })
-
-    // Xóa các dữ liệu liên quan (Likes, Bookmarks, NewsFeeds)
-    await Promise.all([
-      databaseService.likes.deleteMany({ tweet_id: new ObjectId(tweet_id) }),
-      databaseService.bookmarks.deleteMany({ tweet_id: new ObjectId(tweet_id) }),
-      databaseService.newsFeeds.deleteMany({ tweet_id: new ObjectId(tweet_id) }),
-      redisService.del(`tweet:${tweet_id}`)
-    ])
-
-    // Giảm đếm của tweet cha nếu có
-    if (tweet.parent_id) {
-      const incField =
-        tweet.type === TweetType.Retweet ? 'retweet_count' : tweet.type === TweetType.Comment ? 'reply_count' : 'quote_count'
-      
-      await databaseService.tweets.updateOne({ _id: tweet.parent_id }, { $inc: { [incField]: -1 } })
-      await redisService.del(`tweet:${tweet.parent_id}`)
-    }
-
+    await redisService.del(`tweet:${tweet_id}`)
+    if (parentIdString) await redisService.del(`tweet:${parentIdString}`)
     return true
+  }
+
+  private isDuplicateKeyError(error: unknown): error is { code: number } {
+    return typeof error === 'object' && error !== null && 'code' in error && error.code === 11000
   }
 }
 

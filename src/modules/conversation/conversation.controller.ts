@@ -17,7 +17,10 @@ import {
   ConversationLookupQueryDto,
   GroupConversationLookupResponseDto,
   ConversationHistoryClearResponseDto,
-  type TransferAdminAndLeaveBodyDto
+  type TransferAdminAndLeaveBodyDto,
+  type MarkConversationReadBodyDto,
+  type ForwardMessageBodyDto,
+  type ConversationUnreadSummaryData
 } from './dto'
 import { SearchQueryDto, SearchResponseDto } from '../search/dto'
 import type { TokenPayload } from '~/types/token-payload.type'
@@ -27,6 +30,19 @@ export const getConversationsController: GetHandler<GetConversationsResponseDto>
   const result = await conversationService.getConversations(user_id)
 
   const response = new GetConversationsResponseDto(HTTP_STATUS.OK, 'Get conversations successfully', result)
+  res.status(response.statusCode).json(response)
+}
+
+export const getConversationUnreadSummaryController: GetHandler<
+  SuccessResponseDto<ConversationUnreadSummaryData>
+> = async (req, res) => {
+  const { user_id } = req.decoded_authorization as TokenPayload
+  const result = await conversationService.getUnreadSummary(user_id)
+  const response = new SuccessResponseDto(
+    HTTP_STATUS.OK,
+    'Get conversation unread summary successfully',
+    result
+  )
   res.status(response.statusCode).json(response)
 }
 
@@ -134,11 +150,15 @@ export const getMessageContextController: GetHandler<
   res.status(response.statusCode).json(response)
 }
 
-export const markReadController: PostHandler<any, MessageActionResponseDto, { conversation_id: string }> = async (req, res) => {
+export const markReadController: PostHandler<
+  MarkConversationReadBodyDto,
+  MessageActionResponseDto,
+  { conversation_id: string }
+> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { conversation_id } = req.params
 
-  const result = await conversationService.markAsRead(user_id, conversation_id)
+  const result = await conversationService.markAsRead(user_id, conversation_id, req.body?.message_id)
   
   const response = new MessageActionResponseDto(HTTP_STATUS.OK, 'Marked as read successfully', result)
   res.status(response.statusCode).json(response)
@@ -309,6 +329,27 @@ export const transferAdminAndLeaveController: PostHandler<
   res.status(response.statusCode).json(response)
 }
 
+export const grantGroupAdminController: PostHandler<
+  undefined,
+  SuccessResponseDto,
+  { conversation_id: string; user_id: string }
+> = async (req, res) => {
+  const { user_id: adminId } = req.decoded_authorization as TokenPayload
+  const { conversation_id, user_id } = req.params
+  const result = await conversationService.grantGroupAdmin(adminId, conversation_id, user_id)
+  res.json(new SuccessResponseDto(HTTP_STATUS.OK, 'Group admin granted successfully', result))
+}
+
+export const revokeGroupAdminController: DeleteHandler<
+  SuccessResponseDto,
+  { conversation_id: string; user_id: string }
+> = async (req, res) => {
+  const { user_id: adminId } = req.decoded_authorization as TokenPayload
+  const { conversation_id, user_id } = req.params
+  const result = await conversationService.revokeGroupAdmin(adminId, conversation_id, user_id)
+  res.json(new SuccessResponseDto(HTTP_STATUS.OK, 'Group admin revoked successfully', result))
+}
+
 export const editMessageController: PatchHandler<{ content: string }, MessageActionResponseDto, { message_id: string }> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { message_id } = req.params
@@ -340,12 +381,21 @@ export const getMessageReactionsController: GetHandler<SuccessResponseDto, { mes
   res.status(response.statusCode).json(response)
 }
 
-export const forwardMessageController: PostHandler<{ conversation_ids: string[] }, SuccessResponseDto, { message_id: string }> = async (req, res) => {
+export const forwardMessageController: PostHandler<
+  ForwardMessageBodyDto,
+  SuccessResponseDto,
+  { message_id: string }
+> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { message_id } = req.params
-  const { conversation_ids } = req.body
+  const { conversation_ids, client_operation_id } = req.body
 
-  const result = await conversationService.forwardMessage(user_id, message_id, conversation_ids)
+  const result = await conversationService.forwardMessage(
+    user_id,
+    message_id,
+    conversation_ids,
+    client_operation_id
+  )
   
   const response = new SuccessResponseDto(HTTP_STATUS.OK, 'Forwarded message successfully', result)
   res.status(response.statusCode).json(response)

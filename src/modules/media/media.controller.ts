@@ -3,7 +3,7 @@ import { handleUploadImage, handleUploadVideo, handleUploadAudio } from '~/utils
 import { uploadImageToCloudinary, uploadVideoToCloudinary, uploadAudioToCloudinary, deleteFromCloudinary } from '~/utils/cloudinary'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import { MESSAGES } from '~/constants/messages'
-import DatabaseService from '~/config/database.service'
+import { databaseService } from '~/config/database.service'
 import { MediaMetadata } from '~/schemas'
 import { MediaType, MediaStatus } from '~/constants/enums'
 import { ObjectId } from 'mongodb'
@@ -11,8 +11,6 @@ import { PostHandler, GetHandler, DeleteHandler } from '~/types/controller-handl
 import { UploadMediaResponseDto } from './dto'
 import { SuccessResponseDto } from '~/common/success-response.dto'
 import { videoQueue } from '~/queues/video.queue'
-
-const databaseService = new DatabaseService()
 
 export const uploadImageController: PostHandler<any, UploadMediaResponseDto> = async (req, res) => {
   const files = await handleUploadImage(req)

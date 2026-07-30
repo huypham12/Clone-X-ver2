@@ -3,14 +3,12 @@ import { verifyToken } from '~/utils/jwt'
 import { HttpError } from '~/common/http-error'
 import { MESSAGES } from '~/constants/messages'
 import { TokenExpiredError } from 'jsonwebtoken'
-import DatabaseService from '~/config/database.service'
+import { databaseService } from '~/config/database.service'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import { envConfig } from '~/config/getEnvConfig'
 import { TokenPayload } from '~/types/token-payload.type'
 import { ObjectId } from 'mongodb'
 import { UserVerifyStatus } from '~/constants/enums'
-
-const databaseService = new DatabaseService()
 
 // Middleware xác thực access token
 export const authenticateAccessToken = async (req: Request, res: Response, next: NextFunction) => {

@@ -2,10 +2,10 @@ import { Request, Response, NextFunction } from 'express'
 import { z, ZodError, ZodTypeAny } from 'zod'
 import { HttpError } from '~/common/http-error'
 import { MESSAGES } from '~/constants/messages'
-import DatabaseService from '~/config/database.service'
+import { databaseService } from '~/config/database.service'
 import { HTTP_STATUS } from '~/constants/httpStatus'
+import { ObjectId } from 'mongodb'
 
-const databaseService = new DatabaseService()
 export const REGEX_USERNAME = /^(?![0-9]+$)[A-Za-z0-9_]{4,15}$/
 
 // Middleware để validate dữ liệu bằng Zod
@@ -66,7 +66,11 @@ const updateMeSchema = z.object({
     .max(100, { message: MESSAGES.USERNAME_LENGTH_MUST_BE_FROM_1_TO_100 })
     .optional(),
 
-  avatar: z.string({ message: MESSAGES.AVATAR_MUST_BE_URL }).url({ message: MESSAGES.AVATAR_MUST_BE_URL }).or(z.literal('')).optional(),
+  avatar: z
+    .string({ message: MESSAGES.AVATAR_MUST_BE_URL })
+    .url({ message: MESSAGES.AVATAR_MUST_BE_URL })
+    .or(z.literal(''))
+    .optional(),
 
   cover_photo: z
     .string({ message: MESSAGES.COVER_PHOTO_MUST_BE_URL })
@@ -82,3 +86,24 @@ const updateMeSchema = z.object({
 })
 
 export const updateMeValidator = validate(z.object({ body: updateMeSchema }))
+
+export const followedUserIdValidator = validate(
+  z.object({
+    params: z.object({
+      followed_user_id: z.string().refine((value) => ObjectId.isValid(value), {
+        message: 'Invalid followed_user_id'
+      })
+    })
+  })
+)
+
+export const followNotificationPreferenceValidator = validate(
+  z.object({
+    params: z.object({
+      followed_user_id: z.string().refine((value) => ObjectId.isValid(value), {
+        message: 'Invalid followed_user_id'
+      })
+    }),
+    body: z.object({ posts: z.boolean() }).strict()
+  })
+)

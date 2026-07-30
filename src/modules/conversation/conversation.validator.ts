@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { validate } from '~/modules/user/user.validator'
 import { ObjectId } from 'mongodb'
 import { isMessageReactionEmoji } from './dto'
+import { envConfig } from '~/config/getEnvConfig'
 
 const objectIdString = z.string().refine((value) => ObjectId.isValid(value), { message: 'Invalid ID format' })
 const conversationType = z.enum(['direct', 'group'])
@@ -20,7 +21,9 @@ export const createGroupValidator = validate(
   z.object({
     body: z.object({
       name: z.string().min(1, 'Group name is required').max(100),
-      members: z.array(z.string().refine((val) => ObjectId.isValid(val), { message: 'Invalid member ID' })),
+      members: z
+        .array(z.string().refine((val) => ObjectId.isValid(val), { message: 'Invalid member ID' }))
+        .max(envConfig.conversation.maxGroupMembers, 'Too many group members'),
       avatar_url: z.string().url().optional()
     })
   })
@@ -136,6 +139,7 @@ export const addMembersValidator = validate(
       members: z
         .array(z.string().refine((val) => ObjectId.isValid(val), { message: 'Invalid member ID' }))
         .min(1, 'At least one member is required')
+        .max(envConfig.conversation.maxGroupMembers, 'Too many group members')
         .refine((members) => new Set(members).size === members.length, {
           message: 'Member IDs must be unique'
         })
@@ -192,7 +196,22 @@ export const forwardMessageValidator = validate(
     body: z.object({
       conversation_ids: z
         .array(z.string().refine((val) => ObjectId.isValid(val), { message: 'Invalid conversation ID' }))
-        .min(1, 'At least one conversation is required')
+        .min(1, 'At least one conversation is required'),
+      client_operation_id: z.string().trim().min(1).max(128).optional()
     })
+  })
+)
+
+export const markConversationReadValidator = validate(
+  z.object({
+    params: z.object({
+      conversation_id: objectIdString
+    }),
+    body: z
+      .object({
+        message_id: objectIdString.optional()
+      })
+      .strict()
+      .default({})
   })
 )

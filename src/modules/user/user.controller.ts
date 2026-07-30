@@ -6,6 +6,10 @@ import { BlockUserResponseDto, UnblockUserResponseDto } from './dto/blocked_user
 import { MESSAGES } from '~/constants/messages'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import { SuccessResponseDto } from '~/common/success-response.dto'
+import type {
+  FollowNotificationPreferenceBodyDto,
+  FollowNotificationPreferenceData
+} from './dto/user.dto'
 
 export class UserController {
   constructor(private readonly userService: UserService) {}
@@ -61,6 +65,21 @@ export class UserController {
     const { followed_user_id } = req.params
     await this.userService.unfollowUser(user_id, followed_user_id)
     res.json(new SuccessResponseDto(HTTP_STATUS.OK, MESSAGES.UNFOLLOW_USER_SUCCESS, null))
+  }
+
+  updateFollowNotificationPreferenceController: PatchHandler<
+    FollowNotificationPreferenceBodyDto,
+    SuccessResponseDto<FollowNotificationPreferenceData>,
+    { followed_user_id: string }
+  > = async (req, res) => {
+    const { user_id } = req.decoded_authorization as TokenPayload
+    const { followed_user_id } = req.params
+    const result = await this.userService.updateFollowNotificationPreference(
+      user_id,
+      followed_user_id,
+      req.body.posts
+    )
+    res.json(new SuccessResponseDto(HTTP_STATUS.OK, 'Follow notification preference updated successfully', result))
   }
 
   getFollowersController: GetHandler<any> = async (req, res) => {

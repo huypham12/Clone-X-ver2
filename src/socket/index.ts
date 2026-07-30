@@ -1,13 +1,14 @@
 import { Server } from 'socket.io'
 import { Server as HttpServer } from 'http'
 import { verifyToken } from '~/utils/jwt'
-import { envConfig } from '~/config/getEnvConfig'
+import { envConfig, isCorsOriginAllowed } from '~/config/getEnvConfig'
 import { TokenPayload } from '~/types/token-payload.type'
 import { chatHandler } from './chat.handler'
 import redisService from '~/config/redis.service'
 import { createAdapter } from '@socket.io/redis-adapter'
 import { UserService } from '~/modules/user/user.service'
-import DatabaseService from '~/config/database.service'
+import DatabaseService, { databaseService as sharedDatabaseService } from '~/config/database.service'
+import { setIO } from './socket-server'
 
 // Mở rộng kiểu Socket để có thể gắn user_id vào
 declare module 'socket.io' {
@@ -18,13 +19,17 @@ declare module 'socket.io' {
 
 let io: Server
 
-export const initSocket = (httpServer: HttpServer) => {
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((item) => typeof item === 'string')
+
+export const initSocket = (httpServer: HttpServer, databaseService: DatabaseService = sharedDatabaseService) => {
   io = new Server(httpServer, {
     cors: {
-      origin: true,
+      origin: (origin, callback) => callback(null, isCorsOriginAllowed(origin)),
       credentials: true
     }
   })
+  setIO(io)
 
   // Tích hợp Redis Adapter cho Horizontal Scaling
   if (redisService.pubClient && redisService.subClient) {
@@ -53,7 +58,6 @@ export const initSocket = (httpServer: HttpServer) => {
     }
   })
 
-  const databaseService = new DatabaseService()
   const userService = new UserService(databaseService)
 
   io.on('connection', async (socket) => {
@@ -67,7 +71,7 @@ export const initSocket = (httpServer: HttpServer) => {
     // Lấy danh sách bạn bè (từ Redis Cache hoặc Database)
     let friendIds: string[] = []
     const cachedFriends = await redisService.get(`friends:${userId}`)
-    if (cachedFriends) {
+    if (isStringArray(cachedFriends)) {
       friendIds = cachedFriends
     } else {
       const friends = await userService.getFriends(userId)
@@ -132,7 +136,7 @@ export const initSocket = (httpServer: HttpServer) => {
           // Phát sự kiện offline cho Bạn Bè
           let fIds: string[] = []
           const cFriends = await redisService.get(`friends:${userId}`)
-          if (cFriends) {
+          if (isStringArray(cFriends)) {
             fIds = cFriends
           } else {
             const friends = await userService.getFriends(userId)
@@ -151,9 +155,4 @@ export const initSocket = (httpServer: HttpServer) => {
   return io
 }
 
-export const getIO = () => {
-  if (!io) {
-    throw new Error('Socket.io is not initialized')
-  }
-  return io
-}
+export { getIO } from './socket-server'

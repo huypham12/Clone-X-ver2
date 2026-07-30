@@ -33,10 +33,32 @@ tags:
     description: Conversation operations
   - name: message
     description: Message operations
+  - name: notification
+    description: Notification center operations
 
 x-socket-events:
+  "@notification:new":
+    description: Emitted to the recipient personal room after persistence commits. The raw payload keeps all legacy fields at top level and may include additive schema-v2 fields. Clients upsert by _id. New Like/Repost/Message Reaction aggregate windows and directed Message Reply/Group Mention items also use this event.
+    payload:
+      $ref: "#/components/schemas/NotificationSocketPayload"
+  "@notification:unread-count":
+    description: Emitted after a committed notification mutation changes unread state. Clients ignore payloads with a version older than their cached version.
+    payload:
+      $ref: "#/components/schemas/NotificationUnreadStatePayload"
+  "@notification:read-state":
+    description: Emitted to every tab/device in the recipient personal room after mark-one or read-all commits.
+    payload:
+      $ref: "#/components/schemas/NotificationReadStatePayload"
+  "@notification:updated":
+    description: Emitted with the authoritative raw aggregate document when an actor is added, refreshed or removed while actor_count remains positive, including block cleanup.
+    payload:
+      $ref: "#/components/schemas/NotificationSocketPayload"
+  "@notification:removed":
+    description: Emitted after commit when an aggregate reaches actor_count zero or an individual item is invalidated by target delete, message revoke, delete-for-me or block cleanup. Clients remove the item by notification_id and apply versioned unread state when present.
+    payload:
+      $ref: "#/components/schemas/NotificationRemovedPayload"
   "@conversation:send":
-    description: Direct messages are checked for blocks in both directions. Optional reply_to_message_id must reference a sent message in the same conversation before any insert.
+    description: Direct messages are checked for blocks in both directions. Message, resolved group mentions, preview, outbox and unread state commit atomically. Optional client_message_id makes retries idempotent; optional mention_user_ids is additive.
     payload:
       $ref: "#/components/schemas/ConversationSendPayload"
     acknowledgement:
@@ -48,12 +70,22 @@ x-socket-events:
     description: Emitted to conversation members' personal rooms. The message includes public sender_info, medias_info and a compact reply_to preview.
     payload:
       $ref: "#/components/schemas/ConversationMessage"
+  "@conversation:read":
+    description: Client read acknowledgement. Omitting message_id marks through the latest visible message; a target message only advances the read position through that message.
+    payload:
+      $ref: "#/components/schemas/ConversationReadRequest"
+    acknowledgement:
+      $ref: "#/components/schemas/ConversationReadAcknowledgement"
+  "@conversation:read-state":
+    description: Authoritative inbox/conversation state emitted to the user's personal room after an unread increment or read acknowledgement commits. Clients order state by version.
+    payload:
+      $ref: "#/components/schemas/ConversationReadStatePayload"
   "@message:revoked":
-    description: Emitted to conversation members after the sender atomically replaces a sent message with a payload-free tombstone, refreshes the last-message preview when needed and invalidates its message cache.
+    description: Emitted to conversation members after the sender atomically replaces a sent message with a payload-free tombstone, refreshes the last-message preview and records notification lifecycle cleanup in the same transaction.
     payload:
       $ref: "#/components/schemas/MessageRevokedEvent"
   "@message:deleted-for-me":
-    description: Emitted only to the actor's personal room after delete-for-me succeeds and the shared message cache is invalidated.
+    description: Emitted only to the actor's personal room after delete-for-me and that actor's notification lifecycle record commit.
     payload:
       $ref: "#/components/schemas/MessageRevokedEvent"
   "@message:reaction-updated":
@@ -61,7 +93,7 @@ x-socket-events:
     payload:
       $ref: "#/components/schemas/MessageReactionUpdatedEvent"
   "@user:block-status-changed":
-    description: Emitted to both users after a block or unblock succeeds. Clients refetch the authoritative two-way profile state.
+    description: Emitted to both users after a block or unblock transaction succeeds. Block queues two-way notification cleanup; unblock never restores invalidated items. Clients refetch authoritative profile and notification state.
     payload:
       $ref: "#/components/schemas/UserBlockStatusChanged"
   "@conversation:group-updated":
@@ -489,6 +521,363 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/user/{followed_user_id}/follow:
+    post:
+      tags: [user]
+      summary: Follow a user
+      description: Atomically creates the follower relation and updates both counters. With the follow-outbox migration enabled, notification delivery is asynchronous and rechecks the relation and two-way blocks.
+      operationId: followUser
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/FollowedUserId"
+      responses:
+        "200":
+          description: Follow relation created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NullDataSuccessResponse"
+        "400":
+          description: Invalid user ID or self-follow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Follow is forbidden by a block in either direction
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Target user does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Follow relation already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [user]
+      summary: Unfollow a user
+      description: Atomically removes the follower relation and decrements both counters. Historical notifications are retained; a pending follow event is suppressed by worker-time relation validation.
+      operationId: unfollowUser
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/FollowedUserId"
+      responses:
+        "200":
+          description: Follow relation removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NullDataSuccessResponse"
+        "400":
+          description: Invalid user ID or follow relation does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Target user does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/user/{followed_user_id}/follow-notification-preferences:
+    patch:
+      tags: [user]
+      summary: Update followed-account post notification preference
+      description: Updates only the authenticated user's existing follow relation. New relations default to posts=false and unfollow removes the preference with the relation.
+      operationId: updateFollowNotificationPreference
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/FollowedUserId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [posts]
+              properties:
+                posts:
+                  type: boolean
+      responses:
+        "200":
+          description: Preference updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [statusCode, message, data]
+                properties:
+                  statusCode:
+                    type: integer
+                    example: 200
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    required: [followed_user_id, posts]
+                    properties:
+                      followed_user_id:
+                        type: string
+                        pattern: "^[a-fA-F0-9]{24}$"
+                      posts:
+                        type: boolean
+        "400":
+          description: Invalid user ID or body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: FOLLOW_RELATION_NOT_FOUND
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/tweets:
+    post:
+      tags: [tweet]
+      summary: Create a tweet
+      description: Explicit mention IDs and usernames in content are normalized and deduplicated. With tweet-outbox migration enabled, tweet state, parent counter, feeds and the notification event commit atomically. An original public tweet can asynchronously fan out followed_user_tweet items only to opted-in follow relations; the request never waits for follower fan-out.
+      operationId: createTweet
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTweetRequest"
+      responses:
+        "201":
+          description: Tweet created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TweetMutationResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Referenced media is not ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Referenced media processing failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/tweets/{tweet_id}:
+    patch:
+      tags: [tweet]
+      summary: Update a tweet
+      description: Keeps the legacy response contract. Mention additions create idempotent notification items and removals invalidate the corresponding Mention item when tweet-outbox migration is enabled.
+      operationId: updateTweet
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: tweet_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTweetRequest"
+      responses:
+        "200":
+          description: Tweet updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TweetMutationResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/tweets/{tweet_id}/like:
+    post:
+      tags: [tweet]
+      summary: Like a tweet
+      description: Idempotently creates the Like relation. Relation, tweet counter and optional aggregate event commit in one transaction; notifications are asynchronous when social aggregation is enabled.
+      operationId: likeTweet
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TweetId"
+      responses:
+        "200":
+          description: Existing or newly created Like relation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TweetInteractionMutationResponse"
+        "401":
+          description: Missing or invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Tweet not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [tweet]
+      summary: Unlike a tweet
+      description: Removes the caller's Like relation once. A repeated request returns success with null data and does not decrement counters or aggregate membership again.
+      operationId: unlikeTweet
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TweetId"
+      responses:
+        "200":
+          description: Removed relation or null when it did not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TweetInteractionMutationResponse"
+
+  /api/tweets/{tweet_id}/retweet:
+    delete:
+      tags: [tweet]
+      summary: Undo a retweet
+      description: Atomically removes the caller's Retweet relation, decrements the target counter, removes its news-feed rows and publishes one undo event. Repeated calls are no-ops.
+      operationId: undoRetweet
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TweetId"
+      responses:
+        "200":
+          description: Removed Retweet document or null when it did not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TweetInteractionMutationResponse"
+
+  /api/conversations:
+    get:
+      tags: [conversation]
+      summary: List conversations with per-conversation unread state
+      operationId: getConversations
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Existing conversation list with additive unread fields
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/ConversationSummary"
+
+  /api/conversations/unread-summary:
+    get:
+      tags: [conversation]
+      summary: Get authoritative inbox unread summary
+      operationId: getConversationUnreadSummary
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Inbox badge and total unread messages
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationUnreadSummaryResponse"
+
+  /api/conversations/group:
+    post:
+      tags: [conversation]
+      summary: Create a group within the configured member limit
+      description: The creator counts toward MAX_GROUP_MEMBERS, which defaults to 500. Exceeding it returns GROUP_MEMBER_LIMIT_EXCEEDED.
+      operationId: createGroupConversation
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, members]
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                members:
+                  type: array
+                  maxItems: 500
+                  items:
+                    type: string
+                    pattern: "^[a-fA-F0-9]{24}$"
+                avatar_url:
+                  type: string
+                  format: uri
+      responses:
+        "201":
+          description: Group created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Invalid request or group member limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/conversations/direct/{receiver_id}:
     post:
       tags:
@@ -687,7 +1076,7 @@ paths:
       tags:
         - conversation
       summary: Delete current conversation history for the authenticated user
-      description: Captures a stable latest-message cutoff, hides and unpins/unmutes the conversation for the caller, and leaves all physical messages and every other member's history unchanged. The first later message restores this deleted chat as a new visible conversation; a plain inbox hide remains hidden until explicitly reopened.
+      description: Atomically captures a stable latest-message cutoff, clears the caller's conversation unread count, hides and unpins/unmutes the conversation, and leaves all physical messages and every other member's history unchanged. The first later message restores this deleted chat as a new visible conversation; a plain inbox hide remains hidden until explicitly reopened.
       operationId: clearConversationHistoryForMe
       security:
         - bearerAuth: []
@@ -774,6 +1163,7 @@ paths:
                 members:
                   type: array
                   minItems: 1
+                  maxItems: 500
                   uniqueItems: true
                   items:
                     type: string
@@ -803,7 +1193,7 @@ paths:
       tags:
         - conversation
       summary: Remove a group member
-      description: A current admin can remove another member, but cannot remove themselves through this endpoint.
+      description: A current admin can remove another member, but cannot remove themselves through this endpoint. Membership removal, conversation read-state deletion and inbox summary adjustment commit atomically.
       operationId: removeGroupMember
       security:
         - bearerAuth: []
@@ -852,7 +1242,7 @@ paths:
       tags:
         - conversation
       summary: Leave a group
-      description: A member can leave. If the caller is the sole admin and other members remain, use transfer-admin-and-leave instead.
+      description: A member can leave; membership removal, conversation read-state deletion and inbox summary adjustment commit atomically. If the caller is the sole admin and other members remain, use transfer-admin-and-leave instead.
       operationId: leaveGroup
       security:
         - bearerAuth: []
@@ -883,7 +1273,7 @@ paths:
       tags:
         - conversation
       summary: Transfer group admin and leave
-      description: Atomically promotes one current member to the group's only admin and removes the current sole admin. A group has at most one admin.
+      description: Atomically promotes one current member to the group's only admin, removes the current sole admin and clears that user's group unread state. A group has at most one admin.
       operationId: transferAdminAndLeave
       security:
         - bearerAuth: []
@@ -923,6 +1313,112 @@ paths:
                 $ref: "#/components/schemas/Error"
         "409":
           description: GROUP_ADMIN_TRANSFER_CONFLICT because admin or membership state changed concurrently
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/admins/{user_id}:
+    post:
+      tags: [conversation]
+      summary: Grant group admin role
+      description: A current admin atomically promotes a current member. When group management notifications are enabled, the same transaction creates one system message and one direct admin_granted event for the affected user.
+      operationId: grantGroupAdmin
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+      responses:
+        "200":
+          description: Admin role granted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "403":
+          description: Caller is not a current group admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: GROUP_ADMIN_GRANT_CONFLICT
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [conversation]
+      summary: Revoke group admin role
+      description: A current admin atomically demotes an admin while preserving at least one admin whenever members remain. The affected user receives admin_revoked when group management notifications are enabled.
+      operationId: revokeGroupAdmin
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+      responses:
+        "200":
+          description: Admin role revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "403":
+          description: Caller is not a current group admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: GROUP_ADMIN_REVOKE_CONFLICT or sole-admin guard
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/read:
+    post:
+      tags: [conversation]
+      summary: Advance the authenticated member's conversation read position
+      description: An empty body marks through the latest visible message. A supplied message_id must be visible in this conversation; messages committed after it remain unread. Message.read_by is not updated.
+      operationId: markConversationRead
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConversationReadRequest"
+      responses:
+        "200":
+          description: Read position and inbox summary after the committed transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationReadResponse"
+        "400":
+          description: Invalid or invisible target message
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller is not a current conversation member
           content:
             application/json:
               schema:
@@ -1084,6 +1580,55 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/conversations/messages/{message_id}/forward:
+    post:
+      tags: [message]
+      summary: Forward one message to deduplicated target conversations
+      description: Source and all targets are validated before the atomic transaction. Target ObjectIds are canonicalized before deduplication. Optional client_operation_id is expanded per canonical target and prevents retry from creating, broadcasting or counting the forward twice.
+      operationId: forwardConversationMessage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [conversation_ids]
+              properties:
+                conversation_ids:
+                  type: array
+                  minItems: 1
+                  uniqueItems: true
+                  items:
+                    type: string
+                    pattern: "^[a-fA-F0-9]{24}$"
+                client_operation_id:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+      responses:
+        "200":
+          description: Legacy success response; repeated operation IDs return the same committed operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Source message unavailable or invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Source/target access denied or direct messaging blocked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/conversations/messages/{message_id}:
     delete:
       tags:
@@ -1120,6 +1665,7 @@ paths:
       tags:
         - message
       summary: Revoke a sent message for everyone
+      description: The tombstone, sidebar preview and notification lifecycle outbox event commit atomically. Existing response and conversation socket payloads are unchanged.
       operationId: revokeConversationMessage
       security:
         - bearerAuth: []
@@ -1236,8 +1782,154 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/notifications:
+    get:
+      tags:
+        - notification
+      summary: List notifications
+      description: Returns non-invalidated notifications ordered by immutable tuple created_at descending then _id descending. next_cursor is opaque; a legacy 24-hex ObjectId cursor is still accepted when it identifies a notification owned by the caller. Pagination fetches one extra record so has_next_page is exact. During asynchronous lifecycle cleanup, an actor or target that is no longer visible is redacted at read time; its raw sender_id/target_id becomes null, actor_ids_preview is filtered, context is empty, and deduplication/aggregation keys are omitted.
+      operationId: getNotifications
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Use next_cursor verbatim. Opaque v2 cursors and legacy 24-hex ObjectId cursors are accepted.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+      responses:
+        "200":
+          description: Notification page returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationPageResponse"
+        "400":
+          description: Invalid cursor or limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/notifications/unread-count:
+    get:
+      tags:
+        - notification
+      summary: Get notification unread state
+      description: Returns the authoritative unread item count and monotonic version after notification-state backfill. Before rollout is enabled, the backend falls back to counting notification documents and returns version 0.
+      operationId: getNotificationUnreadCount
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Notification unread state returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationUnreadCountResponse"
+        "401":
+          description: Missing or invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/notifications/read-all:
+    post:
+      tags:
+        - notification
+      summary: Mark all notifications as read
+      description: Transitions only unread, non-invalidated notifications at or before the request cutoff. Notifications committed after the cutoff remain unread. The response includes the authoritative unread count and version.
+      operationId: markAllNotificationsAsRead
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Idempotent update result; updatedCount is zero when nothing was unread
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationReadAllResponse"
+        "401":
+          description: Missing or invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/notifications/{id}/read:
+    post:
+      tags:
+        - notification
+      summary: Mark one notification as read
+      description: Idempotent for a notification owned by the caller. Only the first unread-to-read transition decrements unread state and closes an active aggregation window. Missing and foreign IDs both return 404.
+      operationId: markNotificationAsRead
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+      responses:
+        "200":
+          description: Notification belongs to the caller and is now read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationReadOneResponse"
+        "400":
+          description: Invalid notification ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Notification does not exist or belongs to another user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 components:
   parameters:
+    TweetId:
+      name: tweet_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-fA-F0-9]{24}$"
+    FollowedUserId:
+      name: followed_user_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-fA-F0-9]{24}$"
     ConversationId:
       name: conversation_id
       in: path
@@ -1269,6 +1961,476 @@ components:
         type: string
         pattern: "^[a-fA-F0-9]{24}$"
   schemas:
+    NullDataSuccessResponse:
+      type: object
+      required: [statusCode, message, data]
+      properties:
+        statusCode:
+          type: integer
+          example: 200
+        message:
+          type: string
+        data:
+          nullable: true
+          example: null
+
+    CreateTweetRequest:
+      type: object
+      required: [type, audience, content, parent_id]
+      properties:
+        type:
+          type: integer
+          enum: [0, 1, 2, 3]
+          description: 0 Tweet, 1 Retweet, 2 Comment/Reply, 3 QuoteTweet
+        audience:
+          type: integer
+          enum: [0, 1]
+          description: 0 Everyone, 1 TwitterCircle
+        content:
+          type: string
+          maxLength: 1000
+        parent_id:
+          type: string
+          nullable: true
+          pattern: "^[a-fA-F0-9]{24}$"
+        hashtags:
+          type: array
+          default: []
+          items:
+            type: string
+        mentions:
+          type: array
+          default: []
+          uniqueItems: true
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+        medias:
+          type: array
+          default: []
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+
+    UpdateTweetRequest:
+      type: object
+      properties:
+        audience:
+          type: integer
+          enum: [0, 1]
+        content:
+          type: string
+          maxLength: 1000
+        hashtags:
+          type: array
+          items:
+            type: string
+        mentions:
+          type: array
+          uniqueItems: true
+          description: Optional PATCH field. When omitted, stored mentions are preserved even if content changes. Send the full desired explicit mention list to add or remove mentions; backend also resolves @username values from the effective content.
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+        medias:
+          type: array
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+
+    TweetDocument:
+      type: object
+      required: [_id, user_id, type, audience, content, parent_id, hashtags, mentions, medias]
+      properties:
+        _id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        user_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        type:
+          type: integer
+          enum: [0, 1, 2, 3]
+        audience:
+          type: integer
+          enum: [0, 1]
+        content:
+          type: string
+        parent_id:
+          type: string
+          nullable: true
+          pattern: "^[a-fA-F0-9]{24}$"
+        hashtags:
+          type: array
+          items:
+            type: string
+        mentions:
+          type: array
+          items:
+            type: string
+        medias:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    TweetMutationResponse:
+      type: object
+      required: [statusCode, message, data]
+      properties:
+        statusCode:
+          type: integer
+        message:
+          type: string
+        data:
+          $ref: "#/components/schemas/TweetDocument"
+
+    TweetInteractionMutationResponse:
+      type: object
+      required: [statusCode, message, data]
+      properties:
+        statusCode:
+          type: integer
+          example: 200
+        message:
+          type: string
+        data:
+          nullable: true
+          description: The current Like/Retweet relation document, or null when an undo request is already reconciled.
+
+    LegacyNotificationFields:
+      type: object
+      required:
+        - _id
+        - recipient_id
+        - sender_id
+        - type
+        - target_id
+        - is_read
+        - created_at
+      properties:
+        _id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        recipient_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        sender_id:
+          type: string
+          nullable: true
+          pattern: "^[a-fA-F0-9]{24}$"
+        type:
+          type: string
+          enum: [like, reply, retweet, quote, follow, mention, system, message, message_reply, message_mention, message_reaction, group_add, group_join, group_kick, admin_granted, admin_revoked, followed_user_tweet]
+        target_id:
+          type: string
+          nullable: true
+          pattern: "^[a-fA-F0-9]{24}$"
+        is_read:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    NotificationActorInfo:
+      type: object
+      required: [_id, name, username]
+      properties:
+        _id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        name:
+          type: string
+        username:
+          type: string
+        avatar:
+          type: string
+
+    NotificationTargetInfo:
+      type: object
+      required: [_id, target_type]
+      properties:
+        _id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        target_type:
+          type: string
+          enum: [USER, TWEET, MESSAGE, CONVERSATION]
+        name:
+          type: string
+        username:
+          type: string
+        avatar:
+          type: string
+        owner_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        tweet_type:
+          type: integer
+          enum: [0, 1, 2, 3]
+        content:
+          type: string
+          maxLength: 140
+        conversation_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        sender_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        status:
+          type: string
+          enum: [sent, revoked, deleted]
+        conversation_type:
+          type: string
+          enum: [direct, group]
+        avatar_url:
+          type: string
+
+    NotificationV2Fields:
+      type: object
+      properties:
+        target_type:
+          type: string
+          nullable: true
+          enum: [USER, TWEET, MESSAGE, CONVERSATION]
+        actor_ids_preview:
+          type: array
+          maxItems: 3
+          description: Contains only actor IDs currently visible to the recipient; hidden actors are removed rather than represented as null entries.
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+        actor_count:
+          type: integer
+          minimum: 0
+        context:
+          type: object
+          additionalProperties: true
+        deduplication_key:
+          type: string
+          description: Omitted from REST list items when the actor or target is redacted.
+        aggregation_key:
+          type: string
+          description: Omitted from REST list items when the actor or target is redacted.
+        aggregation_active:
+          type: boolean
+        read_at:
+          type: string
+          format: date-time
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+        invalidated_at:
+          type: string
+          format: date-time
+          nullable: true
+        schema_version:
+          type: integer
+          enum: [2]
+
+    NotificationSocketPayload:
+      allOf:
+        - $ref: "#/components/schemas/LegacyNotificationFields"
+        - $ref: "#/components/schemas/NotificationV2Fields"
+
+    NotificationUnreadStatePayload:
+      type: object
+      required: [unread_count, version, updated_at]
+      properties:
+        unread_count:
+          type: integer
+          minimum: 0
+        version:
+          type: integer
+          minimum: 0
+        updated_at:
+          type: string
+          format: date-time
+
+    NotificationReadStatePayload:
+      type: object
+      required: [action, notification_id, read_at, updated_count, unread_count, version]
+      properties:
+        action:
+          type: string
+          enum: [mark_one, read_all]
+        notification_id:
+          type: string
+          nullable: true
+          pattern: "^[a-fA-F0-9]{24}$"
+        read_at:
+          type: string
+          format: date-time
+        updated_count:
+          type: integer
+          minimum: 0
+        unread_count:
+          type: integer
+          minimum: 0
+        version:
+          type: integer
+          minimum: 0
+
+    NotificationRemovedPayload:
+      type: object
+      required: [notification_id, aggregation_key, updated_at]
+      properties:
+        notification_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        aggregation_key:
+          type: string
+          nullable: true
+        unread_count:
+          type: integer
+          minimum: 0
+        version:
+          type: integer
+          minimum: 0
+        updated_at:
+          type: string
+          format: date-time
+
+    NotificationListItem:
+      allOf:
+        - $ref: "#/components/schemas/LegacyNotificationFields"
+        - $ref: "#/components/schemas/NotificationV2Fields"
+        - type: object
+          required:
+            - target_type
+            - actor_ids_preview
+            - actor_count
+            - context
+            - aggregation_active
+            - read_at
+            - updated_at
+            - invalidated_at
+            - actor_info
+            - actor_infos_preview
+            - target_info
+          properties:
+            actor_info:
+              nullable: true
+              allOf:
+                - $ref: "#/components/schemas/NotificationActorInfo"
+            actor_infos_preview:
+              type: array
+              maxItems: 3
+              items:
+                nullable: true
+                allOf:
+                  - $ref: "#/components/schemas/NotificationActorInfo"
+            target_info:
+              nullable: true
+              allOf:
+                - $ref: "#/components/schemas/NotificationTargetInfo"
+
+    NotificationPageData:
+      type: object
+      required:
+        - notifications
+        - unreadCount
+        - next_cursor
+        - has_next_page
+      properties:
+        notifications:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationListItem"
+        unreadCount:
+          type: integer
+          minimum: 0
+        next_cursor:
+          type: string
+          nullable: true
+          description: Opaque pagination cursor. Send it back verbatim; do not parse it.
+        has_next_page:
+          type: boolean
+
+    NotificationPageResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              $ref: "#/components/schemas/NotificationPageData"
+
+    NotificationReadAllResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              type: object
+              required:
+                - updatedCount
+                - unreadCount
+                - version
+              properties:
+                updatedCount:
+                  type: integer
+                  minimum: 0
+                unreadCount:
+                  type: integer
+                  minimum: 0
+                version:
+                  type: integer
+                  minimum: 0
+
+    NotificationReadOneResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              type: object
+              required:
+                - success
+                - unreadCount
+                - version
+              properties:
+                success:
+                  type: boolean
+                  enum: [true]
+                unreadCount:
+                  type: integer
+                  minimum: 0
+                version:
+                  type: integer
+                  minimum: 0
+
+    NotificationUnreadCountResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: object
+              required: [unreadCount, version, updated_at]
+              properties:
+                unreadCount:
+                  type: integer
+                  minimum: 0
+                version:
+                  type: integer
+                  minimum: 0
+                updated_at:
+                  type: string
+                  format: date-time
+
     User:
       type: object
       properties:
@@ -1378,6 +2540,18 @@ components:
         reply_to_message_id:
           type: string
           pattern: "^[a-fA-F0-9]{24}$"
+        mention_user_ids:
+          type: array
+          maxItems: 500
+          description: Optional explicit group mention IDs. Backend deduplicates and keeps only current non-self group members, then merges text @username mentions.
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+        client_message_id:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Stable client-generated operation ID. Reuse it only with the same content, media, reply and mention payload; a different payload conflicts.
 
     ConversationSendAcknowledgement:
       oneOf:
@@ -1413,6 +2587,135 @@ components:
                   pattern: "^[a-fA-F0-9]{24}$"
                 message:
                   type: string
+
+    ConversationReadRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        conversation_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+          description: Required for the Socket.IO event; supplied by the REST path otherwise.
+        message_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+
+    ConversationReadStatePayload:
+      type: object
+      required:
+        - conversation_id
+        - last_read_message_id
+        - last_read_at
+        - unread_message_count
+        - unread_conversation_count
+        - total_unread_message_count
+        - version
+        - updated_at
+      properties:
+        conversation_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        last_read_message_id:
+          type: string
+          nullable: true
+          pattern: "^[a-fA-F0-9]{24}$"
+        last_read_at:
+          type: string
+          format: date-time
+          nullable: true
+        unread_message_count:
+          type: integer
+          minimum: 0
+        unread_conversation_count:
+          type: integer
+          minimum: 0
+        total_unread_message_count:
+          type: integer
+          minimum: 0
+        version:
+          type: integer
+          minimum: 0
+        updated_at:
+          type: string
+          format: date-time
+
+    ConversationReadAcknowledgement:
+      oneOf:
+        - type: object
+          required:
+            - success
+            - conversation_id
+            - unread_message_count
+            - unread_conversation_count
+            - total_unread_message_count
+            - version
+          properties:
+            success:
+              type: boolean
+              enum: [true]
+            conversation_id:
+              type: string
+              pattern: "^[a-fA-F0-9]{24}$"
+            unread_message_count:
+              type: integer
+              minimum: 0
+            unread_conversation_count:
+              type: integer
+              minimum: 0
+            total_unread_message_count:
+              type: integer
+              minimum: 0
+            version:
+              type: integer
+              minimum: 0
+        - type: object
+          required: [success, error]
+          properties:
+            success:
+              type: boolean
+              enum: [false]
+            error:
+              $ref: "#/components/schemas/ConversationSocketError"
+
+    ConversationUnreadSummary:
+      type: object
+      required: [unread_conversation_count, total_unread_message_count, version, updated_at]
+      properties:
+        unread_conversation_count:
+          type: integer
+          minimum: 0
+        total_unread_message_count:
+          type: integer
+          minimum: 0
+        version:
+          type: integer
+          minimum: 0
+        updated_at:
+          type: string
+          format: date-time
+
+    ConversationUnreadSummaryResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ConversationUnreadSummary"
+
+    ConversationReadResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          properties:
+            data:
+              allOf:
+                - $ref: "#/components/schemas/ConversationReadStatePayload"
+                - type: object
+                  required: [success]
+                  properties:
+                    success:
+                      type: boolean
+                      enum: [true]
 
     UserBlockStatusChanged:
       type: object
@@ -1552,7 +2855,7 @@ components:
           pattern: "^[a-fA-F0-9]{24}$"
         change_type:
           type: string
-          enum: [info_updated, members_added, member_removed, member_left, admin_transferred]
+          enum: [info_updated, group_created, members_added, member_removed, member_left, admin_granted, admin_revoked, admin_transferred]
         actor_id:
           type: string
           pattern: "^[a-fA-F0-9]{24}$"
@@ -1636,6 +2939,17 @@ components:
           type: array
           items:
             type: object
+        unread_message_count:
+          type: integer
+          minimum: 0
+        last_read_message_id:
+          type: string
+          nullable: true
+          pattern: "^[a-fA-F0-9]{24}$"
+        last_read_at:
+          type: string
+          format: date-time
+          nullable: true
 
     ConversationOpenResponse:
       allOf:
@@ -1794,6 +3108,20 @@ components:
           enum: [direct, group]
         sender_id:
           type: string
+        kind:
+          type: string
+          enum: [user, system]
+        system_event_type:
+          type: string
+          enum: [group_created, member_added, member_left, member_kicked, admin_granted, admin_revoked, admin_transferred_and_left]
+        affected_user_ids:
+          type: array
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+        context:
+          type: object
+          additionalProperties: true
         sender_info:
           allOf:
             - $ref: "#/components/schemas/MessageSenderInfo"
@@ -1801,6 +3129,20 @@ components:
         reply_to_message_id:
           type: string
           nullable: true
+        mention_user_ids:
+          type: array
+          description: Resolved current group member IDs mentioned by explicit ID or @username. New direct messages return an empty array.
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+        client_message_id:
+          type: string
+          description: Present when the sender supplied an idempotency key.
+        origin_message_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        is_forwarded:
+          type: boolean
         reply_to:
           allOf:
             - $ref: "#/components/schemas/MessageReplyPreview"

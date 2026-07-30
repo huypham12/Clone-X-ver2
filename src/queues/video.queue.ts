@@ -1,11 +1,9 @@
 import { Queue, Worker } from 'bullmq'
 import { connection } from '~/config/redisConfig'
 import { uploadVideoToCloudinary } from '~/utils/cloudinary'
-import DatabaseService from '~/config/database.service'
+import { databaseService } from '~/config/database.service'
 import { ObjectId } from 'mongodb'
 import { MediaStatus } from '~/constants/enums'
-
-const databaseService = new DatabaseService()
 
 export const videoQueue = new Queue('videoUpload', { connection })
 
@@ -53,8 +51,20 @@ export const videoWorker = new Worker(
       throw error // Ném lỗi ra để BullMQ ghi nhận fail
     }
   },
-  { connection }
+  { connection, autorun: false }
 )
+
+let videoWorkerStarted = false
+
+export const startVideoWorker = async (): Promise<void> => {
+  if (!videoWorkerStarted) {
+    videoWorkerStarted = true
+    void videoWorker.run().catch((error: unknown) => {
+      console.error('[Video Worker] Stopped unexpectedly:', error instanceof Error ? error.message : String(error))
+    })
+  }
+  await videoWorker.waitUntilReady()
+}
 
 // Bắt sự kiện lỗi chung của worker
 videoWorker.on('error', (err) => {
