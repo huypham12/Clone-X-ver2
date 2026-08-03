@@ -63,13 +63,13 @@ const enabledByDefault = [
   'NOTIFICATION_TWEET_OUTBOX_ENABLED',
   'NOTIFICATION_SOCIAL_AGGREGATION_ENABLED',
   'NOTIFICATION_MESSAGE_DIRECTED_ENABLED',
-  'NOTIFICATION_MESSAGE_REACTION_ENABLED',
   'NOTIFICATION_GROUP_MANAGEMENT_ENABLED',
   'NOTIFICATION_FOLLOWED_TWEET_ENABLED'
 ]
 for (const flag of enabledByDefault) {
   assert.match(configSource, new RegExp(`getBooleanEnvVar\\('${flag}',\\s+true\\)`), `${flag} must default to true`)
 }
+assert.doesNotMatch(configSource, /NOTIFICATION_MESSAGE_REACTION_ENABLED|notificationMessageReactionEnabled/)
 assert.doesNotMatch(configSource, /NOTIFICATION_UNREAD_STATE_ENABLED|notificationUnreadStateEnabled/)
 
 const unreadSource = read('src/modules/notification/notification-unread.service.ts')
@@ -77,6 +77,8 @@ assert.doesNotMatch(unreadSource, /notificationUnreadStateEnabled/)
 const getUnreadBody = unreadSource.match(/async get\([\s\S]*?\n {2}}\n\n {2}async reconcile/)?.[0] ?? ''
 assert.doesNotMatch(getUnreadBody, /countDocuments|aggregate\s*</)
 assert.match(getUnreadBody, /notificationStates\.findOne/)
+assert.match(unreadSource, /getEligibleNotificationTypeFilter/)
+assert.doesNotMatch(unreadSource, /policy_version|NOTIFICATION_POLICY_VERSION|getSuppressedNotificationTypeFilter/)
 
 const databaseSource = read('src/config/database.service.ts')
 assert.doesNotMatch(databaseSource, /\.dropIndex\s*\(/)
@@ -109,6 +111,7 @@ assert.match(repositorySource, /unread_since:\s*new Date\(\)/)
 assert.match(repositorySource, /unread_since:\s*\{\s*\$lte:\s*cutoff\.unread_since\s*}/)
 const querySource = read('src/modules/notification/notification-query.service.ts')
 assert.match(querySource, /recipient_id:\s*recipientId,[\s\S]*invalidated_at:\s*null/)
+assert.match(querySource, /type:\s*getEligibleNotificationTypeFilter\(\)/)
 assert.match(policySource, /UserVerifyStatus\.Banned/)
 assert.match(policySource, /userBlocks/)
 
@@ -168,6 +171,15 @@ for (const event of [
   assert.ok(runtimeSocketSource.includes(`'${event}'`), `Runtime Socket.IO implementation is missing ${event}`)
 }
 assert.match(frontendContract, /Aggregate rỗng chỉ truyền count\/version trong `@notification:removed`/)
+assert.match(frontendContract, /Generic `message` và `message_reaction`/)
+
+const conversationServiceSource = read('src/modules/conversation/conversation.service.ts')
+assert.doesNotMatch(conversationServiceSource, /type:\s*DomainEventType\.MessageReaction(?:Changed|Removed)/)
+const eventHandlerSource = read('src/modules/notification/notification-event.handler.ts')
+assert.match(eventHandlerSource, /message_reaction_not_supported/)
+const eligibilitySource = read('src/modules/notification/notification-eligibility.ts')
+assert.match(eligibilitySource, /NotificationType\.Message/)
+assert.match(eligibilitySource, /NotificationType\.MessageReaction/)
 
 const enumSource = read('src/constants/enums/notification.enum.ts')
 const notificationTypeBlock = enumSource.match(/export enum NotificationType\s*{([\s\S]*?)}/)?.[1] ?? ''

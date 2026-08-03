@@ -8,8 +8,6 @@ import type {
   TweetRepostedEvent,
   UserFollowedEvent,
   MessageCreatedEvent,
-  MessageReactionChangedEvent,
-  MessageReactionRemovedEvent,
   GroupManagementChangedEvent
 } from '~/modules/events/domain-event.type'
 import { DomainEventType } from '~/modules/events/domain-event.type'
@@ -20,7 +18,6 @@ import type {
   NotificationPolicyDecision,
   TweetNotificationPlan,
   MessageNotificationPlan,
-  MessageReactionNotificationDecision,
   GroupManagementNotificationPlan,
   FollowedUserTweetNotificationPlan
 } from './notification.type'
@@ -62,6 +59,9 @@ export class NotificationPolicyService {
   ) {}
 
   evaluateLegacy(command: CreateNotificationCommand): NotificationPolicyDecision {
+    if (command.type === NotificationType.Message || command.type === NotificationType.MessageReaction) {
+      return { action: 'skip', reason: 'unsupported_type' }
+    }
     if (command.sender_id?.equals(command.recipient_id)) {
       return { action: 'skip', reason: 'self_notification' }
     }
@@ -439,103 +439,6 @@ export class NotificationPolicyService {
         source_key: `${event.payload.source_type}:${event.payload.source_id}`,
         event_id: event.event_id,
         context: {},
-        occurred_at: event.occurred_at
-      }
-    }
-  }
-
-  async evaluateMessageReaction(
-    event: MessageReactionChangedEvent | MessageReactionRemovedEvent,
-    session?: ClientSession
-  ): Promise<MessageReactionNotificationDecision> {
-    const sourceKey = `${event.payload.source_type}:${event.payload.source_id}`
-    if (session) {
-      const predatesRestore = await this.lifecycleGuard.touchTarget(
-        NotificationTargetType.Message,
-        event.payload.message_id,
-        event.occurred_at,
-        session
-      )
-      if (predatesRestore) {
-        return event.type === DomainEventType.MessageReactionRemoved
-          ? { action: 'remove', source_key: sourceKey }
-          : { action: 'skip', reason: 'target_missing' }
-      }
-    }
-    const message = await this.databaseService.messages.findOne(
-      {
-        _id: event.payload.message_id,
-        conversation_id: event.payload.conversation_id,
-        conversation_type: event.payload.conversation_type
-      },
-      { session }
-    )
-    if (!message) {
-      return event.type === DomainEventType.MessageReactionRemoved
-        ? { action: 'remove', source_key: sourceKey }
-        : { action: 'skip', reason: 'target_missing' }
-    }
-    if (message.sender_id.equals(event.actor_id)) return { action: 'skip', reason: 'self_notification' }
-
-    const ownerCanAccess =
-      message.status !== 'sent' || message.deleted_by.some((id) => id.equals(message.sender_id))
-        ? null
-        : message.conversation_type === 'direct'
-        ? await this.databaseService.directConversations.findOne(
-            {
-              _id: message.conversation_id,
-              $or: [{ user1_id: message.sender_id }, { user2_id: message.sender_id }]
-            },
-            { projection: { _id: 1 }, session }
-          )
-        : await this.databaseService.groupConversations.findOne(
-            { _id: message.conversation_id, 'members.user_id': message.sender_id },
-            { projection: { _id: 1 }, session }
-          )
-    if (!ownerCanAccess) {
-      return event.type === DomainEventType.MessageReactionRemoved
-        ? { action: 'remove', source_key: sourceKey }
-        : { action: 'skip', reason: 'target_missing' }
-    }
-
-    const eligible = await this.loadEligibleRecipientIds(
-      event.actor_id,
-      [message.sender_id],
-      event.occurred_at,
-      session
-    )
-    if (!eligible.has(message.sender_id.toHexString())) {
-      return event.type === DomainEventType.MessageReactionRemoved
-        ? { action: 'remove', source_key: sourceKey }
-        : { action: 'skip', reason: 'recipient_missing' }
-    }
-
-    const currentReaction = message.reactions.find((reaction) => reaction.user_id.equals(event.actor_id))
-    if (event.type === DomainEventType.MessageReactionRemoved) {
-      return currentReaction
-        ? { action: 'skip', reason: 'relation_missing' }
-        : { action: 'remove', source_key: sourceKey }
-    }
-    if (!currentReaction || currentReaction.emoji !== event.payload.emoji) {
-      return { action: 'skip', reason: 'relation_missing' }
-    }
-
-    return {
-      action: 'aggregate',
-      command: {
-        recipient_id: message.sender_id,
-        actor_id: event.actor_id,
-        type: NotificationType.MessageReaction,
-        target_id: message._id,
-        target_type: NotificationTargetType.Message,
-        aggregation_key: `${message.sender_id.toHexString()}:MESSAGE_REACTED:${message._id.toHexString()}`,
-        source_key: sourceKey,
-        event_id: event.event_id,
-        context: {
-          emoji: event.payload.emoji,
-          conversation_id: message.conversation_id,
-          conversation_type: message.conversation_type
-        },
         occurred_at: event.occurred_at
       }
     }

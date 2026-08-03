@@ -13,6 +13,7 @@
     "test:message-notifications": "npm run build && node scripts/verify-message-notifications.mjs",
     "test:message-foundation": "npm run build && node scripts/verify-message-foundation.mjs",
     "test:notification-handoff": "node scripts/verify-notification-handoff.mjs",
+    "test:notification-relevance": "npm run build && node scripts/verify-notification-relevance-policy.mjs",
     "notification:outbox:replay": "node dist/scripts/replay-notification-outbox.js",
     "conversation:read-state:reconcile": "node dist/scripts/reconcile-conversation-read-state.js",
     "test:conversation-foundation": "rimraf ./.test-dist && tsc -p tsconfig.test.json && tsc-alias -p tsconfig.test.json && node --test .test-dist/tests/conversation-foundation.test.js && rimraf ./.test-dist",

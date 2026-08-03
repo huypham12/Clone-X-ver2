@@ -1,6 +1,7 @@
 import { SuccessResponseDto } from '~/common/success-response.dto'
-import type { NotificationTargetType, NotificationType, TweetType } from '~/constants/enums'
+import type { NotificationTargetType, TweetType } from '~/constants/enums'
 import type { ObjectId } from 'mongodb'
+import type { EligibleNotificationType } from '../notification-eligibility'
 
 export interface NotificationActorInfo {
   _id: ObjectId
@@ -48,7 +49,7 @@ export interface NotificationListItem {
   _id: ObjectId
   recipient_id: ObjectId
   sender_id: ObjectId | null
-  type: NotificationType
+  type: EligibleNotificationType
   target_id: ObjectId | null
   is_read: boolean
   created_at: Date

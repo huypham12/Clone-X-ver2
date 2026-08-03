@@ -1369,10 +1369,6 @@ class ConversationService {
 
     const objectIdUserId = new this.databaseService.ObjectId(userId)
     const msgId = new this.databaseService.ObjectId(messageId)
-    const useReactionNotification =
-      envConfig.features.notificationOutboxEnabled && envConfig.features.notificationMessageReactionEnabled
-    const occurredAt = new Date()
-    const eventId = randomUUID()
     const session = this.databaseService.startSession()
     let outcome: ReactionMutationOutcome | undefined
     try {
@@ -1413,27 +1409,6 @@ class ConversationService {
         )
         if (!updatedMessage) {
           throw new HttpError('Message state changed before it could be reacted to', HTTP_STATUS.CONFLICT)
-        }
-        if (useReactionNotification) {
-          await this.outboxPublisher.publish(
-            {
-              event_id: eventId,
-              type: DomainEventType.MessageReactionChanged,
-              aggregate_type: DomainAggregateType.Message,
-              aggregate_id: msgId,
-              actor_id: objectIdUserId,
-              occurred_at: occurredAt,
-              payload: {
-                message_id: msgId,
-                conversation_id: context.message.conversation_id,
-                conversation_type: context.message.conversation_type,
-                emoji,
-                source_type: 'MESSAGE_REACTION',
-                source_id: `${msgId.toHexString()}:${objectIdUserId.toHexString()}`
-              }
-            },
-            { session }
-          )
         }
         outcome = {
           changed: true,
@@ -2515,10 +2490,6 @@ class ConversationService {
     const objectIdUserId = new this.databaseService.ObjectId(userId)
     const msgId = new this.databaseService.ObjectId(messageId)
 
-    const useReactionNotification =
-      envConfig.features.notificationOutboxEnabled && envConfig.features.notificationMessageReactionEnabled
-    const occurredAt = new Date()
-    const eventId = randomUUID()
     const session = this.databaseService.startSession()
     let outcome: ReactionMutationOutcome | undefined
     try {
@@ -2554,26 +2525,6 @@ class ConversationService {
         )
         if (!updatedMessage) {
           throw new HttpError('Message state changed before its reaction could be removed', HTTP_STATUS.CONFLICT)
-        }
-        if (useReactionNotification) {
-          await this.outboxPublisher.publish(
-            {
-              event_id: eventId,
-              type: DomainEventType.MessageReactionRemoved,
-              aggregate_type: DomainAggregateType.Message,
-              aggregate_id: msgId,
-              actor_id: objectIdUserId,
-              occurred_at: occurredAt,
-              payload: {
-                message_id: msgId,
-                conversation_id: context.message.conversation_id,
-                conversation_type: context.message.conversation_type,
-                source_type: 'MESSAGE_REACTION',
-                source_id: `${msgId.toHexString()}:${objectIdUserId.toHexString()}`
-              }
-            },
-            { session }
-          )
         }
         outcome = {
           changed: true,

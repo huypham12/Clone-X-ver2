@@ -84,7 +84,6 @@ interface EnvConfig {
     notificationTweetOutboxEnabled: boolean
     notificationSocialAggregationEnabled: boolean
     notificationMessageDirectedEnabled: boolean
-    notificationMessageReactionEnabled: boolean
     notificationGroupManagementEnabled: boolean
     notificationFollowedTweetEnabled: boolean
   }
@@ -241,7 +240,6 @@ export const envConfig: EnvConfig = {
     notificationTweetOutboxEnabled: getBooleanEnvVar('NOTIFICATION_TWEET_OUTBOX_ENABLED', true),
     notificationSocialAggregationEnabled: getBooleanEnvVar('NOTIFICATION_SOCIAL_AGGREGATION_ENABLED', true),
     notificationMessageDirectedEnabled: getBooleanEnvVar('NOTIFICATION_MESSAGE_DIRECTED_ENABLED', true),
-    notificationMessageReactionEnabled: getBooleanEnvVar('NOTIFICATION_MESSAGE_REACTION_ENABLED', true),
     notificationGroupManagementEnabled: getBooleanEnvVar('NOTIFICATION_GROUP_MANAGEMENT_ENABLED', true),
     notificationFollowedTweetEnabled: getBooleanEnvVar('NOTIFICATION_FOLLOWED_TWEET_ENABLED', true)
   },

@@ -18,6 +18,10 @@ import type {
 import { inferLegacyNotificationTargetType } from './notification-policy.service'
 import { NotificationRepository } from './notification.repository'
 import { NotificationUnreadService } from './notification-unread.service'
+import {
+  getEligibleNotificationTypeFilter,
+  isEligibleNotificationType
+} from './notification-eligibility'
 
 const TARGET_PREVIEW_CONTENT_LIMIT = 140
 
@@ -57,6 +61,7 @@ export class NotificationQueryService {
     const tupleCursor = cursor ? await this.resolveCursor(recipientId, cursor) : undefined
     const filter: Filter<Notification> = {
       recipient_id: recipientId,
+      type: getEligibleNotificationTypeFilter(),
       invalidated_at: null,
       ...(tupleCursor
         ? {
@@ -102,6 +107,9 @@ export class NotificationQueryService {
   }
 
   private normalize(notification: WithId<Notification>): NormalizedNotification {
+    if (!isEligibleNotificationType(notification.type)) {
+      throw new Error('Suppressed notification type reached the durable feed')
+    }
     const fallbackActorIds = notification.sender_id ? [notification.sender_id] : []
     const storedActorIds = Array.isArray(notification.actor_ids_preview)
       ? notification.actor_ids_preview

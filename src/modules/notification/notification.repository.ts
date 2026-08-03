@@ -9,6 +9,10 @@ import type {
 } from './notification-event.type'
 import type { NotificationContext } from '~/schemas/Notification.schema'
 import { NotificationUnreadService, type NotificationUnreadSnapshot } from './notification-unread.service'
+import {
+  getEligibleNotificationTypeFilter,
+  isEligibleNotificationType
+} from './notification-eligibility'
 
 export interface NotificationRepositoryOptions {
   session?: ClientSession
@@ -262,6 +266,7 @@ export class NotificationRepository {
     const result = await this.databaseService.notifications.updateMany(
       {
         recipient_id: recipientId,
+        type: getEligibleNotificationTypeFilter(),
         is_read: false,
         invalidated_at: null,
         $or: [
@@ -297,7 +302,13 @@ export class NotificationRepository {
   ): Promise<MarkNotificationReadResult> {
     const session = this.requireSession(options)
     const result = await this.databaseService.notifications.updateOne(
-      { _id: notificationId, recipient_id: recipientId, is_read: false, invalidated_at: null },
+      {
+        _id: notificationId,
+        recipient_id: recipientId,
+        is_read: false,
+        type: getEligibleNotificationTypeFilter(),
+        invalidated_at: null
+      },
       {
         $set: {
           is_read: true,
@@ -343,7 +354,7 @@ export class NotificationRepository {
       },
       { returnDocument: 'after', session }
     )
-    if (notification && !notification.is_read) {
+    if (notification && !notification.is_read && isEligibleNotificationType(notification.type)) {
       await this.unreadService.decrement(recipientId, 1, invalidatedAt, { session })
     }
     return notification !== null
@@ -367,7 +378,7 @@ export class NotificationRepository {
       { returnDocument: 'after', session }
     )
     if (!notification) return null
-    const unreadState = !notification.is_read
+    const unreadState = !notification.is_read && isEligibleNotificationType(notification.type)
       ? await this.unreadService.decrement(notification.recipient_id, 1, invalidatedAt, { session })
       : undefined
     return { status: 'invalidated', notification, unread_state: unreadState }
@@ -404,7 +415,7 @@ export class NotificationRepository {
         { returnDocument: 'after', session }
       )
       if (!notification) continue
-      const unreadState = !notification.is_read
+      const unreadState = !notification.is_read && isEligibleNotificationType(notification.type)
         ? await this.unreadService.decrement(notification.recipient_id, 1, invalidatedAt, { session })
         : undefined
       results.push({ status: 'invalidated', notification, unread_state: unreadState })

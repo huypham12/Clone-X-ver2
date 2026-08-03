@@ -5,7 +5,6 @@ import { Server } from 'socket.io'
 
 process.env.NOTIFICATION_OUTBOX_ENABLED = 'true'
 process.env.NOTIFICATION_MESSAGE_DIRECTED_ENABLED = 'true'
-process.env.NOTIFICATION_MESSAGE_REACTION_ENABLED = 'true'
 
 const require = createRequire(import.meta.url)
 const { databaseService } = require('../dist/config/database.service.js')
@@ -179,63 +178,31 @@ const main = async () => {
     const threeEmojiMessage = await send(ownerId, 'three emoji target')
     await conversationService.reactMessage(senderId.toHexString(), threeEmojiMessage.message._id.toHexString(), '👍')
     await conversationService.reactMessage(senderId.toHexString(), threeEmojiMessage.message._id.toHexString(), '❤️')
-    await conversationService.reactMessage(senderId.toHexString(), threeEmojiMessage.message._id.toHexString(), '😂')
-    await conversationService.reactMessage(senderId.toHexString(), threeEmojiMessage.message._id.toHexString(), '😂')
-    const threeEmojiEvents = await databaseService.outboxEvents
-      .find({ type: 'MessageReactionChanged', aggregate_id: threeEmojiMessage.message._id })
-      .sort({ occurred_at: 1, _id: 1 })
-      .toArray()
-    assert.equal(threeEmojiEvents.length, 3)
-    await Promise.all(threeEmojiEvents.map(processEvent))
-    const threeEmojiAggregate = await databaseService.notifications.findOne({
-      recipient_id: ownerId,
-      target_id: threeEmojiMessage.message._id,
-      type: 'message_reaction',
-      aggregation_active: true
-    })
-    assert(threeEmojiAggregate)
-    assert.equal(threeEmojiAggregate.actor_count, 1)
-    assert.equal(threeEmojiAggregate.context?.emoji, '😂')
-
-    const visibilityRaceMessage = await send(mentionedId, 'owner visibility race target')
-    await conversationService.reactMessage(
+    const threeEmojiState = await conversationService.reactMessage(
       senderId.toHexString(),
-      visibilityRaceMessage.message._id.toHexString(),
-      '👍'
+      threeEmojiMessage.message._id.toHexString(),
+      '😂'
     )
-    const visibilityChangedEvent = await databaseService.outboxEvents.findOne({
-      type: 'MessageReactionChanged',
-      aggregate_id: visibilityRaceMessage.message._id
-    })
-    assert(visibilityChangedEvent)
-    await processEvent(visibilityChangedEvent)
-    const visibilityAggregate = await databaseService.notifications.findOne({
-      recipient_id: mentionedId,
-      target_id: visibilityRaceMessage.message._id,
-      type: 'message_reaction',
-      aggregation_active: true
-    })
-    assert(visibilityAggregate)
-    await conversationService.unreactMessage(
+    const repeatedThreeEmojiState = await conversationService.reactMessage(
       senderId.toHexString(),
-      visibilityRaceMessage.message._id.toHexString()
+      threeEmojiMessage.message._id.toHexString(),
+      '😂'
     )
-    await conversationService.deleteMessage(
-      mentionedId.toHexString(),
-      visibilityRaceMessage.message._id.toHexString()
+    assert.deepEqual(repeatedThreeEmojiState, threeEmojiState)
+    assert.equal(
+      await databaseService.outboxEvents.countDocuments({
+        type: { $in: ['MessageReactionChanged', 'MessageReactionRemoved'] },
+        aggregate_id: threeEmojiMessage.message._id
+      }),
+      0
     )
-    const visibilityRemovedEvent = await databaseService.outboxEvents.findOne({
-      type: 'MessageReactionRemoved',
-      aggregate_id: visibilityRaceMessage.message._id
-    })
-    assert(visibilityRemovedEvent)
-    await processEvent(visibilityRemovedEvent)
-    const visibilityAggregateAfterRemove = await databaseService.notifications.findOne({
-      _id: visibilityAggregate._id
-    })
-    assert(visibilityAggregateAfterRemove)
-    assert.equal(visibilityAggregateAfterRemove.aggregation_active, false)
-    assert.equal(visibilityAggregateAfterRemove.actor_count, 0)
+    assert.equal(
+      await databaseService.notifications.countDocuments({
+        target_id: threeEmojiMessage.message._id,
+        type: 'message_reaction'
+      }),
+      0
+    )
 
     const concurrentMessage = await send(ownerId, 'concurrent reaction target')
     await Promise.all(
@@ -243,33 +210,29 @@ const main = async () => {
         conversationService.reactMessage(actorId.toHexString(), concurrentMessage.message._id.toHexString(), '👍')
       )
     )
-    const addEvents = await databaseService.outboxEvents
-      .find({ type: 'MessageReactionChanged', aggregate_id: concurrentMessage.message._id })
-      .toArray()
-    assert.equal(addEvents.length, 20)
-    await Promise.all(addEvents.map(processEvent))
-    const aggregate = await databaseService.notifications.findOne({
-      recipient_id: ownerId,
-      target_id: concurrentMessage.message._id,
-      type: 'message_reaction',
-      aggregation_active: true
-    })
-    assert(aggregate)
-    assert.equal(aggregate.actor_count, 20)
-    const ownerState = await databaseService.notificationStates.findOne({ recipient_id: ownerId })
-    assert(ownerState)
-    assert.equal(ownerState.unread_count, 2)
+    const reactedMessage = await databaseService.messages.findOne({ _id: concurrentMessage.message._id })
+    assert(reactedMessage)
+    assert.equal(reactedMessage.reactions.length, 20)
+    assert.equal(
+      await databaseService.outboxEvents.countDocuments({
+        type: { $in: ['MessageReactionChanged', 'MessageReactionRemoved'] },
+        aggregate_id: concurrentMessage.message._id
+      }),
+      0
+    )
+    assert.equal(
+      await databaseService.notifications.countDocuments({
+        target_id: concurrentMessage.message._id,
+        type: 'message_reaction'
+      }),
+      0
+    )
 
     await Promise.all(
       reactionActorIds.map((actorId) =>
         conversationService.unreactMessage(actorId.toHexString(), concurrentMessage.message._id.toHexString())
       )
     )
-    const removeEvents = await databaseService.outboxEvents
-      .find({ type: 'MessageReactionRemoved', aggregate_id: concurrentMessage.message._id })
-      .toArray()
-    assert.equal(removeEvents.length, 20)
-    await Promise.all(removeEvents.map(processEvent))
     await conversationService.unreactMessage(
       reactionActorIds[0].toHexString(),
       concurrentMessage.message._id.toHexString()
@@ -279,21 +242,17 @@ const main = async () => {
         type: 'MessageReactionRemoved',
         aggregate_id: concurrentMessage.message._id
       }),
-      20
+      0
     )
-    const removedAggregate = await databaseService.notifications.findOne({ _id: aggregate._id })
-    assert(removedAggregate)
-    assert.equal(removedAggregate.aggregation_active, false)
-    assert.equal(removedAggregate.actor_count, 0)
-    const ownerStateAfterRemove = await databaseService.notificationStates.findOne({ recipient_id: ownerId })
-    assert(ownerStateAfterRemove)
-    assert.equal(ownerStateAfterRemove.unread_count, 1)
+    const unreactedMessage = await databaseService.messages.findOne({ _id: concurrentMessage.message._id })
+    assert(unreactedMessage)
+    assert.equal(unreactedMessage.reactions.length, 0)
 
-    console.log('Message notification runtime verification passed', {
+    console.log('Message relevance runtime verification passed', {
       directed_precedence_and_retry: true,
-      emoji_change_actor_count: threeEmojiAggregate.actor_count,
-      concurrent_actor_count: aggregate.actor_count,
-      last_remove_invalidated: removedAggregate.aggregation_active === false
+      reaction_chat_state_preserved: true,
+      reaction_notification_suppressed: true,
+      concurrent_reaction_count: reactedMessage.reactions.length
     })
   } finally {
     await cleanup()

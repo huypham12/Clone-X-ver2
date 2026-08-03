@@ -2126,7 +2126,7 @@ components:
           pattern: "^[a-fA-F0-9]{24}$"
         type:
           type: string
-          enum: [like, reply, retweet, quote, follow, mention, system, message, message_reply, message_mention, message_reaction, group_add, group_join, group_kick, admin_granted, admin_revoked, followed_user_tweet]
+          enum: [like, reply, retweet, quote, follow, mention, system, message_reply, message_mention, group_add, group_join, group_kick, admin_granted, admin_revoked, followed_user_tweet]
         target_id:
           type: string
           nullable: true

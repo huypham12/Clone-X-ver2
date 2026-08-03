@@ -2,7 +2,7 @@
 
 Backend hiện hỗ trợ notification feed ổn định theo `created_at + _id`, cursor opaque, schema v2 additive và public hydration cho actor/target. Ba REST path và event `@notification:new` legacy vẫn giữ nguyên.
 
-Backend đã hoàn tất đường durable cho Follow, Reply, Quote, Mention, Like, Repost, directed Message Reply/Group Mention, Message Reaction, tweet gốc opt-in và lifecycle target/block; unread state có version cùng các event cập nhật/xóa item. `NOTIFICATION_OUTBOX_ENABLED` và các handler flag tương ứng mặc định `true` cho local, có thể đặt `false` để rollback/debug mà không bật lại legacy writer. API business trả về sau khi transaction commit và notification có thể xuất hiện hoặc bị loại bất đồng bộ qua socket hoặc lần REST refetch tiếp theo.
+Backend hỗ trợ đường durable cho Follow, Reply, Quote, Mention, Like, Repost, directed Message Reply/Group Mention, tweet gốc opt-in và lifecycle target/block; unread state có version cùng các event cập nhật/xóa item. Generic `message` và `message_reaction` là type storage compatibility đã bị loại khỏi generation, durable feed và unread policy. API business trả về sau khi transaction commit và notification có thể xuất hiện hoặc bị loại bất đồng bộ qua socket hoặc lần REST refetch tiếp theo.
 
 Các REST contract liên quan vẫn giữ response cũ:
 
@@ -151,7 +151,8 @@ Frontend nên ưu tiên `actor_info`, `actor_infos_preview`, `target_type`, `tar
 | --- | --- | --- |
 | `follow` | `USER` | Mở profile `actor_info._id`; `target_id` có thể là `null` với caller legacy. |
 | `like`, `reply`, `retweet`, `quote`, `mention`, `followed_user_tweet` | `TWEET` | Mở tweet bằng `target_info._id`, fallback `target_id`. |
-| `message`, `group_add`, `group_join`, `group_kick`, `admin_granted`, `admin_revoked` | `CONVERSATION` | Mở conversation bằng `target_info._id`, fallback `target_id`. Với user đã bị kick, `target_info` chủ động là `null`; không cố fetch nội dung group. |
+| `group_add`, `group_join`, `group_kick`, `admin_granted`, `admin_revoked` | `CONVERSATION` | Mở conversation bằng `target_info._id`, fallback `target_id`. Với user đã bị kick, `target_info` chủ động là `null`; không cố fetch nội dung group. |
+| `message_reply`, `message_mention` | `MESSAGE` | Mở conversation có thẩm quyền rồi focus message target. |
 | `system` | `null` nếu caller không cung cấp target | Chỉ điều hướng khi `target_type/target_info` thực sự có dữ liệu. |
 
 `target_info` là một trong các projection công khai sau:
@@ -269,16 +270,16 @@ Khi `NOTIFICATION_SOCIAL_AGGREGATION_ENABLED=true`, Like/Repost trên cùng twee
 
 ## Unread, feature control và giới hạn hiện tại
 
-- `data.unreadCount` là số notification item chưa đọc và chưa invalidated; một aggregate nhiều actor vẫn chỉ tính là một item. List và endpoint unread-count luôn đọc `NotificationState`; không có unread rollout flag hoặc `countDocuments` fallback.
+- `data.unreadCount` là số notification item eligible chưa đọc và chưa invalidated; một aggregate nhiều actor vẫn chỉ tính là một item. List và endpoint unread-count đọc `NotificationState`; reconciliation thông thường chỉ đếm type còn eligible. Backend không lưu policy migration marker.
 - Inbox unread count, tổng unread message và unread từng conversation đã được bổ sung ở Phase 12; xem phần contract unread của conversation bên dưới.
 - Backend dùng `@notification:new` cho item/window mới, individual reactivation sau invalidation hoặc context update. Reactivation có thể giữ `_id` cũ nhưng là một unread generation mới; `@notification:updated` thay thế aggregate còn actor; `@notification:removed` loại aggregate rỗng hoặc individual item bị invalidated bởi mention edit, target delete, revoke, delete-for-me hay block.
 - Mọi runtime business notification đi qua typed event/outbox và deduplication key. Compatibility facade vẫn tồn tại nội bộ nhưng không có business caller; frontend vẫn phải upsert/dedupe theo `_id` vì Socket.IO là at-least-once/best-effort state delivery.
 - Durable Follow cần đồng thời `NOTIFICATION_OUTBOX_ENABLED=true` và `NOTIFICATION_FOLLOW_OUTBOX_ENABLED=true`; durable Reply/Quote/Mention cần global flag cùng `NOTIFICATION_TWEET_OUTBOX_ENABLED=true`. Các flag mặc định bật local và chỉ là control backend; frontend không gửi hoặc lưu chúng.
 - Mention removal reconcile notification được tạo bằng semantic key của Phase 8. Notification legacy không có schema/key không được infer; môi trường phải reset ba collection notification trước khi bật lifecycle v2.
 - Like/Repost aggregation cần đồng thời `NOTIFICATION_OUTBOX_ENABLED=true` và `NOTIFICATION_SOCIAL_AGGREGATION_ENABLED=true`, đều mặc định bật local. Nếu Retweet relation local cũ cản unique index, reset collection `tweets`; backend không migrate/reconcile dữ liệu cũ. Runtime caller legacy đã bị loại; khi flag tương ứng tắt backend không fallback sang direct insert.
-- Directed Message Reply/Group Mention cần global flag cùng `NOTIFICATION_MESSAGE_DIRECTED_ENABLED=true`; Message Reaction cần global flag cùng `NOTIFICATION_MESSAGE_REACTION_ENABLED=true`. Các flag mặc định bật local; frontend không gửi flag.
+- Directed Message Reply/Group Mention cần global flag cùng `NOTIFICATION_MESSAGE_DIRECTED_ENABLED=true`. Message reaction không tạo Notification item và không có notification feature flag; reaction state trong Chat vẫn dùng REST cùng `@message:reaction-updated`.
 - Group system/direct notification cần global flag cùng `NOTIFICATION_GROUP_MANAGEMENT_ENABLED=true`. Tweet gốc opt-in cần TweetCreated outbox và `NOTIFICATION_FOLLOWED_TWEET_ENABLED=true`. Các flag mặc định bật local; frontend không gửi hoặc suy diễn chúng.
-- Tắt `NOTIFICATION_OUTBOX_ENABLED` là pause publisher/worker, không xóa pending outbox. `MessageCreated` vẫn được lưu cùng message để giữ transaction; khi bật lại global flag, event cũ sẽ được xử lý theo handler flag tại thời điểm drain. Muốn suppress directed message/reaction trong backlog, giữ handler flag tương ứng `false` trong lúc drain.
+- Tắt `NOTIFICATION_OUTBOX_ENABLED` là pause publisher/worker, không xóa pending outbox. `MessageCreated` vẫn được lưu cùng message để giữ transaction; khi bật lại global flag, event cũ được xử lý theo directed handler flag tại thời điểm drain. Pending `MessageReactionChanged`/`MessageReactionRemoved` cũ luôn bị notification handler suppress.
 - Chưa có push notification. Preference hiện chỉ hỗ trợ tweet gốc public theo từng follow relation.
 - Mọi policy durable recheck actor/recipient còn tồn tại, không banned và không bị block hai chiều. Actor/target bị block, banned, deleted, revoked hoặc delete-for-me không được hydrate; lifecycle worker invalidates item hoặc gỡ actor edge tương ứng.
 
@@ -329,6 +330,8 @@ Badge icon inbox phải dùng `unread_conversation_count`. `total_unread_message
 ```
 
 Body rỗng mark tới message visible mới nhất. `message_id` phải visible và thuộc conversation; sai trả `400`, không còn membership trả `403`. Response `data` gồm `success`, `conversation_id`, `last_read_message_id`, `last_read_at`, `unread_message_count`, `unread_conversation_count`, `total_unread_message_count`, `version`. Read position chỉ tiến về phía trước; message commit sau target vẫn unread.
+
+Phase 4.2 chưa gắn conversation read acknowledgement với notification invalidation. Cho tới khi Phase 6 bổ sung backend contract theo exact committed read position, frontend không được tự ẩn `message_reply`/`message_mention` chỉ vì route conversation đã mở hoặc message nằm trong cache.
 
 Forward giữ endpoint `POST /api/conversations/messages/:message_id/forward` và response legacy `{ data: { success: true } }`; request mới:
 
@@ -406,18 +409,11 @@ Khi `NOTIFICATION_OUTBOX_ENABLED=true` và `NOTIFICATION_MESSAGE_DIRECTED_ENABLE
 
 Frontend điều hướng `message_reply`/`message_mention` bằng `context.conversation_id`, sau đó mở/scroll tới `target_id`. Nếu `target_info` là `null`, không tự suy diễn quyền truy cập; refetch conversation/message hoặc bỏ CTA. `@notification:new` vẫn là raw object và retry event không emit item trùng; frontend upsert theo `_id` như các individual notification khác.
 
-### Message Reaction aggregate (Phase 14)
+### Message Reaction policy (Phase 14 compatibility, Phase 4.2 relevance override)
 
-Khi `NOTIFICATION_OUTBOX_ENABLED=true` và `NOTIFICATION_MESSAGE_REACTION_ENABLED=true`, reaction của user khác trên cùng message được gom thành `type=message_reaction`, `target_type=MESSAGE`. `context.emoji` là emoji của actor gần nhất; `context.conversation_id` và `conversation_type` phục vụ điều hướng. `actor_count` là số user hiện đang có edge trong active window, không phải tổng lần đổi emoji.
+REST payload của `POST/DELETE /api/conversations/messages/:message_id/react` và `@message:reaction-updated` không đổi; đây là reaction list/summary có thẩm quyền trong Chat. Reaction không tạo outbox notification mới, không tạo `message_reaction`, không xuất hiện trong `GET /api/notifications` và không tăng Notifications badge.
 
-- Actor đổi emoji cập nhật aggregate qua `@notification:updated`, không tăng `actor_count` hoặc unread notification count.
-- React lại cùng emoji và unreact khi chưa react là no-op: REST vẫn trả reaction state hiện tại, không emit lại `@message:reaction-updated` hay notification event.
-- Actor cuối cùng unreact làm aggregate invalidated và phát `@notification:removed`; frontend remove theo `notification_id` và áp dụng unread state theo `version`.
-- Nếu unreact đã commit nhưng message bị revoke hoặc owner mất visibility trước khi worker xử lý, backend vẫn gỡ đúng actor edge theo source key; frontend có thể nhận `@notification:updated`/`removed` dù target không còn hydrate được.
-- Mark-one/read-all đóng active window như Like/Repost. Reaction hợp lệ sau đó tạo window mới qua `@notification:new`; không merge hai `_id` chỉ vì cùng message.
-- Existing REST payload của `POST/DELETE /api/conversations/messages/:message_id/react` và existing `@message:reaction-updated` payload không đổi. Event conversation này vẫn là reaction list/summary có thẩm quyền; notification socket chỉ cập nhật activity feed.
-
-Khi nhận `@notification:updated`, thay thế aggregate cùng `_id`; khi nhận `@notification:removed`, xóa item. Khi reconnect hoặc bỏ lỡ chuỗi change/remove, refetch notification page đầu và unread count; Socket.IO không replay. Nhiều tab và event trùng vẫn dedupe theo `_id` và count version.
+Domain event reaction cũ vẫn được parser nhận để drain outbox compatibility nhưng notification handler luôn trả `suppressed`. Notification `message_reaction` legacy được invalidate bởi policy reconciliation cùng generic `message`; unread state/version được sửa authoritative, không dùng frontend delta.
 
 ### Group system message và quyền admin (Phase 15)
 
@@ -478,7 +474,7 @@ Khi bật, chỉ tweet gốc `Tweet` audience `Everyone` tạo notification `typ
 Không có REST endpoint mới và request/response của delete tweet, revoke message, delete-for-me, block/unblock không đổi. Khi `NOTIFICATION_OUTBOX_ENABLED=true` (mặc định local), mutation nghiệp vụ và lifecycle event commit cùng transaction; cleanup notification diễn ra bất đồng bộ:
 
 - Xóa tweet hoặc đổi tweet từ `Everyone` sang audience hạn chế loại notification trỏ trực tiếp tweet đó, notification child có `context.parent_tweet_id` trỏ tweet đó và actor edge repost liên quan.
-- Revoke message loại `message_reply`, `message_mention`, `message_reaction` trỏ message. Delete-for-me chỉ loại item của chính user đã xóa.
+- Revoke message loại `message_reply` và `message_mention` trỏ message. Delete-for-me chỉ loại item của chính user đã xóa.
 - Block loại individual item giữa hai user theo cả hai chiều và gỡ actor của mỗi bên khỏi aggregate của bên kia. Aggregate còn actor phát `@notification:updated`; aggregate rỗng hoặc individual item bị invalidated phát `@notification:removed`.
 - Unblock không tái tạo item đã xóa. Event mới giữa hai phía còn block bị suppress.
 - Actor bị banned/deleted, user bị block hoặc target mất quyền xem không được hydrate. Trong REST list, backend đồng thời đặt raw `sender_id`/`target_id` bị ẩn thành `null`, lọc actor bị ẩn khỏi `actor_ids_preview`, trả `context={}` và bỏ `deduplication_key`/`aggregation_key` của item bị redact. Frontend không dựng lại identity hoặc route từ cache cũ.
@@ -504,6 +500,6 @@ Socket không replay lifecycle event. Sau reconnect, nhiều tab lệch state, h
 
 - Group bị giới hạn bởi `MAX_GROUP_MEMBERS`, mặc định 500. Frontend không nên cho chọn vượt giới hạn; backend vẫn là nơi enforce cuối cùng.
 - Rollout yêu cầu reset đồng thời local `messages`, `conversationReadStates`, `userMessageStates`. Startup fail-fast nếu còn message có `read_by` hoặc ba collection không cùng baseline; backend không backfill/dual-write dữ liệu cũ.
-- Notification generic `message` chỉ còn là field/type compatibility cho dữ liệu cũ; runtime flow không tạo mới dù directed flag tắt. Frontend tiếp tục đọc type legacy nếu gặp nhưng ưu tiên `message_reply`/`message_mention`.
+- Notification generic `message` và `message_reaction` chỉ còn là enum/schema compatibility để nhận diện payload hoặc outbox cũ. Runtime không tạo mới; durable feed không trả; frontend không khai báo renderer riêng. Local rollout yêu cầu reset notification data/cache về baseline sạch, không migrate unread state cũ.
 - Lifecycle/read-state v2 yêu cầu baseline local sạch cho `notifications`, `notificationActors`, `notificationStates`; startup từ chối actor/state mồ côi, notification thiếu state và active aggregate thiếu actor edge. Backend không infer hoặc migrate notification legacy. Vì vậy frontend local/test cache cũng nên được xóa khi môi trường reset dữ liệu.
 - `@conversation:read-state` là best-effort realtime. REST/read-state trong MongoDB là nguồn sự thật.

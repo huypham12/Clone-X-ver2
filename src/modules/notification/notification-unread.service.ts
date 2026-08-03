@@ -1,5 +1,6 @@
 import { ObjectId, type ClientSession } from 'mongodb'
 import DatabaseService, { databaseService as sharedDatabaseService } from '~/config/database.service'
+import { getEligibleNotificationTypeFilter } from './notification-eligibility'
 
 export interface NotificationUnreadSnapshot {
   recipient_id: ObjectId
@@ -85,7 +86,12 @@ export class NotificationUnreadService {
 
   async reconcile(recipientId: ObjectId, now: Date, session?: ClientSession): Promise<NotificationUnreadSnapshot> {
     const unreadCount = await this.databaseService.notifications.countDocuments(
-      { recipient_id: recipientId, is_read: false, invalidated_at: null },
+      {
+        recipient_id: recipientId,
+        type: getEligibleNotificationTypeFilter(),
+        is_read: false,
+        invalidated_at: null
+      },
       { session }
     )
     const state = await this.databaseService.notificationStates.findOneAndUpdate(

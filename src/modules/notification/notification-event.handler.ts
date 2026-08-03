@@ -213,22 +213,7 @@ export class NotificationEventHandler implements DomainEventHandler<Notification
       }
       case DomainEventType.MessageReactionChanged:
       case DomainEventType.MessageReactionRemoved: {
-        if (!envConfig.features.notificationMessageReactionEnabled) {
-          return { status: 'suppressed', notification: null, reason: 'message_reaction_disabled' }
-        }
-        if (!options.session) throw new Error('Message reaction event requires an active MongoDB session')
-        const decision = await this.policyService.evaluateMessageReaction(event, options.session)
-        if (decision.action === 'skip') {
-          return { status: 'suppressed', notification: null, reason: decision.reason }
-        }
-        const result =
-          decision.action === 'aggregate'
-            ? await this.aggregationService.addActor(decision.command, { session: options.session })
-            : await this.aggregationService.removeActor(decision.source_key, event.occurred_at, {
-                session: options.session
-              })
-        if (options.deliver !== false) this.deliverMutation(result)
-        return result
+        return { status: 'suppressed', notification: null, reason: 'message_reaction_not_supported' }
       }
       case DomainEventType.TweetDeleted: {
         if (!options.session) throw new Error('Tweet lifecycle event requires an active MongoDB session')

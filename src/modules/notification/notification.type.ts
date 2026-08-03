@@ -22,6 +22,7 @@ export type NotificationPolicySkipReason =
   | 'recipient_missing'
   | 'target_missing'
   | 'privacy_restricted'
+  | 'unsupported_type'
 
 export type NotificationPolicyDecision =
   | { action: 'create'; command: CreateNotificationCommand }
@@ -59,9 +60,9 @@ export interface NotificationDeliveryResult {
 export interface AggregateNotificationCommand {
   recipient_id: ObjectId
   actor_id: ObjectId
-  type: NotificationType.Like | NotificationType.Retweet | NotificationType.MessageReaction
+  type: NotificationType.Like | NotificationType.Retweet
   target_id: ObjectId
-  target_type: NotificationTargetType.Tweet | NotificationTargetType.Message
+  target_type: NotificationTargetType.Tweet
   aggregation_key: string
   source_key: string
   event_id: string
@@ -72,7 +73,3 @@ export interface AggregateNotificationCommand {
 export type AggregateNotificationDecision =
   | { action: 'aggregate'; command: AggregateNotificationCommand }
   | { action: 'skip'; reason: NotificationPolicySkipReason }
-
-export type MessageReactionNotificationDecision =
-  | AggregateNotificationDecision
-  | { action: 'remove'; source_key: string }
