@@ -86,7 +86,7 @@ export class NotificationService {
   async markAllAsRead(userId: string) {
     const recipientId = new this.databaseService.ObjectId(userId)
     const readAt = new Date()
-    const cutoff = { created_at: readAt, _id: new this.databaseService.ObjectId() }
+    const cutoff = { unread_since: readAt, created_at: readAt, _id: new this.databaseService.ObjectId() }
     const session = this.databaseService.startSession()
     let result: Awaited<ReturnType<NotificationRepository['markAllAsRead']>> | undefined
     try {

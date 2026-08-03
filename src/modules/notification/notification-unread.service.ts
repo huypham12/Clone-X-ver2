@@ -1,6 +1,5 @@
 import { ObjectId, type ClientSession } from 'mongodb'
 import DatabaseService, { databaseService as sharedDatabaseService } from '~/config/database.service'
-import { envConfig } from '~/config/getEnvConfig'
 
 export interface NotificationUnreadSnapshot {
   recipient_id: ObjectId
@@ -73,53 +72,15 @@ export class NotificationUnreadService {
     )
 
     const recipientIds = normalized.map((item) => item.recipient_id)
-    if (envConfig.features.notificationUnreadStateEnabled) {
-      const states = await this.databaseService.notificationStates
-        .find({ recipient_id: { $in: recipientIds } }, { session: options.session })
-        .toArray()
-      return new Map(states.map((state) => [state.recipient_id.toHexString(), state]))
-    }
-
-    const counts = await this.databaseService.notifications
-      .aggregate<{ _id: ObjectId; unread_count: number }>(
-        [
-          {
-            $match: {
-              recipient_id: { $in: recipientIds },
-              is_read: false,
-              invalidated_at: null
-            }
-          },
-          { $group: { _id: '$recipient_id', unread_count: { $sum: 1 } } }
-        ],
-        { session: options.session }
-      )
+    const states = await this.databaseService.notificationStates
+      .find({ recipient_id: { $in: recipientIds } }, { session: options.session })
       .toArray()
-    const countByRecipient = new Map(counts.map((item) => [item._id.toHexString(), item.unread_count]))
-    return new Map(
-      recipientIds.map((recipientId) => [
-        recipientId.toHexString(),
-        {
-          recipient_id: recipientId,
-          unread_count: countByRecipient.get(recipientId.toHexString()) ?? 0,
-          version: 0,
-          updated_at: now
-        }
-      ])
-    )
+    return new Map(states.map((state) => [state.recipient_id.toHexString(), state]))
   }
 
   async get(recipientId: ObjectId, session?: ClientSession): Promise<NotificationUnreadSnapshot> {
-    if (envConfig.features.notificationUnreadStateEnabled) {
-      const state = await this.databaseService.notificationStates.findOne({ recipient_id: recipientId }, { session })
-      if (state) return state
-    }
-
-    const unreadCount = await this.databaseService.notifications.countDocuments(
-      { recipient_id: recipientId, is_read: false, invalidated_at: null },
-      { session }
-    )
-    return { recipient_id: recipientId, unread_count: unreadCount, version: 0, updated_at: new Date() }
+    const state = await this.databaseService.notificationStates.findOne({ recipient_id: recipientId }, { session })
+    return state ?? { recipient_id: recipientId, unread_count: 0, version: 0, updated_at: new Date(0) }
   }
 
   async reconcile(recipientId: ObjectId, now: Date, session?: ClientSession): Promise<NotificationUnreadSnapshot> {
@@ -173,6 +134,6 @@ export class NotificationUnreadService {
       { upsert: true, returnDocument: 'after', session: options.session }
     )
     if (!state) throw new Error('Notification unread mutation returned no state')
-    return envConfig.features.notificationUnreadStateEnabled ? state : this.get(recipientId, options.session)
+    return state
   }
 }

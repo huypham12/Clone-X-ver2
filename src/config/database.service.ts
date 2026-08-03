@@ -112,7 +112,6 @@ export default class DatabaseService {
   }
 
   private async verifyNotificationLifecycleBaseline(): Promise<void> {
-    if (!envConfig.features.notificationOutboxEnabled) return
     const [legacyNotification, notification, actor, state, orphanActor, orphanState, missingState, actorlessAggregate] =
       await Promise.all([
       this.notifications.findOne({ schema_version: { $ne: 2 } }, { projection: { _id: 1 } }),
@@ -186,7 +185,7 @@ export default class DatabaseService {
       actorlessAggregate
     ) {
       throw new Error(
-        'Notification lifecycle baseline is incompatible; reset notifications, notificationActors and notificationStates together before enabling the v2 outbox'
+        'Notification read-state/lifecycle baseline is incompatible; reset notifications, notificationActors and notificationStates together'
       )
     }
   }
@@ -216,11 +215,7 @@ export default class DatabaseService {
 
   private async indexFollowers() {
     const followerIndexName = 'follow_user_id_1_followed_user_id_1'
-    const legacyFollowerIndexName = 'user_id_1_followed_user_id_1'
-    const [hasFollowerIndex, hasLegacyFollowerIndex] = await Promise.all([
-      this.indexExistsSafely(this.followers, followerIndexName),
-      this.indexExistsSafely(this.followers, legacyFollowerIndexName)
-    ])
+    const hasFollowerIndex = await this.indexExistsSafely(this.followers, followerIndexName)
 
     if (!hasFollowerIndex) {
       const duplicateGroups = await this.followers
@@ -260,11 +255,6 @@ export default class DatabaseService {
           }
         }
       )
-    }
-
-    if (hasLegacyFollowerIndex) {
-      console.log('Removing legacy followers index...')
-      await this.followers.dropIndex(legacyFollowerIndexName)
     }
 
     await this.followers.createIndex(

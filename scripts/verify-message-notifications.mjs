@@ -6,7 +6,6 @@ import { Server } from 'socket.io'
 process.env.NOTIFICATION_OUTBOX_ENABLED = 'true'
 process.env.NOTIFICATION_MESSAGE_DIRECTED_ENABLED = 'true'
 process.env.NOTIFICATION_MESSAGE_REACTION_ENABLED = 'true'
-process.env.NOTIFICATION_UNREAD_STATE_ENABLED = 'true'
 
 const require = createRequire(import.meta.url)
 const { databaseService } = require('../dist/config/database.service.js')

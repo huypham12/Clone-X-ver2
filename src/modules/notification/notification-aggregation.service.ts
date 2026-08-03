@@ -202,6 +202,7 @@ export class NotificationAggregationService {
       aggregation_key: command.aggregation_key,
       aggregation_active: true,
       read_at: null,
+      unread_since: new Date(),
       created_at: command.occurred_at,
       updated_at: command.occurred_at,
       invalidated_at: null,

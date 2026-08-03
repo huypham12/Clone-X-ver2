@@ -82,7 +82,6 @@ interface EnvConfig {
     notificationOutboxEnabled: boolean
     notificationFollowOutboxEnabled: boolean
     notificationTweetOutboxEnabled: boolean
-    notificationUnreadStateEnabled: boolean
     notificationSocialAggregationEnabled: boolean
     notificationMessageDirectedEnabled: boolean
     notificationMessageReactionEnabled: boolean
@@ -237,15 +236,14 @@ export const envConfig: EnvConfig = {
     url: getEnvVar('REDIS_URL', false, 'redis://localhost:6379')
   },
   features: {
-    notificationOutboxEnabled: getBooleanEnvVar('NOTIFICATION_OUTBOX_ENABLED', false),
-    notificationFollowOutboxEnabled: getBooleanEnvVar('NOTIFICATION_FOLLOW_OUTBOX_ENABLED', false),
-    notificationTweetOutboxEnabled: getBooleanEnvVar('NOTIFICATION_TWEET_OUTBOX_ENABLED', false),
-    notificationUnreadStateEnabled: getBooleanEnvVar('NOTIFICATION_UNREAD_STATE_ENABLED', false),
-    notificationSocialAggregationEnabled: getBooleanEnvVar('NOTIFICATION_SOCIAL_AGGREGATION_ENABLED', false),
-    notificationMessageDirectedEnabled: getBooleanEnvVar('NOTIFICATION_MESSAGE_DIRECTED_ENABLED', false),
-    notificationMessageReactionEnabled: getBooleanEnvVar('NOTIFICATION_MESSAGE_REACTION_ENABLED', false),
-    notificationGroupManagementEnabled: getBooleanEnvVar('NOTIFICATION_GROUP_MANAGEMENT_ENABLED', false),
-    notificationFollowedTweetEnabled: getBooleanEnvVar('NOTIFICATION_FOLLOWED_TWEET_ENABLED', false)
+    notificationOutboxEnabled: getBooleanEnvVar('NOTIFICATION_OUTBOX_ENABLED', true),
+    notificationFollowOutboxEnabled: getBooleanEnvVar('NOTIFICATION_FOLLOW_OUTBOX_ENABLED', true),
+    notificationTweetOutboxEnabled: getBooleanEnvVar('NOTIFICATION_TWEET_OUTBOX_ENABLED', true),
+    notificationSocialAggregationEnabled: getBooleanEnvVar('NOTIFICATION_SOCIAL_AGGREGATION_ENABLED', true),
+    notificationMessageDirectedEnabled: getBooleanEnvVar('NOTIFICATION_MESSAGE_DIRECTED_ENABLED', true),
+    notificationMessageReactionEnabled: getBooleanEnvVar('NOTIFICATION_MESSAGE_REACTION_ENABLED', true),
+    notificationGroupManagementEnabled: getBooleanEnvVar('NOTIFICATION_GROUP_MANAGEMENT_ENABLED', true),
+    notificationFollowedTweetEnabled: getBooleanEnvVar('NOTIFICATION_FOLLOWED_TWEET_ENABLED', true)
   },
   conversation: {
     maxGroupMembers: getPositiveIntegerEnvVar('MAX_GROUP_MEMBERS', 500)

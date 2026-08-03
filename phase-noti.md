@@ -538,7 +538,7 @@ route validator → validatedData → controller → query limit+1 → slice lim
 
 ## Phase 3 — Notification schema v2 và index additive
 
-**Trạng thái: Đã triển khai, chờ xác minh gate runtime.**
+**Trạng thái: Đã hoàn thành.**
 
 **Mục tiêu**
 
@@ -621,7 +621,7 @@ GET notifications → decode cursor được hỗ trợ → query immutable tupl
 
 ## Phase 4 — Tách repository, query/policy và realtime delivery
 
-**Trạng thái: Đã triển khai, chờ xác minh gate runtime.**
+**Trạng thái: Đã hoàn thành.**
 
 **Mục tiêu**
 
@@ -855,7 +855,7 @@ transaction writes outbox → publisher lease → queue(jobId=event_id) → work
 
 ## Phase 7 — Follow notification đúng nghiệp vụ
 
-**Trạng thái: Đã triển khai, chờ xác minh gate runtime.**
+**Trạng thái: Đã hoàn thành.**
 
 **Mục tiêu**
 
@@ -928,7 +928,7 @@ follow transaction → relation + counters + UserFollowed outbox → worker rech
 
 ## Phase 8 — Reply, Quote và Mention tweet cá nhân
 
-**Trạng thái: Đã triển khai, chờ xác minh gate runtime.**
+**Trạng thái: Đã hoàn thành.**
 
 **Mục tiêu**
 
@@ -1005,7 +1005,7 @@ create/update tweet transaction → TweetCreated/TweetMentionsChanged → policy
 
 ## Phase 9 — Notification unread state và đồng bộ multi-device
 
-**Trạng thái: Đã triển khai, chờ xác minh gate runtime.**
+**Trạng thái: Đã hoàn thành.**
 
 **Mục tiêu**
 
@@ -1734,18 +1734,23 @@ target/user lifecycle outbox → lifecycle policy → invalidate individual/remo
 
 ---
 
-## Phase 18 — Release audit, observability và dọn compatibility có điều kiện
+## Phase 18 — Backend final audit và frontend contract handoff
 
-**Trạng thái: Chưa triển khai.**
+**Trạng thái: Đã hoàn thành.**
 
 **Mục tiêu**
 
-Khóa chất lượng toàn hệ thống, cung cấp vận hành/replay và loại legacy source sau khi frontend đã áp dụng contract mới; không giữ dữ liệu local cũ.
+Khóa chất lượng backend notification sau khi hoàn thành Phase 1–17, đồng bộ source code với tài liệu và bàn giao một contract đủ rõ để frontend triển khai độc lập.
+
+Phase này chỉ xác nhận backend ở phạm vi local/test và contract-ready cho frontend; không tuyên bố production-ready hoặc runtime-verified. Không xây thêm production tooling, migration hay cơ chế bảo toàn dữ liệu local cũ.
 
 **Phạm vi chức năng**
 
-1. Audit reliability/security/performance và observability.
-2. Chuyển trực tiếp khỏi countDocuments/read_by/direct legacy paths sau local reset.
+1. Audit kiến trúc, dependency boundary, idempotency và security/privacy bằng source code.
+2. Xác nhận không còn runtime business path bypass typed event/outbox/handler pipeline.
+3. Chuẩn hóa logging tối thiểu phục vụ debug local, không thêm metrics/monitoring framework.
+4. Audit source of truth giữa code, schema/index, REST, Socket.IO và tài liệu.
+5. Hoàn thiện contract bàn giao frontend và giữ compatibility hiện tại.
 
 **Phụ thuộc**
 
@@ -1753,63 +1758,112 @@ Khóa chất lượng toàn hệ thống, cung cấp vận hành/replay và lo�
 
 **File tạo mới**
 
-- `src/modules/notification/notification-reconciliation.service.ts`: rebuild/check unread, aggregate count và outbox status.
-- `src/modules/notification/notification-replay.service.ts`: replay dead-letter theo event id/range có guard.
-- Không tạo test framework mặc định; test file chỉ thêm sau quyết định riêng.
+- Không bắt buộc.
+- Không tạo `notification-reconciliation.service.ts`, `notification-replay.service.ts`, admin endpoint hoặc scheduled job mới chỉ để phục vụ production.
+- Chỉ tách file mới nếu audit phát hiện boundary hiện tại sai hoặc coupling cần sửa để contract backend nhất quán.
 
 **File sửa**
 
-- `src/modules/notification/*`: structured log gồm event_id/type/recipient/job attempt/latency; không log content/token.
-- `src/modules/events/outbox.publisher.ts`, worker/fanout worker: queue lag/dead-letter/retry metrics hoặc structured counters.
-- `src/config/getEnvConfig.ts`: feature flags rõ default.
-- `src/config/database.service.ts`: final index audit; không auto-drop legacy index.
-- `src/schemas/Message.schema.ts`, conversation read service: không dùng `read_by` làm source hoặc dual-write.
-- `src/app.ts`: health/readiness kiểm tra DB/Redis/worker mà không expose dữ liệu nhạy cảm.
+- `src/modules/notification/*`: audit policy/handler/repository/query/aggregation/unread/lifecycle/delivery; chỉ bổ sung structured log còn thiếu gồm event_id, event_type, handler outcome, job attempt và latency.
+- `src/modules/events/*`, notification/fanout worker: audit outbox publish/claim/retry/dead-letter/idempotency và các replay primitive đã được Phase 6 cam kết; không thêm range replay hoặc metrics framework.
+- `src/modules/user/*`, `src/modules/tweet/*`, `src/modules/conversation/*`, socket handlers liên quan: xóa runtime caller còn bypass pipeline hoặc direct generic notification path.
+- `src/config/getEnvConfig.ts`: audit feature flag, default và flag đã chết; không để legacy/new writer chạy song song cùng intent.
+- `src/config/database.service.ts`: đối chiếu final index definition với bootstrap; không auto-drop hoặc rebuild index.
+- `src/schemas/Message.schema.ts`, conversation read service: xác nhận không đọc hoặc dual-write `read_by`; có thể bỏ field khỏi dữ liệu local sau reset nếu code không còn cần compatibility payload.
+- `src/app.ts`: audit startup/shutdown và dependency initialization hiện có; chỉ yêu cầu Redis/worker khi feature tương ứng được bật, không bắt buộc thêm readiness framework mới.
 - `eslint.config.mjs`: ignore build artifacts để backend lint phản ánh source thay vì `dist`, nếu vẫn đúng với config lúc triển khai.
-- `endpoint.md`, `swagger.yaml`, `README.md`, `package.json`: contract, scripts audit/replay/build.
+- `endpoint.md`, `swagger.yaml`, `README.md`, `package.json`: đồng bộ contract và script build/audit hiện có; không thêm script production chỉ để hoàn thành phase.
 - `phase-noti.md`: chỉ cập nhật trạng thái sau khi gate thật đạt.
 
 **Schema và index**
 
 - Không schema mới mặc định.
-- Audit explain cho notification feed/unread/aggregate/outbox/fanout/read-state.
-- Processed outbox retention chỉ được bật sau khi chốt thời gian vận hành; dead_letter không TTL.
-- `Message.read_by` có thể bỏ khỏi dữ liệu local ngay khi reset; REST/socket legacy chỉ giữ các field frontend thực sự dùng.
+- Audit tĩnh schema/index cho notification feed, unread state, aggregate actor, outbox, fanout và conversation read-state; xác nhận bootstrap có đủ index đã khai báo.
+- Không thêm TTL/retention/migration. `dead_letter` và dữ liệu local có thể được reset thủ công theo phạm vi phát triển hiện tại.
+- Không dùng `countDocuments` làm runtime fallback cho notification unread và không dùng `Message.read_by` làm source hoặc dual-write.
 
 **Luồng xử lý sau phase**
 
 ```text
-health/audit → detect drift → reconciliation/replay idempotent → normal worker/delivery
+backend source audit → sửa boundary/legacy path còn sai → đồng bộ contract/tài liệu → frontend handoff
 ```
 
-**Quy tắc nghiệp vụ và edge case**
+**Backend architecture audit**
 
-- Reconciliation không emit hàng loạt nếu chỉ sửa counter; event sync count có version sau commit.
-- Replay phải giữ original event_id/dedup keys.
-- Không replay dead-letter target đã xóa/block mà bypass policy.
-- Feature flags không cho legacy và new writer chạy song song cùng intent.
+- Không còn runtime caller gọi trực tiếp `NotificationService.createNotification()` ngoài compatibility entry point nội bộ đã được đánh dấu deprecated và không có business caller.
+- Mọi notification-producing intent đi theo pipeline:
+
+```text
+business mutation → typed domain event + transactional outbox → publisher/worker
+→ handler/policy → repository + unread state trong transaction → delivery sau commit
+```
+
+- Business service chỉ phát typed domain event; handler/policy chịu trách nhiệm map recipient, NotificationType, dedupe, aggregation và suppression.
+- Repository không emit socket; delivery không quyết định recipient hoặc chứa business policy; policy không persistence.
+- Generic message không tạo activity notification item; message delivery và inbox unread là channel/state riêng.
+- Không còn circular import/runtime dependency giữa notification với Tweet/User/Conversation; dependency ngược chỉ đi qua typed event hoặc interface đã chốt.
+- Retry/dedup/replay primitive giữ original event_id/source key và luôn đi lại qua policy; không có đường bypass block, lifecycle hoặc idempotency guard.
+
+**Notification và read-state audit**
+
+- Notification document/item là dữ liệu bền để đối chiếu trạng thái đọc; `NotificationState` là nguồn runtime duy nhất phục vụ notification unread count và không fallback sang `countDocuments`.
+- `NotificationActor` chỉ giữ source edge phục vụ aggregation; một aggregate nhiều actor vẫn tính một unread item.
+- `ConversationReadState` và `UserMessageState` là nguồn runtime cho read position/unread summary; `Message.read_by` không được đọc hoặc dual-write.
+- Notification/unread mutation giữ cùng transaction; emit chỉ chạy sau commit.
+- Audit các reconciliation command/primitives tối thiểu đã được Phase 9/12 cam kết và replay-by-event-id primitive đã được Phase 6 cam kết; Phase 18 không mở rộng chúng thành production service, scheduler, range tool hoặc admin API.
+
+**Source of truth audit**
+
+Đối chiếu `phase-noti.md`, `endpoint.md`, `swagger.yaml`, `README.md`, schema/index, NotificationType, domain event variant, Socket.IO event, DTO, validator và REST response để xác nhận:
+
+- Không có endpoint/event/type được tài liệu hóa nhưng không tồn tại trong code hoặc có trong code nhưng thiếu contract.
+- Không còn NotificationType, feature flag, DTO, enum, helper hoặc compatibility path đã chết sau Phase 1–17.
+- Field frontend được phép phụ thuộc và field backend-only được phân biệt rõ; ví dụ payload không buộc frontend suy luận từ internal outbox/actor/read-state fields.
+- Tài liệu mô tả đúng aggregation window, pagination cursor, unread semantics, mark-one/read-all, reconnect/refresh và error contract.
+
+**Frontend handoff**
+
+- Chốt danh sách REST endpoint, request/response/error và pagination contract.
+- Chốt Socket.IO event, room/audience, payload và thứ tự REST reconcile sau reconnect.
+- Chốt NotificationType, individual/aggregate behavior, unread count, mark read, mark all và lifecycle updated/removed behavior.
+- Ghi rõ field public ổn định, field additive/nullable và field chỉ dùng nội bộ backend.
+- Frontend có thể triển khai từ `endpoint.md`/`swagger.yaml`/README mà không phải đọc source để suy luận hành vi.
 
 **Tương thích và dữ liệu local**
 
-- REST/socket compatibility chỉ được bỏ trong kế hoạch khác sau khi frontend đã áp dụng contract mới.
-- `@notification:new`, notification endpoints và legacy fields vẫn được giữ sau Phase 18.
+- Giữ REST endpoint, Socket.IO event và legacy response field ở mục 10; đặc biệt `@notification:new` vẫn emit raw Notification object ở top-level.
+- Không cleanup public compatibility chỉ vì backend nội bộ không còn dùng. Việc bỏ field/endpoint/event chỉ thuộc kế hoạch khác sau khi frontend triển khai và xác nhận không phụ thuộc.
+- Có thể reset collection local bị ảnh hưởng; không viết migration/backfill/reconciliation để bảo toàn dữ liệu test cũ.
+
+**Không triển khai trong phase này**
+
+- Generalized reconciliation/rebuild service, generalized dead-letter/range replay tool, admin API hoặc scheduled repair job mới.
+- Load test, benchmark/SLA, fault injection, kill/restart matrix hoặc multi-instance runtime verification.
+- Metrics framework, dashboard, tracing platform, alerting hoặc production health/readiness framework mới.
+- Production migration, processed-outbox retention/TTL hoặc kế hoạch bảo toàn dữ liệu cũ.
+- Frontend page, badge component, client cache/socket hook hoặc cleanup public compatibility.
 
 **Kiểm thử**
 
-- Full build/typecheck/targeted lint; Swagger parse.
-- Load, race, multi-instance, retry, reconnect, privacy và local-reset checklist mục 13.
-- Verify rollback từng release milestone.
+- `npx tsc --noEmit`, `npm run build`, targeted/full source lint phù hợp config hiện tại và Swagger parse.
+- Static audit caller/import/dependency, feature flag, schema/index bootstrap, ownership query, REST/Socket contract và code thừa.
+- Security/privacy vẫn phải được review tĩnh: recipient scope, mark ownership, block policy, lifecycle hydration và sensitive logging.
+- Runtime, concurrency, load, fault injection và multi-instance test được ghi là chưa chạy/deferred; chúng không phải gate Phase 18 trong phạm vi local hiện tại.
 
 **Gate hoàn thành**
 
-- Không duplicate/lost state trong fault-injection matrix đã chốt.
-- Reconciliation báo zero drift sau full scenario; replay event không duplicate.
-- Explain dùng đúng index và benchmark đạt SLA được ghi nhận.
-- Tất cả compatibility contract mục 10 vẫn pass.
+- Typecheck/build/lint được chọn và Swagger parse pass, hoặc baseline lỗi ngoài phạm vi được ghi rõ bằng bằng chứng.
+- Static audit xác nhận không còn runtime business caller bypass notification pipeline hoặc direct generic notification path.
+- Boundary giữa business event, policy, repository, unread state và delivery thống nhất; không có circular runtime dependency ngoài interface/event boundary đã chốt.
+- Notification/read-state source of truth, replay/reconciliation primitive kế thừa và feature flag khớp code thực tế, không tuyên bố những runtime scenario chưa được chạy.
+- `endpoint.md`, `swagger.yaml`, README, enum/type/DTO và REST/Socket implementation đồng bộ; compatibility contract mục 10 vẫn được giữ.
+- Frontend có đủ contract về payload, aggregation, pagination, unread/read, reconnect, lifecycle và error để triển khai mà không cần suy luận từ source.
+- Chỉ cập nhật trạng thái Phase 18 sau khi các gate local/static trên đạt; production/runtime checklist deferred không chặn handoff này.
 
 **Rollback**
 
-- Re-enable feature flag cần thiết và reset dữ liệu local nếu schema không còn tương thích. Observability/reconciliation code có thể giữ vì read-only/idempotent.
+- Revert các cleanup/audit change làm sai contract; bật lại feature flag tương ứng nếu một legacy internal path vẫn cần thiết.
+- Reset dữ liệu local nếu thay đổi schema/index ngoài dự kiến; không yêu cầu migration, replay hay reconciliation để cứu dữ liệu test cũ.
 
 ## 6. Bảng dependency giữa các phase
 
@@ -1832,7 +1886,7 @@ health/audit → detect drift → reconciliation/replay idempotent → normal wo
 | 15 Group events/admin        | 11–13                      | 17–18                  |
 | 16 Followed tweet fan-out    | 6–9, 7–8                   | 17–18                  |
 | 17 Lifecycle/privacy/cleanup | 7–16                       | 18                     |
-| 18 Release audit             | 1–17                       | Không có               |
+| 18 Backend final audit/handoff | 1–17                       | Không có               |
 
 Thay đổi thứ tự so với gợi ý ban đầu: NotificationState nằm trước aggregation vì aggregate read/new-actor transition không thể có gate đo được nếu unread vẫn chỉ là `countDocuments` rời rạc.
 
@@ -1968,11 +2022,13 @@ Event additive:
 5. **Release E — Message foundation:** Phase 11–12. Chuyển thẳng command/read path sau khi reset messages/read-state; không dual-write `read_by`.
 6. **Release F — Directed message/group:** Phase 13–15. Từng handler/system message có flag; existing conversation socket contract giữ nguyên.
 7. **Release G — Tweet fan-out:** Phase 16. Queue độc lập có thể pause mà không ảnh hưởng tweet creation.
-8. **Release H — Lifecycle/final:** Phase 17–18. Reset notification local trước khi bật lifecycle v2; rollback bằng feature flag và reset lại dữ liệu test khi cần.
+8. **Release H — Lifecycle/backend handoff:** Phase 17–18. Reset notification local trước khi bật lifecycle v2; Phase 18 audit code/contract và bàn giao frontend, rollback bằng feature flag hoặc reset lại dữ liệu test khi cần.
 
 Mỗi milestone phải nằm trong commit/nhóm commit riêng và ghi rõ feature flag/default, collection local cần reset, lệnh bootstrap/index, rollback code và compatibility snapshot.
 
 ## 13. Checklist nghiệm thu toàn hệ thống
+
+Checklist dưới đây giữ lại các scenario mong muốn của toàn hệ thống để dùng khi integration/runtime hoặc chuẩn bị production về sau. Trong phạm vi local hiện tại, Phase 18 chỉ bị chặn bởi **Backend handoff gate** ở cuối mục này và gate riêng của Phase 18; các mục load/fault/multi-instance/benchmark chưa chạy phải được ghi là deferred, không được mô tả là đã pass.
 
 ### Foundation và contract
 
@@ -2028,10 +2084,12 @@ Mỗi milestone phải nằm trong commit/nhóm commit riêng và ghi rõ featur
 - [ ] Query explain dùng index notification/unread/actor/outbox/read-state.
 - [ ] Group max supported và fan-out 10.000 opt-in recipients đạt benchmark/SLA được ghi nhận.
 
-### Release gate
+### Backend handoff gate (Phase 18 local)
 
 - [ ] `npx tsc --noEmit`, `npm run build`, targeted/full source lint và Swagger parse pass hoặc baseline lỗi ngoài phạm vi được chứng minh.
 - [ ] Mọi thay đổi schema/index ghi rõ collection local cần reset; bootstrap/index chạy lại an toàn trên database sạch.
 - [ ] Feature flag không cho legacy/new writer chạy song song.
-- [ ] `endpoint.md`, `swagger.yaml` và tài liệu vận hành khớp code thật.
-- [ ] Chỉ sau toàn bộ checklist mới được đánh dấu Phase 18 và kế hoạch notification hoàn thành.
+- [ ] Static audit xác nhận không còn runtime business caller bypass pipeline; ownership/privacy scope và dependency boundary khớp thiết kế.
+- [ ] `endpoint.md`, `swagger.yaml`, README và frontend handoff contract khớp code thật.
+- [ ] Runtime/load/fault/multi-instance/benchmark chưa chạy được ghi rõ là deferred, không bị suy diễn thành production-ready.
+- [ ] Chỉ sau backend handoff gate và gate riêng của Phase 18 mới được đánh dấu Phase 18 hoàn thành; checklist runtime deferred không chặn trạng thái local/contract-ready.

@@ -16,7 +16,7 @@ import {
 import { NotificationAggregationService } from './notification-aggregation.service'
 import { NotificationDeliveryService } from './notification-delivery.service'
 import { NotificationEventHandler } from './notification-event.handler'
-import type { NotificationEventHandlerResult } from './notification-event.type'
+import { countNotificationMutations, type NotificationEventHandlerResult } from './notification-event.type'
 import { NotificationPolicyService } from './notification-policy.service'
 import { NotificationRepository } from './notification.repository'
 
@@ -56,14 +56,21 @@ export class NotificationFanoutWorker {
   private async process(
     job: Job<NotificationFanoutJobData, NotificationFanoutJobResult>
   ): Promise<NotificationFanoutJobResult> {
+    const startedAt = Date.now()
+    const attempt = job.attemptsMade + 1
     const session = this.databaseService.startSession()
     let handlerResult: NotificationEventHandlerResult | undefined
     let processedRecipients = 0
     let continuationEnqueued = false
+    let continuationCursor: string | undefined
     try {
       await session.withTransaction(async () => {
+        continuationCursor = undefined
         const stored = await this.outboxRepository.findByEventId(job.data.event_id, { session })
         if (!stored) throw new Error(`Fanout source event not found: ${job.data.event_id}`)
+        if (stored.status !== 'processed') {
+          throw new Error(`Fanout source event is not processed yet: ${job.data.event_id}`)
+        }
         const parsed = parseDomainEvent({
           event_id: stored.event_id,
           type: stored.type,
@@ -117,20 +124,42 @@ export class NotificationFanoutWorker {
         if (relations.length > NOTIFICATION_FANOUT_BATCH_SIZE) {
           const cursor = batch.at(-1)?._id.toHexString()
           if (!cursor) throw new Error('Fanout continuation cursor is missing')
-          await notificationFanoutQueue.add(
-            NOTIFICATION_FANOUT_JOB_NAME,
-            { event_id: event.event_id, after_relation_id: cursor },
-            { jobId: createNotificationFanoutJobId(event.event_id, cursor) }
-          )
-          continuationEnqueued = true
+          continuationCursor = cursor
         }
       })
       if (handlerResult) this.eventHandler.deliverAfterCommit(handlerResult)
-      return {
+      if (continuationCursor) {
+        await notificationFanoutQueue.add(
+          NOTIFICATION_FANOUT_JOB_NAME,
+          { event_id: job.data.event_id, after_relation_id: continuationCursor },
+          { jobId: createNotificationFanoutJobId(job.data.event_id, continuationCursor) }
+        )
+        continuationEnqueued = true
+      }
+      const result = {
         event_id: job.data.event_id,
         processed_recipients: processedRecipients,
         continuation_enqueued: continuationEnqueued
       }
+      console.info('notification_fanout_batch_processed', {
+        event_id: job.data.event_id,
+        event_type: DomainEventType.TweetCreated,
+        attempt,
+        processed_recipients: processedRecipients,
+        continuation_enqueued: continuationEnqueued,
+        mutation_count: countNotificationMutations(handlerResult),
+        latency_ms: Date.now() - startedAt
+      })
+      return result
+    } catch (error: unknown) {
+      console.error('notification_fanout_batch_failed', {
+        event_id: job.data.event_id,
+        event_type: DomainEventType.TweetCreated,
+        attempt,
+        latency_ms: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error)
+      })
+      throw error
     } finally {
       await session.endSession()
     }

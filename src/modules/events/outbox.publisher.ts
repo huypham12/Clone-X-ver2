@@ -112,6 +112,7 @@ export class OutboxQueuePublisher {
   }
 
   async replay(eventId: string): Promise<boolean> {
+    const startedAt = Date.now()
     const job = await this.queue.getJob(eventId)
     if (job) {
       const state = await job.getState()
@@ -124,13 +125,23 @@ export class OutboxQueuePublisher {
     if (claimed && !(await this.enqueueClaimed(eventId))) {
       throw new Error(`Could not enqueue replayed notification event ${eventId}`)
     }
+    console.info('notification_outbox_replay_requested', {
+      event_id: eventId,
+      outcome: claimed ? 'scheduled' : 'not_found',
+      latency_ms: Date.now() - startedAt
+    })
     return claimed !== null
   }
 
   private async enqueueClaimed(eventId: string): Promise<boolean> {
+    const startedAt = Date.now()
     try {
       await this.queue.add(NOTIFICATION_JOB_NAME, { event_id: eventId }, { jobId: eventId })
       await this.repository.markPublished(eventId, this.lockedBy, new Date())
+      console.info('notification_outbox_enqueued', {
+        event_id: eventId,
+        latency_ms: Date.now() - startedAt
+      })
       return true
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
@@ -140,6 +151,11 @@ export class OutboxQueuePublisher {
         new Date(Date.now() + ENQUEUE_RETRY_DELAY_MS),
         message
       )
+      console.error('notification_outbox_enqueue_failed', {
+        event_id: eventId,
+        latency_ms: Date.now() - startedAt,
+        error: message
+      })
       return false
     }
   }

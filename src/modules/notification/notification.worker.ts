@@ -9,7 +9,7 @@ import {
 } from '~/queues/notification.queue'
 import DatabaseService, { databaseService as sharedDatabaseService } from '~/config/database.service'
 import { NotificationEventHandler } from './notification-event.handler'
-import type { NotificationEventHandlerResult } from './notification-event.type'
+import { countNotificationMutations, type NotificationEventHandlerResult } from './notification-event.type'
 import { NotificationRepository } from './notification.repository'
 import { NotificationPolicyService } from './notification-policy.service'
 import { NotificationDeliveryService } from './notification-delivery.service'
@@ -95,13 +95,39 @@ export class NotificationWorker {
   }
 
   private async process(job: Job<NotificationJobData, NotificationJobResult>): Promise<NotificationJobResult> {
+    const startedAt = Date.now()
+    const attempt = job.attemptsMade + 1
     let handlerResult: NotificationEventHandlerResult | undefined
     let alreadyProcessed = false
+    let eventType: string | undefined
+    let fanoutEventId: string | undefined
     const session = this.databaseService.startSession()
     try {
       await session.withTransaction(async () => {
         const outboxEvent = await this.outboxRepository.findByEventId(job.data.event_id, { session })
         if (!outboxEvent) throw new Error(`Outbox event not found: ${job.data.event_id}`)
+        eventType = outboxEvent.type
+        if (
+          envConfig.features.notificationFollowedTweetEnabled &&
+          outboxEvent.type === DomainEventType.TweetCreated
+        ) {
+          const event = parseDomainEvent({
+            event_id: outboxEvent.event_id,
+            type: outboxEvent.type,
+            aggregate_type: outboxEvent.aggregate_type,
+            aggregate_id: outboxEvent.aggregate_id,
+            actor_id: outboxEvent.actor_id,
+            payload: outboxEvent.payload,
+            occurred_at: outboxEvent.occurred_at
+          })
+          if (
+            event.type === DomainEventType.TweetCreated &&
+            event.payload.tweet_type === TweetType.Tweet &&
+            event.payload.audience === TweetAudience.Everyone
+          ) {
+            fanoutEventId = event.event_id
+          }
+        }
         if (outboxEvent.status === 'processed') {
           alreadyProcessed = true
           return
@@ -122,41 +148,46 @@ export class NotificationWorker {
           },
           { session, deliver: false }
         )
-        if (
-          envConfig.features.notificationFollowedTweetEnabled &&
-          outboxEvent.type === DomainEventType.TweetCreated
-        ) {
-          const event = parseDomainEvent({
-            event_id: outboxEvent.event_id,
-            type: outboxEvent.type,
-            aggregate_type: outboxEvent.aggregate_type,
-            aggregate_id: outboxEvent.aggregate_id,
-            actor_id: outboxEvent.actor_id,
-            payload: outboxEvent.payload,
-            occurred_at: outboxEvent.occurred_at
-          })
-          if (
-            event.type === DomainEventType.TweetCreated &&
-            event.payload.tweet_type === TweetType.Tweet &&
-            event.payload.audience === TweetAudience.Everyone
-          ) {
-            await notificationFanoutQueue.add(
-              NOTIFICATION_FANOUT_JOB_NAME,
-              { event_id: event.event_id },
-              { jobId: createNotificationFanoutJobId(event.event_id) }
-            )
-          }
+        if (!fanoutEventId) {
+          const marked = await this.outboxRepository.markProcessed(outboxEvent.event_id, new Date(), { session })
+          if (!marked) throw new Error(`Could not mark outbox event processed: ${outboxEvent.event_id}`)
         }
-        const marked = await this.outboxRepository.markProcessed(outboxEvent.event_id, new Date(), { session })
-        if (!marked) throw new Error(`Could not mark outbox event processed: ${outboxEvent.event_id}`)
       })
 
       if (handlerResult) this.eventHandler.deliverAfterCommit(handlerResult)
-      return { event_id: job.data.event_id, status: alreadyProcessed ? 'already_processed' : 'processed' }
+      if (fanoutEventId) {
+        await notificationFanoutQueue.add(
+          NOTIFICATION_FANOUT_JOB_NAME,
+          { event_id: fanoutEventId },
+          { jobId: createNotificationFanoutJobId(fanoutEventId) }
+        )
+        if (!alreadyProcessed) {
+          const marked = await this.outboxRepository.markProcessed(fanoutEventId, new Date())
+          if (!marked) throw new Error(`Could not mark fanout source event processed: ${fanoutEventId}`)
+        }
+      }
+      const status = alreadyProcessed ? 'already_processed' : 'processed'
+      console.info('notification_event_processed', {
+        event_id: job.data.event_id,
+        event_type: eventType,
+        attempt,
+        outcome: alreadyProcessed ? 'already_processed' : (handlerResult?.status ?? 'no_notification_intent'),
+        mutation_count: countNotificationMutations(handlerResult),
+        latency_ms: Date.now() - startedAt
+      })
+      return { event_id: job.data.event_id, status }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
-      const deadLetter = job.attemptsMade + 1 >= NOTIFICATION_JOB_ATTEMPTS
+      const deadLetter = attempt >= NOTIFICATION_JOB_ATTEMPTS
       await this.outboxRepository.recordProcessingFailure(job.data.event_id, message, deadLetter)
+      console.error('notification_event_failed', {
+        event_id: job.data.event_id,
+        event_type: eventType,
+        attempt,
+        dead_letter: deadLetter,
+        latency_ms: Date.now() - startedAt,
+        error: message
+      })
       throw error
     } finally {
       await session.endSession()

@@ -1,6 +1,6 @@
 import { ObjectId } from 'mongodb'
 import { z } from 'zod'
-import { validate } from '~/modules/user/user.validator'
+import { validate } from '~/utils/validate'
 import { isNotificationCursor } from './notification-cursor'
 
 const objectIdString = z.string().refine((value) => ObjectId.isValid(value), {

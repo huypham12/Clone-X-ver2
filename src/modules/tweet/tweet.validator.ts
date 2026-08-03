@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express'
 import { z } from 'zod'
-import { validate } from '~/modules/user/user.validator'
+import { validate } from '~/utils/validate'
 import { TweetAudience, TweetType } from '~/constants/enums'
 import { ObjectId } from 'mongodb'
 

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { validate } from '~/modules/user/user.validator'
+import { validate } from '~/utils/validate'
 import { ObjectId } from 'mongodb'
 import { isMessageReactionEmoji } from './dto'
 import { envConfig } from '~/config/getEnvConfig'

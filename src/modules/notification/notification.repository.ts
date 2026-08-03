@@ -26,6 +26,7 @@ export interface MarkAllNotificationsReadResult {
 }
 
 export interface NotificationReadAllCutoff {
+  unread_since: Date
   created_at: Date
   _id: ObjectId
 }
@@ -67,6 +68,7 @@ export class NotificationRepository {
       deduplication_key: intent.deduplication_key,
       aggregation_active: false,
       read_at: null,
+      unread_since: new Date(),
       created_at: intent.occurred_at,
       updated_at: intent.occurred_at,
       invalidated_at: null,
@@ -99,6 +101,7 @@ export class NotificationRepository {
               context: intent.context,
               is_read: false,
               read_at: null,
+              unread_since: new Date(),
               invalidated_at: null,
               updated_at: intent.occurred_at
             }
@@ -180,6 +183,7 @@ export class NotificationRepository {
                 deduplication_key: intent.deduplication_key,
                 aggregation_active: false,
                 read_at: null,
+                unread_since: new Date(),
                 created_at: intent.occurred_at,
                 updated_at: intent.occurred_at,
                 invalidated_at: null,
@@ -248,13 +252,6 @@ export class NotificationRepository {
     )
   }
 
-  async countUnread(recipientId: ObjectId, options: NotificationRepositoryOptions = {}): Promise<number> {
-    return this.databaseService.notifications.countDocuments(
-      { recipient_id: recipientId, is_read: false, invalidated_at: null },
-      { session: options.session }
-    )
-  }
-
   async markAllAsRead(
     recipientId: ObjectId,
     readAt: Date,
@@ -267,8 +264,14 @@ export class NotificationRepository {
         recipient_id: recipientId,
         is_read: false,
         invalidated_at: null,
-        created_at: { $lte: cutoff.created_at },
-        _id: { $lt: cutoff._id }
+        $or: [
+          { unread_since: { $lte: cutoff.unread_since } },
+          {
+            unread_since: { $exists: false },
+            created_at: { $lte: cutoff.created_at },
+            _id: { $lt: cutoff._id }
+          }
+        ]
       },
       {
         $set: {

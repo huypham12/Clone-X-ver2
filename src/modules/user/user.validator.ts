@@ -1,42 +1,11 @@
-import { Request, Response, NextFunction } from 'express'
-import { z, ZodError, ZodTypeAny } from 'zod'
-import { HttpError } from '~/common/http-error'
+import { z } from 'zod'
 import { MESSAGES } from '~/constants/messages'
 import { databaseService } from '~/config/database.service'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import { ObjectId } from 'mongodb'
+import { validate } from '~/utils/validate'
 
 export const REGEX_USERNAME = /^(?![0-9]+$)[A-Za-z0-9_]{4,15}$/
-
-// Middleware để validate dữ liệu bằng Zod
-export const validate = <T extends ZodTypeAny>(schema: T) => {
-  return async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const result = await schema.parseAsync({
-        body: req.body,
-        query: req.query,
-        headers: req.headers,
-        params: req.params
-      })
-
-      req.validatedData = result
-      next()
-    } catch (error) {
-      if (error instanceof ZodError) {
-        const errors: Record<string, string[]> = {}
-        error.issues.forEach((issue) => {
-          const path = issue.path.join('.') || 'validation'
-          if (!errors[path]) errors[path] = []
-          errors[path].push(issue.message)
-        })
-        return next(new HttpError('Validation failed', 400, errors))
-      }
-
-      console.error('Unexpected validation error:', error)
-      return next(new HttpError('Internal Server Error', 500))
-    }
-  }
-}
 
 const updateMeSchema = z.object({
   name: z

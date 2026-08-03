@@ -16,7 +16,7 @@ export interface NotificationReadStatePayload {
 export class NotificationDeliveryService {
   deliverNew(notification: WithId<Notification>): NotificationDeliveryResult {
     try {
-      getIO().to(notification.recipient_id.toHexString()).emit('@notification:new', notification)
+      getIO().to(notification.recipient_id.toHexString()).emit('@notification:new', this.toPublicNotification(notification))
       return { delivered: true }
     } catch (error: unknown) {
       console.error('Could not emit persisted notification', {
@@ -41,7 +41,11 @@ export class NotificationDeliveryService {
   }
 
   deliverUpdated(notification: WithId<Notification>): NotificationDeliveryResult {
-    return this.emit(notification.recipient_id.toHexString(), '@notification:updated', notification)
+    return this.emit(
+      notification.recipient_id.toHexString(),
+      '@notification:updated',
+      this.toPublicNotification(notification)
+    )
   }
 
   deliverRemoved(
@@ -69,5 +73,11 @@ export class NotificationDeliveryService {
       })
       return { delivered: false }
     }
+  }
+
+  private toPublicNotification(notification: WithId<Notification>) {
+    const payload = { ...notification }
+    Reflect.deleteProperty(payload, 'unread_since')
+    return payload
   }
 }

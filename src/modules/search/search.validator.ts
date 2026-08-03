@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { validate } from '~/modules/user/user.validator'
+import { validate } from '~/utils/validate'
 
 export const searchQueryValidator = validate(
   z.object({

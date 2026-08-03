@@ -32,6 +32,15 @@ export type NotificationEventHandlerResult =
   | NotificationMutationResult
   | { status: 'batch'; results: NotificationMutationResult[] }
 
+const isPersistedMutation = (result: NotificationMutationResult): boolean =>
+  result.status !== 'duplicate' && result.status !== 'suppressed'
+
+export const countNotificationMutations = (result: NotificationEventHandlerResult | undefined): number => {
+  if (!result) return 0
+  if (result.status === 'batch') return result.results.filter(isPersistedMutation).length
+  return isPersistedMutation(result) ? 1 : 0
+}
+
 export interface NotificationEventHandlerOptions {
   session?: ClientSession
   deliver?: boolean

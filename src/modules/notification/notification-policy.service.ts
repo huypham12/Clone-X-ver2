@@ -92,6 +92,7 @@ export class NotificationPolicyService {
     const eligible = await this.loadEligibleRecipientIds(
       event.actor_id,
       [event.payload.followed_user_id],
+      event.occurred_at,
       session
     )
     if (!eligible.has(event.payload.followed_user_id.toHexString())) {
@@ -119,7 +120,12 @@ export class NotificationPolicyService {
     if (!event.payload.notification_type || event.payload.direct_recipient_ids.length === 0) {
       return { commands: [] }
     }
-    const eligible = await this.loadEligibleRecipientIds(event.actor_id, event.payload.direct_recipient_ids, session)
+    const eligible = await this.loadEligibleRecipientIds(
+      event.actor_id,
+      event.payload.direct_recipient_ids,
+      event.occurred_at,
+      session
+    )
     return {
       commands: event.payload.direct_recipient_ids.filter((recipient) => eligible.has(recipient.toHexString())).map((recipient) => ({
         recipient_id: recipient,
@@ -172,7 +178,7 @@ export class NotificationPolicyService {
       (id) => !id.equals(event.actor_id)
     )
     if (uniqueRecipientIds.length === 0) return { commands: [] }
-    const eligible = await this.loadEligibleRecipientIds(event.actor_id, uniqueRecipientIds, session)
+    const eligible = await this.loadEligibleRecipientIds(event.actor_id, uniqueRecipientIds, event.occurred_at, session)
     return {
       commands: uniqueRecipientIds
         .filter((recipient) => eligible.has(recipient.toHexString()))
@@ -240,7 +246,7 @@ export class NotificationPolicyService {
     if (ids.length === 0) {
       return { commands: [], primary: null, current_mention_ids: [...currentMentionIds.values()] }
     }
-    const eligible = await this.loadEligibleRecipientIds(event.actor_id, ids, session)
+    const eligible = await this.loadEligibleRecipientIds(event.actor_id, ids, event.occurred_at, session)
     const canNotify = (recipientId: ObjectId) => eligible.has(recipientId.toHexString())
 
     const commands: CreateNotificationCommand[] = []
@@ -307,9 +313,17 @@ export class NotificationPolicyService {
 
     const recipientIds = new Map(event.payload.recipient_ids.map((id) => [id.toHexString(), id]))
     recipientIds.delete(event.actor_id.toHexString())
+    for (const deletedByUserId of message.deleted_by) {
+      recipientIds.delete(deletedByUserId.toHexString())
+    }
     if (recipientIds.size === 0) return { commands: [] }
 
-    const eligible = await this.loadEligibleRecipientIds(event.actor_id, [...recipientIds.values()], session)
+    const eligible = await this.loadEligibleRecipientIds(
+      event.actor_id,
+      [...recipientIds.values()],
+      event.occurred_at,
+      session
+    )
     const mentionIds = new Map<string, ObjectId>()
     if (event.payload.conversation_type === 'group') {
       for (const mentionId of event.payload.mention_user_ids) {
@@ -409,7 +423,7 @@ export class NotificationPolicyService {
     if (!target) return { action: 'skip', reason: 'target_missing' }
     if (target.user_id.equals(event.actor_id)) return { action: 'skip', reason: 'self_notification' }
 
-    const eligible = await this.loadEligibleRecipientIds(event.actor_id, [target.user_id], session)
+    const eligible = await this.loadEligibleRecipientIds(event.actor_id, [target.user_id], event.occurred_at, session)
     if (!eligible.has(target.user_id.toHexString())) return { action: 'skip', reason: 'privacy_restricted' }
 
     const type = event.type === DomainEventType.TweetLiked ? NotificationType.Like : NotificationType.Retweet
@@ -484,7 +498,12 @@ export class NotificationPolicyService {
         : { action: 'skip', reason: 'target_missing' }
     }
 
-    const eligible = await this.loadEligibleRecipientIds(event.actor_id, [message.sender_id], session)
+    const eligible = await this.loadEligibleRecipientIds(
+      event.actor_id,
+      [message.sender_id],
+      event.occurred_at,
+      session
+    )
     if (!eligible.has(message.sender_id.toHexString())) {
       return event.type === DomainEventType.MessageReactionRemoved
         ? { action: 'remove', source_key: sourceKey }
@@ -525,6 +544,7 @@ export class NotificationPolicyService {
   private async loadEligibleRecipientIds(
     actorId: ObjectId,
     recipientIds: ObjectId[],
+    occurredAt: Date,
     session?: ClientSession
   ): Promise<Set<string>> {
     const uniqueRecipients = [...new Map(recipientIds.map((id) => [id.toHexString(), id])).values()].filter(
@@ -533,9 +553,8 @@ export class NotificationPolicyService {
     if (uniqueRecipients.length === 0) return new Set()
     const invalidatedByCompletedBlock = new Set<string>()
     if (session) {
-      const now = new Date()
       for (const recipient of uniqueRecipients) {
-        if (await this.lifecycleGuard.touchUserPair(actorId, recipient, now, session)) {
+        if (await this.lifecycleGuard.touchUserPair(actorId, recipient, occurredAt, session)) {
           invalidatedByCompletedBlock.add(recipient.toHexString())
         }
       }

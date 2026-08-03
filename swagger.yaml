@@ -525,7 +525,7 @@ paths:
     post:
       tags: [user]
       summary: Follow a user
-      description: Atomically creates the follower relation and updates both counters. With the follow-outbox migration enabled, notification delivery is asynchronous and rechecks the relation and two-way blocks.
+      description: Atomically creates the follower relation and updates both counters. With the follow-outbox feature enabled (the local default), notification delivery is asynchronous and rechecks the relation and two-way blocks.
       operationId: followUser
       security:
         - bearerAuth: []
@@ -651,7 +651,7 @@ paths:
     post:
       tags: [tweet]
       summary: Create a tweet
-      description: Explicit mention IDs and usernames in content are normalized and deduplicated. With tweet-outbox migration enabled, tweet state, parent counter, feeds and the notification event commit atomically. An original public tweet can asynchronously fan out followed_user_tweet items only to opted-in follow relations; the request never waits for follower fan-out.
+      description: Explicit mention IDs and usernames in content are normalized and deduplicated. With the tweet-outbox feature enabled (the local default), tweet state, parent counter, feeds and the notification event commit atomically. An original public tweet can asynchronously fan out followed_user_tweet items only to opted-in follow relations; the request never waits for follower fan-out.
       operationId: createTweet
       security:
         - bearerAuth: []
@@ -697,7 +697,7 @@ paths:
     patch:
       tags: [tweet]
       summary: Update a tweet
-      description: Keeps the legacy response contract. Mention additions create idempotent notification items and removals invalidate the corresponding Mention item when tweet-outbox migration is enabled.
+      description: Keeps the legacy response contract. Mention additions create idempotent notification items and removals invalidate the corresponding Mention item when the tweet-outbox feature is enabled.
       operationId: updateTweet
       security:
         - bearerAuth: []
@@ -1831,7 +1831,7 @@ paths:
       tags:
         - notification
       summary: Get notification unread state
-      description: Returns the authoritative unread item count and monotonic version after notification-state backfill. Before rollout is enabled, the backend falls back to counting notification documents and returns version 0.
+      description: Returns the authoritative unread item count and monotonic version from NotificationState. There is no runtime countDocuments fallback; incompatible local notification/state data must be reset together before startup.
       operationId: getNotificationUnreadCount
       security:
         - bearerAuth: []
@@ -1854,7 +1854,7 @@ paths:
       tags:
         - notification
       summary: Mark all notifications as read
-      description: Transitions only unread, non-invalidated notifications at or before the request cutoff. Notifications committed after the cutoff remain unread. The response includes the authoritative unread count and version.
+      description: Transitions only unread, non-invalidated notifications at or before the request cutoff. New items and reactivations after the cutoff remain unread, including reactivations that keep an existing notification ID. The response includes the authoritative unread count and version.
       operationId: markAllNotificationsAsRead
       security:
         - bearerAuth: []

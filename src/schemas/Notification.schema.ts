@@ -19,6 +19,7 @@ interface NotificationConstructor {
   aggregation_key?: string
   aggregation_active?: boolean
   read_at?: Date | null
+  unread_since?: Date
   updated_at?: Date
   invalidated_at?: Date | null
   schema_version?: 2
@@ -40,6 +41,7 @@ export default class Notification {
   aggregation_key?: string
   aggregation_active?: boolean
   read_at?: Date | null
+  unread_since?: Date
   updated_at?: Date
   invalidated_at?: Date | null
   schema_version?: 2
@@ -60,6 +62,7 @@ export default class Notification {
     if (notification.aggregation_key !== undefined) this.aggregation_key = notification.aggregation_key
     if (notification.aggregation_active !== undefined) this.aggregation_active = notification.aggregation_active
     if (notification.read_at !== undefined) this.read_at = notification.read_at
+    if (notification.unread_since !== undefined) this.unread_since = notification.unread_since
     if (notification.updated_at !== undefined) this.updated_at = notification.updated_at
     if (notification.invalidated_at !== undefined) this.invalidated_at = notification.invalidated_at
     if (notification.schema_version !== undefined) this.schema_version = notification.schema_version
