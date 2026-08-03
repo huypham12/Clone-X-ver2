@@ -1,9 +1,12 @@
 import { Queue } from 'bullmq'
 import { connection } from '~/config/redisConfig'
+import { createBullMqJobId } from './bullmq-job-id'
 
 export const NOTIFICATION_QUEUE_NAME = 'notification-events'
 export const NOTIFICATION_JOB_NAME = 'process-domain-event'
 export const NOTIFICATION_JOB_ATTEMPTS = 8
+
+export const createNotificationJobId = (eventId: string): string => createBullMqJobId('notification-event', eventId)
 
 export interface NotificationJobData {
   event_id: string

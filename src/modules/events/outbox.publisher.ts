@@ -8,6 +8,7 @@ import { OutboxRepository, type OutboxInsertResult } from './outbox.repository'
 import {
   NOTIFICATION_JOB_ATTEMPTS,
   NOTIFICATION_JOB_NAME,
+  createNotificationJobId,
   notificationQueue
 } from '~/queues/notification.queue'
 
@@ -54,10 +55,7 @@ export class OutboxQueuePublisher {
       const completed = await this.waitWithin(this.inFlight, PUBLISHER_SHUTDOWN_TIMEOUT_MS)
       if (!completed) console.warn('Notification outbox publisher stop timed out; releasing leases')
     }
-    const released = await this.waitWithin(
-      this.repository.releaseLeases(this.lockedBy),
-      PUBLISHER_SHUTDOWN_TIMEOUT_MS
-    )
+    const released = await this.waitWithin(this.repository.releaseLeases(this.lockedBy), PUBLISHER_SHUTDOWN_TIMEOUT_MS)
     if (!released) console.warn('Notification outbox publisher lease release timed out; leases will expire naturally')
   }
 
@@ -79,7 +77,7 @@ export class OutboxQueuePublisher {
     let reconciled = 0
 
     for (const event of events) {
-      const job = await this.queue.getJob(event.event_id)
+      const job = await this.getEventJob(event.event_id)
       if (!job) {
         if (await this.repository.requeuePublished(event.event_id, 'BullMQ job missing; scheduled for redelivery')) {
           reconciled += 1
@@ -113,7 +111,7 @@ export class OutboxQueuePublisher {
 
   async replay(eventId: string): Promise<boolean> {
     const startedAt = Date.now()
-    const job = await this.queue.getJob(eventId)
+    const job = await this.getEventJob(eventId)
     if (job) {
       const state = await job.getState()
       if (state === 'active' || state === 'waiting' || state === 'delayed') {
@@ -136,7 +134,10 @@ export class OutboxQueuePublisher {
   private async enqueueClaimed(eventId: string): Promise<boolean> {
     const startedAt = Date.now()
     try {
-      await this.queue.add(NOTIFICATION_JOB_NAME, { event_id: eventId }, { jobId: eventId })
+      const existingJob = await this.getEventJob(eventId)
+      if (!existingJob) {
+        await this.queue.add(NOTIFICATION_JOB_NAME, { event_id: eventId }, { jobId: createNotificationJobId(eventId) })
+      }
       await this.repository.markPublished(eventId, this.lockedBy, new Date())
       console.info('notification_outbox_enqueued', {
         event_id: eventId,
@@ -145,12 +146,7 @@ export class OutboxQueuePublisher {
       return true
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
-      await this.repository.releaseLease(
-        eventId,
-        this.lockedBy,
-        new Date(Date.now() + ENQUEUE_RETRY_DELAY_MS),
-        message
-      )
+      await this.repository.releaseLease(eventId, this.lockedBy, new Date(Date.now() + ENQUEUE_RETRY_DELAY_MS), message)
       console.error('notification_outbox_enqueue_failed', {
         event_id: eventId,
         latency_ms: Date.now() - startedAt,
@@ -158,6 +154,14 @@ export class OutboxQueuePublisher {
       })
       return false
     }
+  }
+
+  private async getEventJob(eventId: string) {
+    const currentJob = await this.queue.getJob(createNotificationJobId(eventId))
+    if (currentJob) return currentJob
+
+    // Compatibility for jobs enqueued before BullMQ-safe IDs were introduced.
+    return this.queue.getJob(eventId)
   }
 
   private schedule(delayMs: number): void {

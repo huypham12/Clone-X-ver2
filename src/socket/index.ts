@@ -41,7 +41,7 @@ export const initSocket = (httpServer: HttpServer, databaseService: DatabaseServ
   io.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.split(' ')[1]
-      
+
       if (!token) {
         return next(new Error('Authentication error: Missing token'))
       }
@@ -50,7 +50,7 @@ export const initSocket = (httpServer: HttpServer, databaseService: DatabaseServ
         token,
         secretKey: envConfig.secrets.jwt.access
       })
-      
+
       socket.user_id = decoded.user_id
       next()
     } catch (error) {
@@ -60,31 +60,29 @@ export const initSocket = (httpServer: HttpServer, databaseService: DatabaseServ
 
   const userService = new UserService(databaseService)
 
-  io.on('connection', async (socket) => {
+  const getFriendIds = async (userId: string): Promise<string[]> => {
+    const cachedFriends = await redisService.get(`friends:${userId}`)
+    if (isStringArray(cachedFriends)) return cachedFriends
+
+    const friends = await userService.getFriends(userId)
+    const friendIds = friends
+      .map((friend) => friend._id?.toString())
+      .filter((friendId): friendId is string => friendId !== undefined)
+    await redisService.set(`friends:${userId}`, friendIds, 300)
+    return friendIds
+  }
+
+  io.on('connection', (socket) => {
     console.log(`User connected: ${socket.user_id} with socket_id: ${socket.id}`)
-    
-    const userId = socket.user_id as string
+
+    const userId = socket.user_id
+    if (!userId) {
+      socket.disconnect(true)
+      return
+    }
 
     // Chỉ join đúng 1 room duy nhất là ID của user
     socket.join(userId)
-
-    // Lấy danh sách bạn bè (từ Redis Cache hoặc Database)
-    let friendIds: string[] = []
-    const cachedFriends = await redisService.get(`friends:${userId}`)
-    if (isStringArray(cachedFriends)) {
-      friendIds = cachedFriends
-    } else {
-      const friends = await userService.getFriends(userId)
-      friendIds = friends.map(f => f._id?.toString() as string)
-      await redisService.set(`friends:${userId}`, friendIds, 300) // Cache 5 phút
-    }
-
-    // Kiểm tra xem đây có phải là thiết bị ĐẦU TIÊN của user kết nối không (bằng Redis Adapter)
-    const userSockets = await io.in(userId).allSockets()
-    if (userSockets.size === 1 && friendIds.length > 0) {
-      // Chỉ gửi trạng thái Online cho Bạn Bè
-      io.to(friendIds).emit('user:online', { user_id: userId })
-    }
 
     // Xử lý các sự kiện chat
     chatHandler(io, socket)
@@ -96,24 +94,26 @@ export const initSocket = (httpServer: HttpServer, databaseService: DatabaseServ
           if (callback) callback([])
           return
         }
-        
-        const presenceList = await Promise.all(userIds.map(async (id) => {
-          // Lấy tất cả socket id của user đó trên TOÀN BỘ cluster qua Redis Adapter
-          const sockets = await io.in(id).allSockets()
-          const isOnline = sockets.size > 0
-          let lastSeenAt = null
-          
-          if (!isOnline) {
-            lastSeenAt = await redisService.clientInstance.hGet('user_last_seen', id)
-          }
-          
-          return {
-            user_id: id,
-            isOnline,
-            lastSeenAt
-          }
-        }))
-        
+
+        const presenceList = await Promise.all(
+          userIds.map(async (id) => {
+            // Lấy tất cả socket id của user đó trên TOÀN BỘ cluster qua Redis Adapter
+            const sockets = await io.in(id).allSockets()
+            const isOnline = sockets.size > 0
+            let lastSeenAt = null
+
+            if (!isOnline) {
+              lastSeenAt = await redisService.clientInstance.hGet('user_last_seen', id)
+            }
+
+            return {
+              user_id: id,
+              isOnline,
+              lastSeenAt
+            }
+          })
+        )
+
         if (callback) callback(presenceList)
       } catch (error) {
         console.error('Error getting presence:', error)
@@ -121,34 +121,40 @@ export const initSocket = (httpServer: HttpServer, databaseService: DatabaseServ
       }
     })
 
-    socket.on('disconnect', async () => {
+    socket.on('disconnect', () => {
       console.log(`User disconnected: ${socket.user_id}`)
-      
+
       // Delay một chút để socket thực sự rời khỏi room trước khi fetchSockets
-      setTimeout(async () => {
-        const remainingSockets = await io.in(userId).allSockets()
-        
-        // Nếu user đã ngắt kết nối hoàn toàn trên TẤT CẢ thiết bị
-        if (remainingSockets.size === 0) {
-          const lastSeenAt = new Date().toISOString()
-          await redisService.clientInstance.hSet('user_last_seen', userId, lastSeenAt)
-          
-          // Phát sự kiện offline cho Bạn Bè
-          let fIds: string[] = []
-          const cFriends = await redisService.get(`friends:${userId}`)
-          if (isStringArray(cFriends)) {
-            fIds = cFriends
-          } else {
-            const friends = await userService.getFriends(userId)
-            fIds = friends.map(f => f._id?.toString() as string)
-            await redisService.set(`friends:${userId}`, fIds, 300)
+      setTimeout(() => {
+        void (async () => {
+          const remainingSockets = await io.in(userId).allSockets()
+
+          // Nếu user đã ngắt kết nối hoàn toàn trên TẤT CẢ thiết bị
+          if (remainingSockets.size === 0) {
+            const lastSeenAt = new Date().toISOString()
+            await redisService.clientInstance.hSet('user_last_seen', userId, lastSeenAt)
+
+            // Phát sự kiện offline cho Bạn Bè
+            const friendIds = await getFriendIds(userId)
+
+            if (friendIds.length > 0) {
+              io.to(friendIds).emit('user:offline', { user_id: userId, lastSeenAt })
+            }
           }
-          
-          if (fIds.length > 0) {
-            io.to(fIds).emit('user:offline', { user_id: userId, lastSeenAt })
-          }
-        }
+        })().catch((error: unknown) => {
+          console.error('Could not update disconnected user presence:', error)
+        })
       }, 500)
+    })
+
+    void (async () => {
+      const friendIds = await getFriendIds(userId)
+      const userSockets = await io.in(userId).allSockets()
+      if (userSockets.size === 1 && friendIds.length > 0) {
+        io.to(friendIds).emit('user:online', { user_id: userId })
+      }
+    })().catch((error: unknown) => {
+      console.error('Could not initialize connected user presence:', error)
     })
   })
 

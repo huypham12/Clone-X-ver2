@@ -1,5 +1,6 @@
 import { Queue } from 'bullmq'
 import { connection } from '~/config/redisConfig'
+import { createBullMqJobId } from './bullmq-job-id'
 
 export const NOTIFICATION_FANOUT_QUEUE_NAME = 'notification-fanout'
 export const NOTIFICATION_FANOUT_JOB_NAME = 'fanout-followed-user-tweet'
@@ -18,7 +19,7 @@ export interface NotificationFanoutJobResult {
 }
 
 export const createNotificationFanoutJobId = (eventId: string, afterRelationId?: string): string =>
-  `${eventId}--${afterRelationId ?? 'first'}`
+  createBullMqJobId('notification-fanout', eventId, afterRelationId ?? 'first')
 
 export const notificationFanoutQueue = new Queue<NotificationFanoutJobData, NotificationFanoutJobResult>(
   NOTIFICATION_FANOUT_QUEUE_NAME,
