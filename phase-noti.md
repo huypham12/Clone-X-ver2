@@ -157,7 +157,6 @@ type Notification = {
   read_at?: Date | null
   updated_at?: Date
   invalidated_at?: Date | null
-  schema_version?: 2
 }
 ```
 
@@ -568,7 +567,7 @@ Mở rộng data model đủ cho target typing, dedupe, aggregation và lifecycl
 
 **Schema và index**
 
-Field thêm: `target_type`, `actor_ids_preview`, `actor_count`, `context`, `deduplication_key`, `aggregation_key`, `aggregation_active`, `read_at`, `updated_at`, `invalidated_at`, `schema_version`.
+Field thêm: `target_type`, `actor_ids_preview`, `actor_count`, `context`, `deduplication_key`, `aggregation_key`, `aggregation_active`, `read_at`, `updated_at`, `invalidated_at`.
 
 Index thêm:
 

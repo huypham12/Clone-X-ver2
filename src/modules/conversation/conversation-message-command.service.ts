@@ -23,6 +23,7 @@ import conversationMessageMentionService, {
 
 type MessageMediaType = MediaType.Image | MediaType.Video | MediaType.Audio
 export type MessagePreviewType = 'text' | MessageMediaType
+export const CLIENT_MESSAGE_ID_CONFLICT_CODE = 'CLIENT_MESSAGE_ID_CONFLICT'
 
 export interface SendMessageCommand {
   sender_id: string
@@ -757,7 +758,12 @@ export class ConversationMessageCommandService {
     const expectedPayloadHash = this.createClientPayloadHash(command, originMessageId)
     if (message.client_payload_hash !== undefined) {
       if (message.client_payload_hash !== expectedPayloadHash) {
-        throw new HttpError('client_message_id was already used for a different message', HTTP_STATUS.CONFLICT)
+        throw new HttpError(
+          'client_message_id was already used for a different message',
+          HTTP_STATUS.CONFLICT,
+          undefined,
+          CLIENT_MESSAGE_ID_CONFLICT_CODE
+        )
       }
       return
     }
@@ -775,7 +781,12 @@ export class ConversationMessageCommandService {
       !sameReply ||
       !sameOrigin
     ) {
-      throw new HttpError('client_message_id was already used for a different message', HTTP_STATUS.CONFLICT)
+      throw new HttpError(
+        'client_message_id was already used for a different message',
+        HTTP_STATUS.CONFLICT,
+        undefined,
+        CLIENT_MESSAGE_ID_CONFLICT_CODE
+      )
     }
   }
 

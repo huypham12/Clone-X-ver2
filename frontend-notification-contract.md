@@ -48,7 +48,6 @@ Response `200`:
         "read_at": null,
         "updated_at": "<ISO date>",
         "invalidated_at": null,
-        "schema_version": 2,
 
         "actor_info": {
           "_id": "<user_id>",
@@ -80,7 +79,7 @@ Response `200`:
 }
 ```
 
-Các field `deduplication_key` và `aggregation_key` chỉ xuất hiện khi document có giá trị. `schema_version` chỉ chắc chắn có trên notification mới được tạo sau Phase 3; document legacy được normalize khi đọc nhưng có thể không có field này.
+Các field `deduplication_key` và `aggregation_key` chỉ xuất hiện khi document có giá trị.
 
 Document legacy được normalize như sau:
 
@@ -186,8 +185,7 @@ Event được emit vào personal room của `recipient_id` sau khi notification
   "aggregation_active": false,
   "read_at": null,
   "updated_at": "<ISO date>",
-  "invalidated_at": null,
-  "schema_version": 2
+  "invalidated_at": null
 }
 ```
 
@@ -360,7 +358,7 @@ Forward giữ endpoint `POST /api/conversations/messages/:message_id/forward` v�
 }
 ```
 
-Ack legacy giữ `{ "success": true, "message_id": "..." }`. `@conversation:receive` giữ raw hydrated message top-level và chỉ emit sau commit.
+Ack legacy giữ `{ "success": true, "message_id": "..." }`. Nếu cùng `client_message_id` bị dùng lại với payload khác, ack lỗi trả `error.code=CLIENT_MESSAGE_ID_CONFLICT`; frontend không phân loại conflict bằng nội dung `error.message`. `@conversation:receive` giữ raw hydrated message top-level và chỉ emit sau commit.
 
 Client có thể ack read qua `@conversation:read` với `{ conversation_id, message_id? }`. Ack thành công:
 

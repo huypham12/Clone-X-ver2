@@ -205,8 +205,7 @@ export class NotificationAggregationService {
       unread_since: new Date(),
       created_at: command.occurred_at,
       updated_at: command.occurred_at,
-      invalidated_at: null,
-      schema_version: 2
+      invalidated_at: null
     })
     await this.databaseService.notifications.insertOne(notification, { session: options.session })
     await this.databaseService.notificationActors.insertOne(

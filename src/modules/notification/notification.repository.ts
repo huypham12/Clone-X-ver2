@@ -75,8 +75,7 @@ export class NotificationRepository {
       unread_since: new Date(),
       created_at: intent.occurred_at,
       updated_at: intent.occurred_at,
-      invalidated_at: null,
-      schema_version: 2
+      invalidated_at: null
     })
 
     try {
@@ -190,8 +189,7 @@ export class NotificationRepository {
                 unread_since: new Date(),
                 created_at: intent.occurred_at,
                 updated_at: intent.occurred_at,
-                invalidated_at: null,
-                schema_version: 2
+                invalidated_at: null
               })
             },
             upsert: true

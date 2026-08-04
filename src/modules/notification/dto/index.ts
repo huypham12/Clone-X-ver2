@@ -63,7 +63,6 @@ export interface NotificationListItem {
   read_at: Date | null
   updated_at: Date
   invalidated_at: Date | null
-  schema_version?: 2
   actor_info: NotificationActorInfo | null
   actor_infos_preview: Array<NotificationActorInfo | null>
   target_info: NotificationTargetInfo | null

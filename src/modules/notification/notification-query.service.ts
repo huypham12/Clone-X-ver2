@@ -145,8 +145,7 @@ export class NotificationQueryService {
       aggregation_active: notification.aggregation_active ?? false,
       read_at: optionalDateOrNull(notification.read_at),
       updated_at: isValidDate(notification.updated_at) ? notification.updated_at : notification.created_at,
-      invalidated_at: optionalDateOrNull(notification.invalidated_at),
-      schema_version: notification.schema_version === 2 ? 2 : undefined
+      invalidated_at: optionalDateOrNull(notification.invalidated_at)
     }
   }
 

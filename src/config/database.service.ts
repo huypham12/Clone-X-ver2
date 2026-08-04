@@ -112,9 +112,8 @@ export default class DatabaseService {
   }
 
   private async verifyNotificationLifecycleBaseline(): Promise<void> {
-    const [legacyNotification, notification, actor, state, orphanActor, orphanState, missingState, actorlessAggregate] =
+    const [notification, actor, state, orphanActor, orphanState, missingState, actorlessAggregate] =
       await Promise.all([
-      this.notifications.findOne({ schema_version: { $ne: 2 } }, { projection: { _id: 1 } }),
       this.notifications.findOne({}, { projection: { _id: 1 } }),
       this.notificationActors.findOne({}, { projection: { _id: 1 } }),
       this.notificationStates.findOne({}, { projection: { _id: 1 } }),
@@ -177,7 +176,6 @@ export default class DatabaseService {
         .hasNext()
     ])
     if (
-      legacyNotification ||
       (!notification && (actor || state)) ||
       orphanActor ||
       orphanState ||
