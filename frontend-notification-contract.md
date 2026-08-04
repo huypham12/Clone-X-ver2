@@ -296,6 +296,20 @@ Khi `NOTIFICATION_SOCIAL_AGGREGATION_ENABLED=true`, Like/Repost trên cùng twee
 
 ```json
 {
+  "last_message_preview": {
+    "message_id": "66def...",
+    "sender_id": "66aaa...",
+    "sender_info": {
+      "_id": "66aaa...",
+      "name": "Huy",
+      "username": "huy",
+      "avatar": "https://..."
+    },
+    "kind": "user",
+    "system_event_type": null,
+    "content": "hahaa",
+    "message_type": "text"
+  },
   "unread_message_count": 4,
   "last_read_message_id": "66abc...",
   "last_read_at": "2026-07-30T10:00:00.000Z"
@@ -303,6 +317,13 @@ Khi `NOTIFICATION_SOCIAL_AGGREGATION_ENABLED=true`, Like/Repost trên cùng twee
 ```
 
 State chưa tồn tại trả count `0` và read fields `null`.
+
+`last_message_preview` được hydrate theo batch từ `message_id`, không fetch từng conversation.
+Message legacy thiếu `kind` được trả thành `kind=user`. System message trả `kind=system`,
+`system_event_type` tương ứng và `sender_info=null`; user message trả public `sender_info` hoặc
+`null` nếu sender đã bị xóa, banned hoặc có block edge với viewer. Preview không có authoritative
+`message_id` trả cả `kind`, `system_event_type` và `sender_info` là `null`. Frontend chỉ thêm prefix
+tên khi `kind=user` và projection có mặt; projection null dùng fallback trung tính, không dựng tên từ ID.
 
 `GET /api/conversations/unread-summary`:
 

@@ -24,6 +24,9 @@ import conversationAccessService, {
 } from './conversation-access.service'
 import conversationMessageAccessService from './conversation-message-access.service'
 import conversationMessageHydrationService from './conversation-message-hydration.service'
+import conversationPreviewHydrationService, {
+  type ConversationPreviewHydrationService
+} from './conversation-preview-hydration.service'
 import conversationMessageSyncService from './conversation-message-sync.service'
 import conversationMessageCommandService, {
   type ConversationMessageCommandService
@@ -191,6 +194,7 @@ class ConversationService {
     private readonly messageCommandService: ConversationMessageCommandService = conversationMessageCommandService,
     private readonly messageDeliveryService: ConversationMessageDeliveryService = conversationMessageDeliveryService,
     private readonly readService: ConversationReadService = conversationReadService,
+    private readonly previewHydrationService: ConversationPreviewHydrationService = conversationPreviewHydrationService,
     private readonly systemMessageService: ConversationSystemMessageService = conversationSystemMessageService,
     private readonly outboxPublisher: TransactionalDomainEventPublisher<OutboxInsertResult> = new OutboxDomainEventPublisher(),
     private readonly lifecycleGuard: NotificationLifecycleGuardService = new NotificationLifecycleGuardService(
@@ -288,7 +292,11 @@ class ConversationService {
       throw new HttpError('Conversation could not be restored', HTTP_STATUS.CONFLICT)
     }
 
-    return this.formatDirectConversation(conversation, actorId)
+    const [summary] = await this.previewHydrationService.hydrate(
+      [this.formatDirectConversation(conversation, actorId)],
+      actorId.toHexString()
+    )
+    return summary
   }
 
   private async getGroupConversationSummary(actorId: ObjectId, conversationId: ObjectId) {
@@ -302,7 +310,11 @@ class ConversationService {
       throw new HttpError('Conversation could not be restored', HTTP_STATUS.CONFLICT)
     }
 
-    return this.formatGroupConversation(conversation, actorId)
+    const [summary] = await this.previewHydrationService.hydrate(
+      [this.formatGroupConversation(conversation, actorId)],
+      actorId.toHexString()
+    )
+    return summary
   }
 
   private async invalidateGroupMemberCache(conversationId: string) {
@@ -638,14 +650,18 @@ class ConversationService {
         conversation._id instanceof ObjectId
       )
 
-    const readStates = await this.readService.getConversationStates(
-      userId,
-      [...formattedDirects, ...formattedGroups].map((conversation) => conversation._id)
-    )
+    const formattedConversations = [...formattedDirects, ...formattedGroups]
+    const [hydratedConversations, readStates] = await Promise.all([
+      this.previewHydrationService.hydrate(formattedConversations, userId),
+      this.readService.getConversationStates(
+        userId,
+        formattedConversations.map((conversation) => conversation._id)
+      )
+    ])
     const readStateByConversation = new Map(
       readStates.map((state) => [state.conversation_id.toHexString(), state])
     )
-    const merged = [...formattedDirects, ...formattedGroups].map((conversation) => {
+    const merged = hydratedConversations.map((conversation) => {
       const state = readStateByConversation.get(conversation._id.toHexString())
       return {
         ...conversation,

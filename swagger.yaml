@@ -2889,6 +2889,47 @@ components:
         - statusCode
         - message
 
+    ConversationLastMessagePreview:
+      type: object
+      required:
+        - sender_id
+        - sender_info
+        - kind
+        - system_event_type
+        - content
+        - message_type
+      properties:
+        message_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        sender_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        sender_info:
+          allOf:
+            - $ref: "#/components/schemas/MessageSenderInfo"
+          nullable: true
+        kind:
+          type: string
+          enum: [user, system]
+          nullable: true
+        system_event_type:
+          type: string
+          enum:
+            - group_created
+            - member_added
+            - member_left
+            - member_kicked
+            - admin_granted
+            - admin_revoked
+            - admin_transferred_and_left
+          nullable: true
+        content:
+          type: string
+        message_type:
+          type: string
+          enum: [text, image, video, audio, file]
+
     ConversationSummary:
       type: object
       description: Actor-normalized direct or group conversation. Internal history cutoff markers and preview overrides are not exposed.
@@ -2911,7 +2952,7 @@ components:
           type: string
           format: date-time
         last_message_preview:
-          type: object
+          $ref: "#/components/schemas/ConversationLastMessagePreview"
         is_pinned:
           type: boolean
         created_at:
