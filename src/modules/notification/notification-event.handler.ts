@@ -1,9 +1,5 @@
 import type { DomainEventHandler, DomainEventPublishOptions } from '~/modules/events/domain-event.publisher'
-import {
-  DomainEventType,
-  parseDomainEvent,
-  type TweetCreatedEvent
-} from '~/modules/events/domain-event.type'
+import { DomainEventType, parseDomainEvent, type TweetCreatedEvent } from '~/modules/events/domain-event.type'
 import type { ObjectId } from 'mongodb'
 import { NotificationType } from '~/constants/enums'
 import { NotificationDeliveryService } from './notification-delivery.service'
@@ -18,6 +14,7 @@ import type { CreateNotificationCommand } from './notification.type'
 import { NotificationAggregationService } from './notification-aggregation.service'
 import { envConfig } from '~/config/getEnvConfig'
 import { NotificationLifecycleService } from './notification-lifecycle.service'
+import { DirectedNotificationReadService } from './directed-notification-read.service'
 
 export class NotificationEventHandler implements DomainEventHandler<NotificationEventHandlerResult> {
   constructor(
@@ -25,7 +22,8 @@ export class NotificationEventHandler implements DomainEventHandler<Notification
     private readonly policyService: NotificationPolicyService = new NotificationPolicyService(),
     private readonly deliveryService: NotificationDeliveryService = new NotificationDeliveryService(),
     private readonly aggregationService: NotificationAggregationService = new NotificationAggregationService(),
-    private readonly lifecycleService: NotificationLifecycleService = new NotificationLifecycleService()
+    private readonly lifecycleService: NotificationLifecycleService = new NotificationLifecycleService(),
+    private readonly directedNotificationReadService: DirectedNotificationReadService = new DirectedNotificationReadService()
   ) {}
 
   async handle(
@@ -170,8 +168,19 @@ export class NotificationEventHandler implements DomainEventHandler<Notification
           return { status: 'suppressed', notification: null, reason: 'message_directed_disabled' }
         }
         const plan = await this.policyService.resolveMessagePlan(event, options.session)
+        if (plan.commands.length > 0 && !options.session) {
+          throw new Error('Directed message notification requires an active MongoDB session')
+        }
+        const commands = options.session
+          ? await this.directedNotificationReadService.retainCommandsAfterReadPosition(
+              plan.commands,
+              event.payload.conversation_id,
+              event.payload.message_id,
+              options.session
+            )
+          : plan.commands
         const results: NotificationMutationResult[] = []
-        for (const command of plan.commands) {
+        for (const command of commands) {
           results.push(
             await this.persistIndividual(
               command,

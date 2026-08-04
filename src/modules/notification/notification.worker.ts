@@ -23,6 +23,7 @@ import {
   NOTIFICATION_FANOUT_JOB_NAME,
   notificationFanoutQueue
 } from '~/queues/notification-fanout.queue'
+import { DirectedNotificationReadService } from './directed-notification-read.service'
 
 const NOTIFICATION_WORKER_CONCURRENCY = 5
 const WORKER_SHUTDOWN_TIMEOUT_MS = 10_000
@@ -44,7 +45,8 @@ export class NotificationWorker {
         databaseService,
         new NotificationRepository(databaseService),
         new NotificationAggregationService(databaseService)
-      )
+      ),
+      new DirectedNotificationReadService(databaseService)
     )
   ) {
     this.worker = new Worker<NotificationJobData, NotificationJobResult>(
@@ -107,10 +109,7 @@ export class NotificationWorker {
         const outboxEvent = await this.outboxRepository.findByEventId(job.data.event_id, { session })
         if (!outboxEvent) throw new Error(`Outbox event not found: ${job.data.event_id}`)
         eventType = outboxEvent.type
-        if (
-          envConfig.features.notificationFollowedTweetEnabled &&
-          outboxEvent.type === DomainEventType.TweetCreated
-        ) {
+        if (envConfig.features.notificationFollowedTweetEnabled && outboxEvent.type === DomainEventType.TweetCreated) {
           const event = parseDomainEvent({
             event_id: outboxEvent.event_id,
             type: outboxEvent.type,

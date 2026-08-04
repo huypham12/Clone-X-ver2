@@ -4,6 +4,8 @@ import { HttpError } from '~/common/http-error'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import type ConversationReadState from '~/schemas/ConversationReadState.schema'
 import type UserMessageState from '~/schemas/UserMessageState.schema'
+import type { NotificationMutationResult } from '~/modules/notification/notification-event.type'
+import { DirectedNotificationReadService } from '~/modules/notification/directed-notification-read.service'
 import type { ConversationType } from './conversation-access.service'
 
 export interface MessageUnreadInput {
@@ -36,6 +38,7 @@ export interface UserMessageSummarySnapshot {
 export interface ConversationReadMutationResult {
   read_state: ConversationReadSnapshot
   summary: UserMessageSummarySnapshot
+  directed_notification_invalidations?: NotificationMutationResult[]
 }
 
 type PendingConversationIncrement = {
@@ -68,7 +71,12 @@ const toSummarySnapshot = (state: WithId<UserMessageState>): UserMessageSummaryS
 })
 
 export class ConversationReadService {
-  constructor(private readonly databaseService: DatabaseService = sharedDatabaseService) {}
+  constructor(
+    private readonly databaseService: DatabaseService = sharedDatabaseService,
+    private readonly directedNotificationReadService: DirectedNotificationReadService = new DirectedNotificationReadService(
+      databaseService
+    )
+  ) {}
 
   async incrementForMessages(
     messages: MessageUnreadInput[],
@@ -215,6 +223,7 @@ export class ConversationReadService {
         mutation = await this.markReadInTransaction(userId, conversationId, messageId, session)
       })
       if (!mutation) throw new Error('Conversation read transaction returned no state')
+      this.directedNotificationReadService.deliverAfterCommit(mutation.directed_notification_invalidations ?? [])
       return mutation
     } finally {
       await session.endSession()
@@ -488,7 +497,20 @@ export class ConversationReadService {
     const readDelta = Math.max(0, oldUnread - remainingUnread)
     const conversationDelta = oldUnread > 0 && remainingUnread === 0 ? -1 : 0
     const summary = await this.applyReadDelta(userObjectId, readDelta, conversationDelta, readAt, session)
-    return { read_state: toReadSnapshot(state), summary }
+    const directedNotificationInvalidations = targetMessageId
+      ? await this.directedNotificationReadService.invalidateThroughReadPosition(
+          userObjectId,
+          conversationObjectId,
+          targetMessageId,
+          readAt,
+          session
+        )
+      : []
+    return {
+      read_state: toReadSnapshot(state),
+      summary,
+      directed_notification_invalidations: directedNotificationInvalidations
+    }
   }
 
   private async applyReadDelta(

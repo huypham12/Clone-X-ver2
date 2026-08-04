@@ -331,7 +331,9 @@ Badge icon inbox phải dùng `unread_conversation_count`. `total_unread_message
 
 Body rỗng mark tới message visible mới nhất. `message_id` phải visible và thuộc conversation; sai trả `400`, không còn membership trả `403`. Response `data` gồm `success`, `conversation_id`, `last_read_message_id`, `last_read_at`, `unread_message_count`, `unread_conversation_count`, `total_unread_message_count`, `version`. Read position chỉ tiến về phía trước; message commit sau target vẫn unread.
 
-Phase 4.2 chưa gắn conversation read acknowledgement với notification invalidation. Cho tới khi Phase 6 bổ sung backend contract theo exact committed read position, frontend không được tự ẩn `message_reply`/`message_mention` chỉ vì route conversation đã mở hoặc message nằm trong cache.
+Sau khi exact read position được commit, backend invalidate trong cùng transaction mọi `message_reply`/`message_mention` của chính user, cùng `context.conversation_id`, có message `target_id` nhỏ hơn hoặc bằng `last_read_message_id`. Item đã invalidated không còn xuất hiện trong REST feed; item đang unread đồng thời làm giảm `NotificationState` đúng một lần. Sau commit, backend phát `@notification:removed` cho từng item và phát notification unread state/version có thẩm quyền khi count thay đổi. Frontend chỉ reconcile theo ID/version, không tự ẩn item vì route conversation đã mở hoặc message mới chỉ nằm trong cache.
+
+Message notification worker phối hợp transaction với `ConversationReadState`: nếu outbox `MessageCreated` được xử lý sau khi recipient đã đọc qua target message thì `message_reply`/`message_mention` bị suppress. Nếu notification creation và read acknowledgement chạy đồng thời, transaction conflict được retry trên committed read position; vì vậy không có cửa sổ tạo lại directed notification đã đọc. Read lặp hoặc read position cũ là idempotent và không giảm notification unread count/version lần hai.
 
 Forward giữ endpoint `POST /api/conversations/messages/:message_id/forward` và response legacy `{ data: { success: true } }`; request mới:
 

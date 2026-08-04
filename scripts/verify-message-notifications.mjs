@@ -24,6 +24,7 @@ const reactionActorIds = Array.from({ length: 20 }, () => new databaseService.Ob
 const allUserIds = [ownerId, senderId, mentionedId, ordinaryMemberId, ...reactionActorIds]
 const conversationId = new databaseService.ObjectId()
 const clientPrefix = `phase-13-14:${randomUUID()}`
+const mentionUsername = `phase_mention_${randomUUID().replaceAll('-', '')}`
 const handler = new NotificationEventHandler()
 setIO(new Server())
 
@@ -98,7 +99,8 @@ const main = async () => {
     await databaseService.users.insertMany(
       allUserIds.map((id, index) => ({
         _id: id,
-        username: index === 2 ? 'mention_target' : `phase_user_${index}`
+        username: index === 2 ? mentionUsername : `phase_user_${randomUUID().replaceAll('-', '')}_${index}`,
+        email: `phase-message-${randomUUID()}@example.test`
       }))
     )
     await databaseService.groupConversations.insertOne({
@@ -125,18 +127,21 @@ const main = async () => {
     const replyTarget = await send(mentionedId, 'reply target')
     const directedClientId = `${clientPrefix}:directed`
     const ignoredNonMemberId = new databaseService.ObjectId()
-    const directed = await send(senderId, 'hello @mention_target @mention_target', {
+    const directed = await send(senderId, `hello @${mentionUsername} @${mentionUsername}`, {
       reply_to_message_id: replyTarget.message._id.toHexString(),
       mention_user_ids: [mentionedId.toHexString(), mentionedId.toHexString(), ignoredNonMemberId.toHexString()],
       client_message_id: directedClientId
     })
-    assert.deepEqual(directed.message.mention_user_ids.map((id) => id.toHexString()), [mentionedId.toHexString()])
+    assert.deepEqual(
+      directed.message.mention_user_ids.map((id) => id.toHexString()),
+      [mentionedId.toHexString()]
+    )
     await assert.rejects(
       commandService.send({
         sender_id: senderId.toHexString(),
         conversation_id: conversationId.toHexString(),
         conversation_type: 'group',
-        content: 'hello @mention_target @mention_target',
+        content: `hello @${mentionUsername} @${mentionUsername}`,
         reply_to_message_id: replyTarget.message._id.toHexString(),
         mention_user_ids: [ordinaryMemberId.toHexString()],
         client_message_id: directedClientId
@@ -171,6 +176,101 @@ const main = async () => {
       await databaseService.notifications.countDocuments({
         recipient_id: ordinaryMemberId,
         target_id: directed.message._id
+      }),
+      0
+    )
+
+    const laterDirected = await send(senderId, `later @${mentionUsername}`, {
+      mention_user_ids: [mentionedId.toHexString()]
+    })
+    await deliveryService.deliver(laterDirected)
+    const laterDirectedEvent = await databaseService.outboxEvents.findOne({
+      type: 'MessageCreated',
+      aggregate_id: laterDirected.message._id
+    })
+    assert(laterDirectedEvent)
+    await processEvent(laterDirectedEvent)
+
+    const notificationStateBeforeRead = await databaseService.notificationStates.findOne({
+      recipient_id: mentionedId
+    })
+    assert.equal(notificationStateBeforeRead?.unread_count, 2)
+
+    await conversationService.markAsRead(
+      mentionedId.toHexString(),
+      conversationId.toHexString(),
+      directed.message._id.toHexString()
+    )
+    assert.equal(
+      await databaseService.notifications.countDocuments({
+        recipient_id: mentionedId,
+        target_id: directed.message._id,
+        invalidated_at: null
+      }),
+      0
+    )
+    assert.equal(
+      await databaseService.notifications.countDocuments({
+        recipient_id: mentionedId,
+        target_id: laterDirected.message._id,
+        invalidated_at: null
+      }),
+      1
+    )
+    const notificationStateAfterPartialRead = await databaseService.notificationStates.findOne({
+      recipient_id: mentionedId
+    })
+    assert.equal(notificationStateAfterPartialRead?.unread_count, 1)
+
+    await conversationService.markAsRead(
+      mentionedId.toHexString(),
+      conversationId.toHexString(),
+      directed.message._id.toHexString()
+    )
+    const notificationStateAfterRepeatedRead = await databaseService.notificationStates.findOne({
+      recipient_id: mentionedId
+    })
+    assert.equal(notificationStateAfterRepeatedRead?.unread_count, 1)
+    assert.equal(notificationStateAfterRepeatedRead?.version, notificationStateAfterPartialRead?.version)
+
+    await conversationService.markAsRead(
+      mentionedId.toHexString(),
+      conversationId.toHexString(),
+      laterDirected.message._id.toHexString()
+    )
+    assert.equal(
+      await databaseService.notifications.countDocuments({
+        recipient_id: mentionedId,
+        target_id: laterDirected.message._id,
+        invalidated_at: null
+      }),
+      0
+    )
+    const notificationStateAfterLatestRead = await databaseService.notificationStates.findOne({
+      recipient_id: mentionedId
+    })
+    assert.equal(notificationStateAfterLatestRead?.unread_count, 0)
+
+    const delayedDirected = await send(senderId, `delayed @${mentionUsername}`, {
+      mention_user_ids: [mentionedId.toHexString()]
+    })
+    await deliveryService.deliver(delayedDirected)
+    const delayedDirectedEvent = await databaseService.outboxEvents.findOne({
+      type: 'MessageCreated',
+      aggregate_id: delayedDirected.message._id
+    })
+    assert(delayedDirectedEvent)
+    await conversationService.markAsRead(
+      mentionedId.toHexString(),
+      conversationId.toHexString(),
+      delayedDirected.message._id.toHexString()
+    )
+    await processEvent(delayedDirectedEvent)
+    assert.equal(
+      await databaseService.notifications.countDocuments({
+        recipient_id: mentionedId,
+        target_id: delayedDirected.message._id,
+        invalidated_at: null
       }),
       0
     )
@@ -250,6 +350,9 @@ const main = async () => {
 
     console.log('Message relevance runtime verification passed', {
       directed_precedence_and_retry: true,
+      directed_read_invalidation: true,
+      directed_read_partial_and_idempotent: true,
+      delayed_outbox_after_read_suppressed: true,
       reaction_chat_state_preserved: true,
       reaction_notification_suppressed: true,
       concurrent_reaction_count: reactedMessage.reactions.length
