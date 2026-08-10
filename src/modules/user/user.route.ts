@@ -8,6 +8,7 @@ import { accessTokenValidator } from '../auth/auth.validator'
 import {
   followedUserIdValidator,
   followNotificationPreferenceValidator,
+  mentionCandidatesValidator,
   updateMeValidator
 } from './user.validator'
 import { paginationValidator } from '../tweet/tweet.validator'
@@ -30,6 +31,14 @@ userRouter.get(
   accessTokenValidator,
   authenticateAccessToken,
   wrapController(userController.getFriendsController)
+)
+userRouter.get(
+  '/mention-candidates',
+  accessTokenValidator,
+  authenticateAccessToken,
+  verifiedUserValidator,
+  mentionCandidatesValidator,
+  wrapController(userController.getMentionCandidatesController)
 )
 userRouter.get(
   '/profile/:username',
@@ -67,6 +76,15 @@ userRouter.patch(
   verifiedUserValidator,
   followNotificationPreferenceValidator,
   wrapController(userController.updateFollowNotificationPreferenceController)
+)
+
+userRouter.get(
+  '/:followed_user_id/follow-notification-preferences',
+  accessTokenValidator,
+  authenticateAccessToken,
+  verifiedUserValidator,
+  followedUserIdValidator,
+  wrapController(userController.getFollowNotificationPreferenceController)
 )
 
 userRouter.get(

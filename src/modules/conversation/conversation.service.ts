@@ -14,7 +14,8 @@ import {
   MediaType,
   MessageKind,
   NotificationTargetType,
-  NotificationType
+  NotificationType,
+  UserVerifyStatus
 } from '~/constants/enums'
 import type User from '~/schemas/User.schema'
 import conversationAccessService, {
@@ -1728,7 +1729,8 @@ class ConversationService {
                   _id: '$userInfo._id',
                   name: '$userInfo.name',
                   username: '$userInfo.username',
-                  avatar: '$userInfo.avatar'
+                  avatar: '$userInfo.avatar',
+                  verify: '$userInfo.verify'
                 }
               }
             }
@@ -1737,7 +1739,46 @@ class ConversationService {
       ])
       .toArray()
 
-    return group.length > 0 ? group[0].members : []
+    if (group.length === 0) return []
+    const members = group[0].members as Array<{
+      role: string
+      joined_at: Date
+      user: { _id: ObjectId; name: string; username: string; avatar?: string; verify?: UserVerifyStatus }
+    }>
+    const otherMemberIds = members
+      .map((member) => member.user._id)
+      .filter((memberId) => !memberId.equals(userObjectId))
+    const blocks =
+      otherMemberIds.length > 0
+        ? await this.databaseService.userBlocks
+            .find(
+              {
+                $or: [
+                  { user_id: userObjectId, blocked_user_id: { $in: otherMemberIds } },
+                  { user_id: { $in: otherMemberIds }, blocked_user_id: userObjectId }
+                ]
+              },
+              { projection: { user_id: 1, blocked_user_id: 1 } }
+            )
+            .toArray()
+        : []
+    const blockedIds = new Set(
+      blocks.map((block) =>
+        block.user_id.equals(userObjectId) ? block.blocked_user_id.toHexString() : block.user_id.toHexString()
+      )
+    )
+    return members.map((member) => {
+      const { verify, ...user } = member.user
+      return {
+        role: member.role,
+        joined_at: member.joined_at,
+        user,
+        is_mentionable:
+          !user._id.equals(userObjectId) &&
+          verify !== UserVerifyStatus.Banned &&
+          !blockedIds.has(user._id.toHexString())
+      }
+    })
   }
 
   async addGroupMembers(userId: string, conversationId: string, membersIds: string[]) {

@@ -37,6 +37,20 @@ export interface FollowNotificationPreferenceData {
   posts: boolean
 }
 
+export interface MentionCandidateQueryDto {
+  q: string
+  tweet_id?: string
+  limit: number
+}
+
+export interface MentionCandidateData {
+  _id: ObjectId
+  name: string
+  username: string
+  avatar?: string
+  source: 'following' | 'follower' | 'interaction'
+}
+
 export class UserResponseDto extends SuccessResponseDto<UserPublicDTO[] | UserPrivateDTO[]> {
   constructor(user: UserPublicDTO | UserPrivateDTO | UserPublicDTO[] | UserPrivateDTO[]) {
     super(HTTP_STATUS.OK, MESSAGES.GET_USER_PROFILE_SUCCESS, Array.isArray(user) ? user : [user])

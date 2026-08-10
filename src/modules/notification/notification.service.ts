@@ -3,7 +3,7 @@ import DatabaseService, { databaseService as sharedDatabaseService } from '~/con
 import { NotificationType } from '~/constants/enums'
 import { HttpError } from '~/common/http-error'
 import { HTTP_STATUS } from '~/constants/httpStatus'
-import type { NotificationPageData } from './dto'
+import type { NotificationListItem, NotificationPageData } from './dto'
 import { NotificationRepository } from './notification.repository'
 import { NotificationQueryService } from './notification-query.service'
 import { NotificationPolicyService } from './notification-policy.service'
@@ -81,6 +81,10 @@ export class NotificationService {
 
   async getNotifications(userId: string, cursor: string | undefined, limit: number): Promise<NotificationPageData> {
     return this.queryService.getNotifications(userId, cursor, limit)
+  }
+
+  async getNotification(userId: string, notificationId: string): Promise<NotificationListItem> {
+    return this.queryService.getNotification(userId, notificationId)
   }
 
   async markAllAsRead(userId: string) {

@@ -78,7 +78,7 @@ class TweetService {
     try {
       transactionResult = await session.withTransaction(async () => {
         const hashtagIds = await this.processHashtags(hashtags, session)
-        const finalMentions = await this.mentionService.resolve(content, mentions ?? [], actorId, session)
+        const finalMentions = await this.mentionService.resolve(content, mentions ?? [], actorId, session, parentId)
         const tweet = new Tweet({
           _id: tweetId,
           user_id: actorId,
@@ -1114,7 +1114,8 @@ class TweetService {
             body.content !== undefined ? body.content : tweet.content,
             body.mentions,
             actorId,
-            session
+            session,
+            tweet.parent_id ?? tweetId
           )
           updateData.mentions = currentMentions
         }

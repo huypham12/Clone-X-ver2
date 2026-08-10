@@ -18,17 +18,13 @@ import type {
 import { inferLegacyNotificationTargetType } from './notification-policy.service'
 import { NotificationRepository } from './notification.repository'
 import { NotificationUnreadService } from './notification-unread.service'
-import {
-  getEligibleNotificationTypeFilter,
-  isEligibleNotificationType
-} from './notification-eligibility'
+import { getEligibleNotificationTypeFilter, isEligibleNotificationType } from './notification-eligibility'
 
 const TARGET_PREVIEW_CONTENT_LIMIT = 140
 
 type NormalizedNotification = Omit<NotificationListItem, 'actor_info' | 'actor_infos_preview' | 'target_info'>
 
-const isValidDate = (value: Date | undefined): value is Date =>
-  value instanceof Date && !Number.isNaN(value.getTime())
+const isValidDate = (value: Date | undefined): value is Date => value instanceof Date && !Number.isNaN(value.getTime())
 
 const optionalDateOrNull = (value: Date | null | undefined): Date | null =>
   value instanceof Date && !Number.isNaN(value.getTime()) ? value : null
@@ -88,6 +84,18 @@ export class NotificationQueryService {
         : null
 
     return { notifications, unreadCount: unreadState.unread_count, next_cursor, has_next_page }
+  }
+
+  async getNotification(userId: string, notificationId: string): Promise<NotificationListItem> {
+    const recipientId = new this.databaseService.ObjectId(userId)
+    const document = await this.repository.findOwnedById(recipientId, new this.databaseService.ObjectId(notificationId))
+    if (!document || document.invalidated_at || !isEligibleNotificationType(document.type)) {
+      throw new HttpError('Notification not found', HTTP_STATUS.NOT_FOUND)
+    }
+
+    const [notification] = await this.hydrate([this.normalize(document)])
+    if (!notification) throw new HttpError('Notification not found', HTTP_STATUS.NOT_FOUND)
+    return notification
   }
 
   private async resolveCursor(recipientId: ObjectId, cursor: string): Promise<NotificationTupleCursor> {
@@ -186,9 +194,7 @@ export class NotificationQueryService {
         deduplication_key: fullyVisible ? notification.deduplication_key : undefined,
         aggregation_key: fullyVisible ? notification.aggregation_key : undefined,
         actor_info: actorInfo,
-        actor_infos_preview: visibleActorIds.map(
-          (actorId) => actorInfoById.get(actorId.toHexString()) ?? null
-        ),
+        actor_infos_preview: visibleActorIds.map((actorId) => actorInfoById.get(actorId.toHexString()) ?? null),
         target_info: targetInfo
       }
     })
@@ -368,10 +374,7 @@ export class NotificationQueryService {
     if (userIds.length === 0) return new Set()
     const [users, blocks] = await Promise.all([
       this.databaseService.users
-        .find(
-          { _id: { $in: userIds }, verify: { $ne: UserVerifyStatus.Banned } },
-          { projection: { _id: 1 } }
-        )
+        .find({ _id: { $in: userIds }, verify: { $ne: UserVerifyStatus.Banned } }, { projection: { _id: 1 } })
         .toArray(),
       this.databaseService.userBlocks
         .find(

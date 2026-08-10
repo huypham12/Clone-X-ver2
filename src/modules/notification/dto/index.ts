@@ -81,6 +81,12 @@ export class GetNotificationsResponseDto extends SuccessResponseDto<Notification
   }
 }
 
+export class GetNotificationResponseDto extends SuccessResponseDto<NotificationListItem> {
+  constructor(statusCode: number, message: string, data: NotificationListItem) {
+    super(statusCode, message, data)
+  }
+}
+
 export class NotificationResponseDto<
   T extends
     | { updatedCount: number; unreadCount: number; version: number }

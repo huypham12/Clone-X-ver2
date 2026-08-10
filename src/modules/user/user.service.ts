@@ -13,6 +13,7 @@ import { getIO } from '~/socket'
 import { OutboxDomainEventPublisher } from '~/modules/events/outbox.publisher'
 import { DomainAggregateType, DomainEventType } from '~/modules/events/domain-event.type'
 import { NotificationLifecycleGuardService } from '~/modules/notification/notification-lifecycle-guard.service'
+import { UserMentionCandidateService } from './user-mention-candidate.service'
 
 const emitBlockStatusChanged = (firstUserId: string, secondUserId: string) => {
   try {
@@ -31,6 +32,9 @@ export class UserService {
     private readonly databaseService: DatabaseService,
     private readonly outboxPublisher: OutboxDomainEventPublisher = new OutboxDomainEventPublisher(),
     private readonly lifecycleGuard: NotificationLifecycleGuardService = new NotificationLifecycleGuardService(
+      databaseService
+    ),
+    private readonly mentionCandidateService: UserMentionCandidateService = new UserMentionCandidateService(
       databaseService
     )
   ) {}
@@ -350,7 +354,6 @@ export class UserService {
     } finally {
       await session.endSession()
     }
-
   }
 
   unfollowUser = async (follow_user_id: string, followed_user_id: string) => {
@@ -385,11 +388,7 @@ export class UserService {
     }
   }
 
-  updateFollowNotificationPreference = async (
-    followUserId: string,
-    followedUserId: string,
-    posts: boolean
-  ) => {
+  updateFollowNotificationPreference = async (followUserId: string, followedUserId: string, posts: boolean) => {
     const updatedAt = new Date()
     const result = await this.databaseService.followers.findOneAndUpdate(
       {
@@ -413,6 +412,28 @@ export class UserService {
       )
     }
     return { followed_user_id: followedUserId, posts: result.post_notifications_enabled }
+  }
+
+  getFollowNotificationPreference = async (followUserId: string, followedUserId: string) => {
+    const relation = await this.databaseService.followers.findOne(
+      {
+        follow_user_id: new ObjectId(followUserId),
+        followed_user_id: new ObjectId(followedUserId)
+      },
+      { projection: { followed_user_id: 1, post_notifications_enabled: 1 } }
+    )
+    if (!relation) {
+      throw new HttpError(
+        MESSAGES.FOLLOW_RELATION_NOT_FOUND,
+        HTTP_STATUS.NOT_FOUND,
+        undefined,
+        'FOLLOW_RELATION_NOT_FOUND'
+      )
+    }
+    return {
+      followed_user_id: relation.followed_user_id.toHexString(),
+      posts: relation.post_notifications_enabled ?? false
+    }
   }
 
   private isDuplicateKeyError(error: unknown): error is { code: number } {
@@ -542,6 +563,14 @@ export class UserService {
       )
       .toArray()
     return users
+  }
+
+  getMentionCandidates = async (userId: string, q: string, tweetId: string | undefined, limit: number) => {
+    return this.mentionCandidateService.getCandidates(new ObjectId(userId), {
+      q,
+      contextTweetId: tweetId ? new ObjectId(tweetId) : undefined,
+      limit
+    })
   }
 
   private async aggregateTweets(matchStage: any, current_user_id: string | undefined, limit: number) {

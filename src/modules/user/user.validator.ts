@@ -76,3 +76,16 @@ export const followNotificationPreferenceValidator = validate(
     body: z.object({ posts: z.boolean() }).strict()
   })
 )
+
+export const mentionCandidatesValidator = validate(
+  z.object({
+    query: z.object({
+      q: z.string().trim().max(15, 'Mention query is too long').default(''),
+      tweet_id: z
+        .string()
+        .refine((value) => ObjectId.isValid(value), { message: 'Invalid tweet_id' })
+        .optional(),
+      limit: z.coerce.number().int().min(1).max(20).default(8)
+    })
+  })
+)

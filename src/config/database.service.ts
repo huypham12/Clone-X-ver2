@@ -259,6 +259,16 @@ export default class DatabaseService {
       { followed_user_id: 1, post_notifications_enabled: 1, _id: 1 },
       { name: 'followed_user_post_notifications_relation' }
     )
+    await Promise.all([
+      this.followers.createIndex(
+        { follow_user_id: 1, updated_at: -1 },
+        { name: 'follow_user_id_1_updated_at_-1' }
+      ),
+      this.followers.createIndex(
+        { followed_user_id: 1, updated_at: -1 },
+        { name: 'followed_user_id_1_updated_at_-1' }
+      )
+    ])
   }
 
   private async indexTweets() {
@@ -277,7 +287,10 @@ export default class DatabaseService {
   }
 
   private async indexLikes() {
-    await this.likes.createIndex({ user_id: 1, tweet_id: 1 }, { name: 'user_id_1_tweet_id_1', unique: true })
+    await Promise.all([
+      this.likes.createIndex({ user_id: 1, tweet_id: 1 }, { name: 'user_id_1_tweet_id_1', unique: true }),
+      this.likes.createIndex({ tweet_id: 1, created_at: -1 }, { name: 'tweet_id_1_created_at_-1' })
+    ])
   }
 
   private async indexHashtags() {
@@ -286,29 +299,34 @@ export default class DatabaseService {
 
   private async indexUserBlocks() {
     const exists = await this.indexExistsSafely(this.userBlocks, 'user_id_1_blocked_user_id_1')
-    if (exists) return
+    if (!exists) {
+      const duplicateGroups = await this.userBlocks
+        .aggregate<{ ids: ObjectId[]; count: number }>([
+          {
+            $group: {
+              _id: { user_id: '$user_id', blocked_user_id: '$blocked_user_id' },
+              ids: { $push: '$_id' },
+              count: { $sum: 1 }
+            }
+          },
+          { $match: { count: { $gt: 1 } } }
+        ])
+        .toArray()
+      if (duplicateGroups.length > 0) {
+        throw new Error(
+          `Cannot create unique user block index: ${duplicateGroups.length} duplicate relation group(s); reset the local collection or database`
+        )
+      }
 
-    const duplicateGroups = await this.userBlocks
-      .aggregate<{ ids: ObjectId[]; count: number }>([
-        {
-          $group: {
-            _id: { user_id: '$user_id', blocked_user_id: '$blocked_user_id' },
-            ids: { $push: '$_id' },
-            count: { $sum: 1 }
-          }
-        },
-        { $match: { count: { $gt: 1 } } }
-      ])
-      .toArray()
-    if (duplicateGroups.length > 0) {
-      throw new Error(
-        `Cannot create unique user block index: ${duplicateGroups.length} duplicate relation group(s); reset the local collection or database`
+      await this.userBlocks.createIndex(
+        { user_id: 1, blocked_user_id: 1 },
+        { name: 'user_id_1_blocked_user_id_1', unique: true }
       )
     }
 
     await this.userBlocks.createIndex(
-      { user_id: 1, blocked_user_id: 1 },
-      { name: 'user_id_1_blocked_user_id_1', unique: true }
+      { blocked_user_id: 1, user_id: 1 },
+      { name: 'blocked_user_id_1_user_id_1' }
     )
   }
 

@@ -6,6 +6,7 @@ import { ObjectId } from 'mongodb'
 
 const mentionIdsSchema = z
   .array(z.string().refine((val) => ObjectId.isValid(val), { message: 'Invalid mention id' }))
+  .max(20, { message: 'A tweet cannot mention more than 20 users' })
   .transform((values) => [
     ...new Map(
       values.map((value) => {

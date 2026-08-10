@@ -1,7 +1,7 @@
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import notificationService from './notification.service'
 import { GetHandler, PostHandler } from '~/types/controller-handler.type'
-import { GetNotificationsResponseDto, NotificationResponseDto } from './dto'
+import { GetNotificationResponseDto, GetNotificationsResponseDto, NotificationResponseDto } from './dto'
 import { HttpError } from '~/common/http-error'
 import type { ParamsDictionary } from 'express-serve-static-core'
 import type { NotificationIdParams, NotificationPaginationQuery } from './notification.validator'
@@ -46,6 +46,17 @@ export const getNotificationsController: GetHandler<
   const result = await notificationService.getNotifications(user_id, cursor, limit)
 
   const response = new GetNotificationsResponseDto(HTTP_STATUS.OK, 'Get notifications successfully', result)
+  res.status(response.statusCode).json(response)
+}
+
+export const getNotificationController: GetHandler<GetNotificationResponseDto, NotificationIdParams> = async (
+  req,
+  res
+) => {
+  const user_id = getAuthenticatedUserId(req.decoded_authorization?.user_id)
+  const id = getValidatedNotificationId(req.validatedData)
+  const result = await notificationService.getNotification(user_id, id)
+  const response = new GetNotificationResponseDto(HTTP_STATUS.OK, 'Get notification successfully', result)
   res.status(response.statusCode).json(response)
 }
 

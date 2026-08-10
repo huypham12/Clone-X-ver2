@@ -8,11 +8,21 @@ Các REST contract liên quan vẫn giữ response cũ:
 
 - `POST /api/user/:followed_user_id/follow`: `200` với `data: null`; self-follow/ID sai trả `400`, block hai chiều `403`, user không tồn tại `404`, relation trùng `409`.
 - `DELETE /api/user/:followed_user_id/follow`: `200` với `data: null`; relation không tồn tại trả `400`.
-- `POST /api/tweets` và `PATCH /api/tweets/:tweet_id`: request/response giữ nguyên. Mảng `mentions` tiếp tục là ObjectId string; backend dedupe với username `@...` trong content. Với PATCH, bỏ qua `mentions` sẽ giữ nguyên danh sách đã lưu dù `content` thay đổi; muốn thêm hoặc bỏ mention, frontend phải gửi toàn bộ danh sách explicit mention mong muốn.
+- `POST /api/tweets` và `PATCH /api/tweets/:tweet_id`: request/response giữ nguyên. Mảng `mentions` là tối đa 20 ObjectId string; backend dedupe với username `@...` trong content rồi chỉ giữ following, follower hoặc user thuộc ngữ cảnh tweet liên quan, đồng thời loại self, block hai chiều, user banned/không tồn tại. Với PATCH, bỏ qua `mentions` sẽ giữ nguyên danh sách đã lưu dù `content` thay đổi; muốn thêm hoặc bỏ mention, frontend phải gửi toàn bộ danh sách explicit mention mong muốn.
 
 ## REST
 
 Tất cả endpoint yêu cầu `Authorization: Bearer <access_token>`.
+
+### `GET /api/user/mention-candidates`
+
+Query:
+
+- `q`: chuỗi `0..15` ký tự, mặc định rỗng; chỉ lọc trong tập candidate hợp lệ, không search toàn bộ user.
+- `tweet_id`: optional ObjectId. Khi có, backend cộng thêm author, liker và actor của reply/repost/quote trực tiếp của tweet nếu caller được xem context đó.
+- `limit`: số nguyên `1..20`, mặc định `8`.
+
+Response `data` là mảng `{ _id, name, username, avatar?, source }`, trong đó `source` là `following`, `follower` hoặc `interaction`. Kết quả ưu tiên following -> follower -> interaction, dedupe theo user ID và loại caller, block hai chiều, user banned, bị xóa hoặc thiếu username. Endpoint query theo relation/context có giới hạn; không lấy danh sách user toàn hệ thống rồi filter ở frontend.
 
 ### `GET /api/notifications`
 
@@ -93,6 +103,45 @@ Error:
 
 - `400`: cursor sai định dạng, cursor ObjectId cũ không tồn tại/không thuộc caller, hoặc `limit` không hợp lệ.
 - `401`: thiếu hoặc sai access token.
+
+### `GET /api/notifications/:id`
+
+Trả đúng một notification thuộc caller với cùng normalization, hydration, eligibility và redaction policy như `GET /api/notifications`. Endpoint này dùng để hydrate deterministic payload raw từ `@notification:new`/`@notification:updated` mà không scan hoặc refetch page đầu.
+
+Response `200`:
+
+```json
+{
+  "statusCode": 200,
+  "message": "Get notification successfully",
+  "data": {
+    "_id": "<notification_id>",
+    "recipient_id": "<user_id>",
+    "sender_id": "<user_id_or_null>",
+    "type": "like",
+    "target_id": "<tweet_id_or_null>",
+    "is_read": false,
+    "created_at": "<ISO date>",
+    "target_type": "TWEET",
+    "actor_ids_preview": ["<user_id>"],
+    "actor_count": 1,
+    "context": {},
+    "aggregation_active": false,
+    "read_at": null,
+    "updated_at": "<ISO date>",
+    "invalidated_at": null,
+    "actor_info": {
+      "_id": "<user_id>",
+      "name": "Actor name",
+      "username": "actor_username"
+    },
+    "actor_infos_preview": [],
+    "target_info": null
+  }
+}
+```
+
+ID sai định dạng trả `400`. Item không tồn tại, không thuộc caller, đã invalidated hoặc không còn eligible trả `404`. Endpoint không trả raw identity đã bị redaction và không thay đổi unread state.
 
 ### `POST /api/notifications/:id/read`
 
@@ -189,7 +238,7 @@ Event được emit vào personal room của `recipient_id` sau khi notification
 }
 ```
 
-Socket payload không hydrate `actor_info`, `actor_infos_preview` hoặc `target_info`. Sau khi insert/upsert raw item, frontend có thể refetch trang đầu nếu cần projection để render. Nếu emit lỗi, notification vẫn tồn tại và sẽ xuất hiện khi gọi REST.
+Socket payload không hydrate `actor_info`, `actor_infos_preview` hoặc `target_info`. Frontend hydrate chính xác item bằng `GET /api/notifications/:id`, sau đó upsert theo `_id`; nếu hydration lỗi thì REST page/focus/reconnect reconciliation vẫn là fallback bền vững. Nếu emit lỗi, notification vẫn tồn tại và sẽ xuất hiện khi gọi REST.
 
 Phase 7–8 dùng các notification sau:
 
@@ -424,7 +473,8 @@ Khi `NOTIFICATION_OUTBOX_ENABLED=true` và `NOTIFICATION_MESSAGE_DIRECTED_ENABLE
 
 - Reply hợp lệ tạo notification `type=message_reply`; group mention tạo `type=message_mention`. Nếu cùng một recipient vừa là owner của reply target vừa được mention, backend chỉ tạo `message_mention`.
 - Cả hai dùng `target_type=MESSAGE`, `target_id` là message mới và `context` có `conversation_id`, `conversation_type`; `reply_to_message_id` có mặt khi message là reply.
-- `mention_user_ids` trong `@conversation:send` là optional. Backend merge explicit IDs với `@username` trong content, dedupe và chỉ giữ current group member không phải sender. Direct message trả/lưu danh sách rỗng.
+- `mention_user_ids` trong `@conversation:send` là optional. Backend merge explicit IDs với `@username` trong content, dedupe và chỉ giữ current group member không phải sender, không bị block hai chiều, không banned/không tồn tại. Direct message trả/lưu danh sách rỗng.
+- `GET /api/conversations/:conversation_id/members` thêm additive `is_mentionable` trên từng member để composer lọc đúng policy mà không làm mất member khỏi màn hình quản trị group.
 - Thành viên không thuộc directed intent chỉ nhận inbox unread và `@conversation:receive`, không có notification activity item. Mute không suppress `message_reply`/`message_mention` in-app.
 - Generic notification legacy `type=message` không còn runtime business caller. Khi directed flag tắt, backend vẫn giao message và cập nhật inbox unread nhưng không tạo generic activity item.
 
@@ -467,6 +517,24 @@ Notification direct dùng `group_add`, `group_kick`, `admin_granted`, `admin_rev
 
 ### Tweet gốc từ tài khoản đã opt-in (Phase 16)
 
+Frontend đọc trạng thái hiện tại bằng:
+
+```http
+GET /api/user/:followed_user_id/follow-notification-preferences
+```
+
+Response:
+
+```json
+{
+  "statusCode": 200,
+  "message": "Get follow notification preference successfully",
+  "data": { "followed_user_id": "<user_id>", "posts": false }
+}
+```
+
+Endpoint chỉ trả relation thuộc authenticated caller. Relation không tồn tại hoặc đã unfollow trả `404 FOLLOW_RELATION_NOT_FOUND`; field legacy chưa có giá trị được chuẩn hóa thành `posts=false`.
+
 Frontend bật/tắt bằng:
 
 ```http
@@ -486,7 +554,7 @@ Response:
 }
 ```
 
-Body chỉ nhận boolean `posts`; relation không thuộc caller hoặc đã unfollow trả `404 FOLLOW_RELATION_NOT_FOUND`. Follow mới mặc định false; unfollow xóa preference, frontend không giữ toggle cũ khi follow lại.
+Body chỉ nhận boolean `posts`; relation không thuộc caller hoặc đã unfollow trả `404 FOLLOW_RELATION_NOT_FOUND`. Follow mới mặc định false; unfollow xóa preference, frontend xóa cache relation và luôn đọc lại GET khi follow lại.
 
 Khi bật, chỉ tweet gốc `Tweet` audience `Everyone` tạo notification `type=followed_user_tweet`, `target_type=TWEET`, `target_id=<tweet_id>`. Reply, quote, repost, edit, restore và audience khác không tạo item này. Notification đến bất đồng bộ qua `@notification:new`; frontend upsert theo `_id`, không tự cộng unread nếu nhận event trùng, và dùng REST refetch sau reconnect như các type khác.
 
