@@ -651,7 +651,7 @@ Không trả hostname nội bộ, URI, database name, queue payload hoặc stack
 
 ## Phase 6 — Redis/media ổn định, giữ đường nâng cấp VPS nhưng không triển khai topology phân tán
 
-**Trạng thái: Chưa triển khai.**
+**Trạng thái: Đã hoàn thành.**
 
 **Mục tiêu**
 

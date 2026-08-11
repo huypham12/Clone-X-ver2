@@ -156,3 +156,5 @@ _Xử lý tải lên đa phương tiện._
 - `DELETE /:media_id`: Xóa file media khỏi Cloudinary rồi mới xóa metadata trong Database.
 
 Ba upload endpoint giữ cùng response shape. Với `MEDIA_PROCESSING_MODE=inline`, durable upload và metadata được hoàn thiện trong request nên trả `status=ready`. Với mode `queue`, Cloudinary URL/public id đã bền vững trước khi API trả `status=pending`; worker chuyển record sang `ready`, hoặc `failed` sau khi hết retry. Lỗi field/MIME/size trả `400`; lỗi storage hoặc persistence trả lỗi tương ứng và không tạo record `ready` thiếu durable reference.
+
+Khi nhận `pending`, client poll `GET /media/:media_id` cho đến `ready` hoặc `failed`; timeout phía client không thay đổi trạng thái backend. Các lỗi public liên quan gồm `400` cho upload không hợp lệ, `401` khi thiếu access token, `403` khi xóa media không thuộc caller, `404` khi media không tồn tại và `502` khi storage không xác nhận thao tác xóa.
