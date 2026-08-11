@@ -149,8 +149,10 @@ Lifecycle notification dùng outbox khi `NOTIFICATION_OUTBOX_ENABLED=true`: xóa
 
 _Xử lý tải lên đa phương tiện._
 
-- `POST /upload-image`: Upload tệp hình ảnh.
-- `POST /upload-video`: Upload tệp video (Sẽ đưa vào queue chờ xử lý).
-- `POST /upload-audio`: Upload tệp âm thanh (Voice message, audio).
-- `GET /:media_id`: Lấy thông tin chi tiết về một file media.
-- `DELETE /:media_id`: Xóa file media khỏi hệ thống lưu trữ (Cloudinary và Database).
+- `POST /upload-image`: Upload tối đa 4 tệp hình ảnh qua field `image`.
+- `POST /upload-video`: Upload một tệp video qua field `video`.
+- `POST /upload-audio`: Upload một tệp âm thanh qua field `audio`.
+- `GET /:media_id`: Lấy trạng thái hiện tại của media; client có thể poll endpoint này khi upload trả `pending`.
+- `DELETE /:media_id`: Xóa file media khỏi Cloudinary rồi mới xóa metadata trong Database.
+
+Ba upload endpoint giữ cùng response shape. Với `MEDIA_PROCESSING_MODE=inline`, durable upload và metadata được hoàn thiện trong request nên trả `status=ready`. Với mode `queue`, Cloudinary URL/public id đã bền vững trước khi API trả `status=pending`; worker chuyển record sang `ready`, hoặc `failed` sau khi hết retry. Lỗi field/MIME/size trả `400`; lỗi storage hoặc persistence trả lỗi tương ứng và không tạo record `ready` thiếu durable reference.

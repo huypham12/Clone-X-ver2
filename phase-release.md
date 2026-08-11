@@ -512,7 +512,7 @@ Một người lạ có thể cấu hình hai repo mà không xem `.env` thật;
 - `.gitignore`: thêm `!.env.example` sau rule `.env*`; nếu không, file example mới vẫn bị Git bỏ qua.
 - `src/app/layout.tsx`: thay `next/font/google` bằng `next/font/local`.
 - Thêm Geist WOFF2 cần dùng vào repo từ nguồn chính thức, kèm license/attribution; chỉ giữ weight thực sự dùng.
-- Cập nhật metadata title/description/Open Graph cơ bản từ `Create Next App` thành X Clone portfolio.
+- Cập nhật metadata title/description/Open Graph cơ bản từ `Create Next App` thành X.
 - Pin Node major bằng `engines` và một file version dùng chung theo host được chọn.
 
 **Gate**

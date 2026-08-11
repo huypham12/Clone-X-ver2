@@ -4,8 +4,8 @@ import { initSocket } from './socket'
 import { databaseService } from './config/database.service'
 import { envConfig, isCorsOriginAllowed, isProduction } from './config/getEnvConfig'
 import redisService from './config/redis.service'
-import { startVideoWorker, videoQueue, videoWorker } from '~/queues/video.queue'
 import { notificationQueue } from '~/queues/notification.queue'
+import { closeMediaProcessingQueue } from '~/queues/media-processing.queue'
 import { connectBullMqRedis, disconnectBullMqRedis } from '~/config/redisConfig'
 import { OutboxQueuePublisher } from '~/modules/events/outbox.publisher'
 import { NotificationWorker } from '~/modules/notification/notification.worker'
@@ -31,6 +31,8 @@ import { initFolder } from './utils/file'
 import healthRouter from './modules/health/health.route'
 import { HttpError } from './common/http-error'
 import { HTTP_STATUS } from './constants/httpStatus'
+import { MediaProcessingWorker } from '~/modules/media/media-processing.worker'
+import { MediaProcessingReconciler } from '~/modules/media/media-processing.reconciler'
 
 // Khởi tạo các thư mục upload
 initFolder()
@@ -43,6 +45,8 @@ const main = async () => {
   let outboxPublisher: OutboxQueuePublisher | undefined
   let notificationWorker: NotificationWorker | undefined
   let notificationFanoutWorker: NotificationFanoutWorker | undefined
+  let mediaProcessingWorker: MediaProcessingWorker | undefined
+  let mediaProcessingReconciler: MediaProcessingReconciler | undefined
   let shuttingDown = false
 
   const shutdown = async (reason: string, exitCode = 0): Promise<void> => {
@@ -62,12 +66,13 @@ const main = async () => {
     await notificationFanoutWorker?.close().catch((error: unknown) => {
       console.error('Could not stop notification fanout worker', error)
     })
-    await Promise.allSettled([
-      notificationQueue.close(),
-      notificationFanoutQueue.close(),
-      videoWorker.close(false),
-      videoQueue.close()
-    ])
+    await mediaProcessingReconciler?.stop().catch((error: unknown) => {
+      console.error('Could not stop media processing reconciler', error)
+    })
+    await mediaProcessingWorker?.close().catch((error: unknown) => {
+      console.error('Could not stop media processing worker', error)
+    })
+    await Promise.allSettled([notificationQueue.close(), notificationFanoutQueue.close(), closeMediaProcessingQueue()])
     await disconnectBullMqRedis().catch(() => undefined)
     await redisService.disconnect().catch(() => undefined)
     await databaseService.disconnect().catch(() => undefined)
@@ -153,7 +158,15 @@ const main = async () => {
     httpServer = createServer(app)
 
     initSocket(httpServer, databaseService)
-    await startVideoWorker()
+    if (envConfig.media.processingMode === 'queue') {
+      mediaProcessingWorker = new MediaProcessingWorker(databaseService)
+      await mediaProcessingWorker.start()
+      mediaProcessingReconciler = new MediaProcessingReconciler(databaseService)
+      mediaProcessingReconciler.start()
+      console.log('Media processing worker and reconciler are enabled')
+    } else {
+      console.log('Media processing runs inline')
+    }
 
     if (envConfig.features.notificationOutboxEnabled) {
       notificationWorker = new NotificationWorker(databaseService)

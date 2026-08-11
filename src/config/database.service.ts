@@ -78,6 +78,7 @@ export default class DatabaseService {
       this.indexBookmarks(),
       this.indexLikes(),
       this.indexHashtags(),
+      this.indexMedias(),
       this.createConversationIndexes(),
       this.createFollowerIndexes(),
       this.createNotificationIndexes(),
@@ -206,6 +207,10 @@ export default class DatabaseService {
       this.refreshTokens.createIndex({ token: 1 }, { name: 'token_1' }),
       this.refreshTokens.createIndex({ exp: 1 }, { name: 'exp_1', expireAfterSeconds: 0 })
     ])
+  }
+
+  private async indexMedias() {
+    await this.medias.createIndex({ status: 1, updated_at: 1 }, { name: 'media_status_updated_at' })
   }
 
   private async indexFollowers() {
