@@ -474,7 +474,7 @@ Sau gate, chạy `npm ls --omit=dev --depth=0` một lần ở mỗi repo và sm
 
 ## Phase 4 — `.env.example`, Node version và frontend build tái lập
 
-**Trạng thái: Chưa triển khai.**
+**Trạng thái: Đã hoàn thành.**
 
 **Mục tiêu**
 
