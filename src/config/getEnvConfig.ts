@@ -13,6 +13,10 @@ config({
 })
 
 // Interface for configuration structure
+export type SocketAdapterMode = 'memory' | 'redis'
+export type MediaProcessingMode = 'inline' | 'queue'
+export type ConversationMessageCacheMode = 'off' | 'full'
+
 interface EnvConfig {
   app: {
     port: number
@@ -62,6 +66,12 @@ interface EnvConfig {
   }
   redis: {
     url: string
+    cacheUrl: string
+    queueUrl: string
+    socketUrl: string
+  }
+  socket: {
+    adapterMode: SocketAdapterMode
   }
   cloudinary: {
     cloudName: string
@@ -79,6 +89,19 @@ interface EnvConfig {
   }
   conversation: {
     maxGroupMembers: number
+    messageCacheMode: ConversationMessageCacheMode
+  }
+  media: {
+    processingMode: MediaProcessingMode
+    workerConcurrency: number
+    queueMaxAttempts: number
+    maxImageUploadMb: number
+    maxVideoUploadMb: number
+    maxAudioUploadMb: number
+  }
+  queue: {
+    completedRetentionCount: number
+    failedRetentionCount: number
   }
 }
 
@@ -164,11 +187,33 @@ const getTrustProxyHopsEnvVar = (key: string, defaultValue: number): number => {
   return value
 }
 
-const getPositiveIntegerEnvVar = (key: string, defaultValue: number): number => {
+const getIntegerEnvVar = (key: string, defaultValue: number, min: number, max: number): number => {
   const rawValue = getEnvVar(key, false, String(defaultValue))
   const value = Number(rawValue)
-  if (!Number.isSafeInteger(value) || value < 3) {
-    throw new Error(`${key} must be an integer greater than or equal to 3`)
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`${key} must be an integer between ${min} and ${max}`)
+  }
+  return value
+}
+
+const getEnumEnvVar = <T extends string>(key: string, values: readonly T[], defaultValue: T): T => {
+  const value = getEnvVar(key, false, defaultValue)
+  if (!values.includes(value as T)) {
+    throw new Error(`${key} must be one of: ${values.join(', ')}`)
+  }
+  return value as T
+}
+
+const getRedisUrlEnvVar = (key: string, defaultValue?: string): string => {
+  const value = getEnvVar(key, false, defaultValue)
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new Error(`${key} must be a valid Redis URL`)
+  }
+  if (parsed.protocol !== 'redis:' && parsed.protocol !== 'rediss:') {
+    throw new Error(`${key} must use redis:// or rediss://`)
   }
   return value
 }
@@ -186,6 +231,7 @@ const mongodbUri = getEnvVar('MONGODB_URI', false)
 const dbClusterHost = mongodbUri ? '' : getEnvVar('DB_CLUSTER_HOST')
 const dbUsername = mongodbUri ? '' : getEnvVar('DB_USERNAME')
 const dbPassword = mongodbUri ? '' : getEnvVar('DB_PASSWORD')
+const redisUrl = getRedisUrlEnvVar('REDIS_URL', 'redis://localhost:6379')
 
 // Export configuration
 export const envConfig: EnvConfig = {
@@ -248,7 +294,13 @@ export const envConfig: EnvConfig = {
     refresh: getEnvVar('REFRESH_TOKEN_EXPIRES_IN')
   },
   redis: {
-    url: getEnvVar('REDIS_URL', false, 'redis://localhost:6379')
+    url: redisUrl,
+    cacheUrl: getRedisUrlEnvVar('REDIS_CACHE_URL', redisUrl),
+    queueUrl: getRedisUrlEnvVar('REDIS_QUEUE_URL', redisUrl),
+    socketUrl: getRedisUrlEnvVar('REDIS_SOCKET_URL', redisUrl)
+  },
+  socket: {
+    adapterMode: getEnumEnvVar('SOCKET_ADAPTER_MODE', ['memory', 'redis'] as const, 'memory')
   },
   cloudinary: {
     cloudName: getEnvVar('CLOUDINARY_CLOUD_NAME'),
@@ -265,7 +317,20 @@ export const envConfig: EnvConfig = {
     notificationFollowedTweetEnabled: getBooleanEnvVar('NOTIFICATION_FOLLOWED_TWEET_ENABLED', true)
   },
   conversation: {
-    maxGroupMembers: getPositiveIntegerEnvVar('MAX_GROUP_MEMBERS', 500)
+    maxGroupMembers: getIntegerEnvVar('MAX_GROUP_MEMBERS', 500, 3, 10_000),
+    messageCacheMode: getEnumEnvVar('CONVERSATION_MESSAGE_CACHE_MODE', ['off', 'full'] as const, 'off')
+  },
+  media: {
+    processingMode: getEnumEnvVar('MEDIA_PROCESSING_MODE', ['inline', 'queue'] as const, 'inline'),
+    workerConcurrency: getIntegerEnvVar('MEDIA_WORKER_CONCURRENCY', 1, 1, 32),
+    queueMaxAttempts: getIntegerEnvVar('MEDIA_QUEUE_MAX_ATTEMPTS', 5, 1, 20),
+    maxImageUploadMb: getIntegerEnvVar('MAX_IMAGE_UPLOAD_MB', 10, 1, 100),
+    maxVideoUploadMb: getIntegerEnvVar('MAX_VIDEO_UPLOAD_MB', 20, 1, 1_024),
+    maxAudioUploadMb: getIntegerEnvVar('MAX_AUDIO_UPLOAD_MB', 10, 1, 100)
+  },
+  queue: {
+    completedRetentionCount: getIntegerEnvVar('QUEUE_COMPLETED_RETENTION_COUNT', 300, 1, 100_000),
+    failedRetentionCount: getIntegerEnvVar('QUEUE_FAILED_RETENTION_COUNT', 500, 1, 100_000)
   }
 }
 

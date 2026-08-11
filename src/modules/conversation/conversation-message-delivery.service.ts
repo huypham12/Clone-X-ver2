@@ -5,6 +5,7 @@ import conversationMessageHydrationService from './conversation-message-hydratio
 import { getConversationHistoryCutoff } from './conversation-access.service'
 import type { MessageCommandResult } from './conversation-message-command.service'
 import DatabaseService, { databaseService as sharedDatabaseService } from '~/config/database.service'
+import { envConfig } from '~/config/getEnvConfig'
 
 export class ConversationMessageDeliveryService {
   constructor(private readonly databaseService: DatabaseService = sharedDatabaseService) {}
@@ -89,13 +90,16 @@ export class ConversationMessageDeliveryService {
   }
 
   private async cache(conversationId: string, message: HydratedMessage, score: number): Promise<void> {
+    if (envConfig.conversation.messageCacheMode === 'off') return
+
     try {
       const key = `chat:messages:${conversationId}`
       await redisService.clientInstance.zAdd(key, { score, value: JSON.stringify(message) })
       await redisService.clientInstance.zRemRangeByRank(key, 0, -101)
       await redisService.clientInstance.expire(key, 7 * 24 * 60 * 60)
     } catch (error) {
-      console.error('Could not cache committed message:', error)
+      const errorName = error instanceof Error ? error.name : 'UnknownError'
+      console.error(`Could not cache committed message (${errorName})`)
     }
   }
 }

@@ -36,7 +36,7 @@ Browser
 Kế hoạch này không yêu cầu:
 
 - VPS, Kubernetes, multi-region hoặc autoscaling nhiều backend instance.
-- Tách API, notification worker và fan-out worker thành nhiều service trả phí.
+- Tách API, notification worker, fan-out worker và media worker thành nhiều process/service. Phase 6 chỉ làm sạch dependency boundary để không khóa đường nâng cấp; process role và cross-process realtime chỉ triển khai khi thật sự chuyển sang VPS.
 - Load test quy mô lớn, chaos engineering, SLO/SLA hoặc hệ thống metrics/trace hoàn chỉnh.
 - Migration framework để bảo toàn dữ liệu local cũ.
 - Bao phủ integration/E2E test tự động; phần integration test đã được chủ dự án nhận tự làm.
@@ -88,23 +88,24 @@ Kế hoạch này không yêu cầu:
 
 Stack đề xuất được chốt theo ngày **2026-08-10**; quota/chính sách phải kiểm tra lại trên trang chính thức lúc tạo service:
 
-| Thành phần | Lựa chọn mặc định           | Quyết định triển khai                                                                                                                                                   |
-| ---------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Frontend   | Vercel Hobby                | Root `X-frontend`, deploy Next.js native; chỉ dùng cho portfolio cá nhân/non-commercial.                                                                                |
-| Backend    | Render Free Web Service     | Root `X-ver2`, một instance hỗ trợ HTTP + WebSocket; chấp nhận sleep/cold start.                                                                                        |
-| Database   | MongoDB Atlas Free          | Database demo riêng; phải chạy thử transaction thật trước deploy vì code dùng `withTransaction()`.                                                                      |
-| Redis      | Redis Cloud Essentials Free | Redis 8.2, RESP2, 30 MB/30 connection/100 ops/s, `no eviction`; không HA/persistence/backup/TLS nên Mongo outbox là nguồn phục hồi và không cache full message payload. |
-| Media      | Cloudinary Free             | Lưu image/video/audio bền; local disk chỉ là temp trong một request.                                                                                                    |
-| Email      | Không triển khai            | Không tạo provider/secret; register auto-verified và login ngay.                                                                                                        |
+| Thành phần | Lựa chọn mặc định           | Quyết định triển khai                                                                                                                                                                 |
+| ---------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frontend   | Vercel Hobby                | Root `X-frontend`, deploy Next.js native; chỉ dùng cho portfolio cá nhân/non-commercial.                                                                                              |
+| Backend    | Render Free Web Service     | Root `X-ver2`, một instance hỗ trợ HTTP + WebSocket; chấp nhận sleep/cold start.                                                                                                      |
+| Database   | MongoDB Atlas Free          | Database demo riêng; phải chạy thử transaction thật trước deploy vì code dùng `withTransaction()`.                                                                                    |
+| Redis      | Redis Cloud Essentials Free | Redis 8.2, RESP2, 30 MB/30 connection/100 ops/s, `no eviction`; không HA/persistence/backup/TLS nên Mongo outbox/media pending là nguồn phục hồi và không cache full message payload. |
+| Media      | Cloudinary Free             | Lưu image/video/audio bền; local disk chỉ là temp trong một request.                                                                                                                  |
+| Email      | Không triển khai            | Không tạo provider/secret; register auto-verified và login ngay.                                                                                                                      |
 
 Lý do không cố nhét mọi thứ vào một host: frontend hợp với Vercel, backend realtime cần long-running process/WebSocket, còn MongoDB/Redis/media cần dịch vụ managed riêng. Đây vẫn là một topology không cần VPS.
 
 Tài liệu tham chiếu khi chốt: [Vercel pricing](https://vercel.com/pricing), [Render free services](https://render.com/docs/free), [Render Docker](https://render.com/docs/docker), [Redis Cloud Free plans](https://redis.io/docs/latest/operate/rc/subscriptions/view-essentials-subscription/essentials-plan-details/), [Redis Cloud TLS](https://redis.io/docs/latest/operate/rc/security/database-security/tls-ssl/), [MongoDB Atlas Free](https://www.mongodb.com/docs/atlas/tutorial/deploy-free-tier-cluster/) và [Cloudinary pricing](https://cloudinary.com/pricing).
 
-### 4.2. Một backend instance, worker chạy cùng process
+### 4.2. Portfolio deploy một instance, worker chạy cùng process
 
 - Chỉ triển khai một long-running Node.js web service có hỗ trợ WebSocket; không triển khai backend vào serverless function thuần request/response.
 - Notification worker, fan-out worker và outbox publisher tiếp tục chạy cùng API process để không cần thêm service trả phí.
+- Media worker queue nếu bật cũng chạy cùng process. Phase này không thêm process role hoặc script start worker riêng.
 - `NOTIFICATION_OUTBOX_ENABLED=true` trên môi trường demo; không bật legacy writer song song.
 - Free-tier có thể sleep. Khi backend sleep, WebSocket ngắt và queue không được xử lý; sau khi service thức lại, frontend reconnect và outbox publisher tiếp tục xử lý backlog từ MongoDB.
 - README phải nói rõ cold start/realtime interruption là giới hạn hosting, không phải bảo đảm always-on.
@@ -136,18 +137,19 @@ Checklist dashboard hiện tại:
 | TLS                       | Off — giới hạn free, không giả vờ dùng `rediss://`                                                                      |
 | Region                    | AWS Singapore nếu Render ở Singapore; nếu database hiện ở Virginia và vẫn 0 key/0 connection thì tạo lại trước khi dùng |
 
-### 4.4. Hai mode Socket.IO adapter
+### 4.4. Socket.IO adapter theo capability, realtime cùng process
 
 Thêm cấu hình:
 
 ```text
-SOCKET_REDIS_ADAPTER_ENABLED=false   # portfolio single-instance
+SOCKET_ADAPTER_MODE=memory   # memory | redis
 ```
 
-- `false`: chỉ dùng in-memory Socket.IO adapter. `io.in(userId).allSockets()` vẫn đúng trong một process và không mở hai connection Redis pub/sub.
-- `true`: mở `pubClient`/`subClient` và Redis adapter khi sau này thật sự chạy nhiều backend instance.
-- Cache Redis và BullMQ vẫn hoạt động khi adapter Socket.IO tắt.
-- Không tự động bật adapter chỉ vì có `REDIS_URL`; mục đích của biến phải rõ ràng.
+- `memory`: chỉ dùng in-memory Socket.IO adapter. `io.in(userId).allSockets()` vẫn đúng trong một API process và không mở hai connection Redis pub/sub.
+- `redis`: mở `pubClient`/`subClient` và Redis adapter; giữ mode này hoạt động để không phải khôi phục code khi sau này chạy nhiều instance, nhưng portfolio không bật.
+- Notification delivery được inject qua một interface nhỏ nhưng release này chỉ có implementation in-process. Không thêm Redis emitter, emitter factory hoặc cross-process config khi worker vẫn chạy cùng Socket.IO server.
+- Cache Redis và BullMQ vẫn hoạt động khi Socket.IO dùng `memory`. Không tự bật adapter chỉ vì có Redis URL.
+- Sticky session/WebSocket-only và cross-process emitter được ghi trong hướng nâng cấp VPS, không phải gate Phase 6.
 
 Budget connection mục tiêu ở mode portfolio:
 
@@ -160,30 +162,47 @@ Budget connection mục tiêu ở mode portfolio:
 
 Không hard-code tổng cuối cùng dựa trên giả định thư viện. Phase Redis phải đo số connection thật trên dashboard/provider hoặc `CLIENT LIST` nếu provider cho phép, rồi ghi con số vào README vận hành.
 
+Redis URL được tách theo capability nhưng có fallback để portfolio chỉ cần một secret:
+
+```text
+REDIS_URL                # bắt buộc, fallback chung
+REDIS_CACHE_URL          # optional, fallback REDIS_URL
+REDIS_QUEUE_URL          # optional, fallback REDIS_URL
+REDIS_SOCKET_URL         # optional, fallback REDIS_URL
+```
+
+Không thêm `FREE_TIER=true` hoặc tự đổi mode theo CPU/RAM. Mode được chọn rõ lúc deploy; concurrency, retention và upload limit mới là các nút điều chỉnh tải.
+
 ### 4.5. Redis không là nguồn sự thật
 
-| Dữ liệu                    | Nguồn sự thật                   | Redis mất/flush thì sao                                                |
-| -------------------------- | ------------------------------- | ---------------------------------------------------------------------- |
-| Notification/outbox        | MongoDB                         | Publisher có thể enqueue lại theo event id                             |
-| Notification unread        | MongoDB `NotificationState`     | REST trả lại state                                                     |
-| Conversation unread        | MongoDB read-state              | REST reconcile lại badge                                               |
-| Message/conversation cache | MongoDB                         | Cache miss và hydrate lại                                              |
-| Presence/last seen         | Redis, best-effort              | Có thể mất trạng thái tạm thời                                         |
-| BullMQ job                 | Redis + event id/outbox MongoDB | Notification có thể redeliver từ outbox; không được `FLUSHDB` tùy tiện |
+| Dữ liệu                    | Nguồn sự thật                   | Redis mất/flush thì sao                                                  |
+| -------------------------- | ------------------------------- | ------------------------------------------------------------------------ |
+| Notification/outbox        | MongoDB                         | Publisher có thể enqueue lại theo event id                               |
+| Notification unread        | MongoDB `NotificationState`     | REST trả lại state                                                       |
+| Conversation unread        | MongoDB read-state              | REST reconcile lại badge                                                 |
+| Message/conversation cache | MongoDB                         | Cache miss và hydrate lại                                                |
+| Presence/last seen         | Redis, best-effort              | Có thể mất trạng thái tạm thời                                           |
+| BullMQ notification job    | Redis + event id/outbox MongoDB | Notification có thể redeliver từ outbox; không được `FLUSHDB` tùy tiện   |
+| BullMQ media job           | Redis + `MediaMetadata` pending | Reconciler có thể enqueue lại theo media id và durable Cloudinary source |
 
 Không dùng Redis free-tier để giữ dữ liệu duy nhất không thể tái tạo.
 
-### 4.6. Video upload không đưa local filepath vào durable queue
+### 4.6. Media pipeline có hai mode, cùng dùng durable source
 
-Chọn phương án phù hợp portfolio, ít hạ tầng nhất:
+Thêm cấu hình `MEDIA_PROCESSING_MODE=inline|queue`; portfolio dùng `inline`, còn `queue` được giữ hoạt động và kiểm tra local để có thể dùng khi chuyển sang VPS.
 
-1. Video được nhận vào file tạm với giới hạn dung lượng bảo thủ, mặc định 20 MB và có thể cấu hình.
-2. Request upload ngay file đó lên Cloudinary trước khi trả response.
-3. Chỉ ghi `MediaMetadata.status=ready` sau khi Cloudinary trả `secure_url/public_id`.
-4. File tạm luôn bị xóa trong `finally`, kể cả DB/Cloudinary lỗi.
-5. Không enqueue job chứa `filepath`; video worker local hiện tại được bỏ khỏi startup hoặc giữ ngoài runtime nhưng không còn production caller.
+Luồng chung của cả hai mode:
 
-Trade-off được chấp nhận: request video lâu hơn và dung lượng demo nhỏ hơn, đổi lại restart/sleep không tạo job mồ côi. Direct-to-Cloudinary signed upload hoặc durable source staging là hướng production tương lai, ngoài phạm vi portfolio này.
+1. Backend nhận file tạm với giới hạn dung lượng cấu hình được.
+2. Upload original lên Cloudinary trước; chỉ `secure_url/public_id` mới là source bền.
+3. `inline`: hoàn thiện thumbnail/metadata trong request rồi lưu `ready`.
+4. `queue`: lưu `MediaMetadata.status=pending` kèm durable Cloudinary reference, sau đó BullMQ xử lý bằng job versioned không chứa `filepath`; frontend tiếp tục poll endpoint media như hiện tại.
+5. Reconciler quét media `pending` có durable reference và bảo đảm có deterministic BullMQ job. Media record là nguồn phục hồi vừa đủ cho quy mô hiện tại, không tạo thêm collection/outbox framework thứ hai.
+6. File tạm luôn được xóa trong `finally`; nếu Cloudinary thành công nhưng DB insert thất bại thì thực hiện best-effort compensating delete để hạn chế orphan asset.
+
+Queue mode hiện chỉ chịu trách nhiệm hoàn thiện metadata/thumbnail và tạo seam an toàn cho transform sau này; không tuyên bố đã có transcoding/moderation nếu chưa triển khai. Direct-to-Cloudinary signed upload và storage driver S3/MinIO chưa thuộc release này vì cần thêm security contract, frontend flow và vận hành storage. Khi thật sự cần, chúng được thêm qua storage interface thay vì sửa controller.
+
+Không giữ nguyên khối code cũ dưới dạng comment. Worker `filepath` không an toàn được thay bằng implementation compile/test được; comment chỉ ghi invariant “queued source phải durable”, còn lịch sử cũ đã có Git lưu giữ.
 
 ### 4.7. Health check không đánh thức hoặc làm quá tải dependency
 
@@ -520,7 +539,7 @@ DB_*_COLLECTION (optional, có default)
 
 # Redis
 REDIS_URL
-SOCKET_REDIS_ADAPTER_ENABLED
+# Phase 6 sở hữu các capability mode/URL mở rộng
 
 # Notification feature flags
 NOTIFICATION_*
@@ -545,6 +564,7 @@ MAX_AUDIO_UPLOAD_MB
 - Không đưa SendGrid/Resend/email verification/forgot-password secret vào `.env.example`; các feature đó không thuộc runtime portfolio.
 - Collection env có default phải được ghi optional; không bắt người deploy nhập hàng chục tên collection nếu không cần.
 - Pin cùng Node major tương thích frontend/backend.
+- Danh sách trên là contract đã hoàn thành ở Phase 4; Phase 6 mở rộng `.env.example` bằng Redis/realtime/media mode và retention/concurrency knob, không hồi tố gate Phase 4.
 
 **Gate hoàn thành**
 
@@ -629,81 +649,325 @@ Không trả hostname nội bộ, URI, database name, queue payload hoặc stack
 
 ---
 
-## Phase 6 — Tối ưu Redis/BullMQ và media cho free-tier
+## Phase 6 — Redis/media ổn định, giữ đường nâng cấp VPS nhưng không triển khai topology phân tán
 
 **Trạng thái: Chưa triển khai.**
 
 **Mục tiêu**
 
-Giảm connection/memory, chịu được cold start và loại job media phụ thuộc disk tạm.
+Giảm connection/memory cho portfolio, giữ nguyên realtime, tách media boundary và loại queue phụ thuộc disk tạm. Phase này làm code upgrade-ready nhưng không triển khai process role, cross-process emitter hoặc multi-service topology chưa được dùng.
 
 **Phụ thuộc**
 
 - Phase 5 cung cấp health state.
 - Redis Cloud Free đã được tạo; region, version, RESP, eviction, connection/memory/ops quota và giới hạn không TLS/persistence được ghi lại.
+- MongoDB vẫn là nguồn sự thật cho message/unread/notification; Cloudinary là source media bền duy nhất trong release này.
 
-### 6.1. Lazy Redis clients theo capability
+**Giới hạn để không over-engineer**
+
+- Chỉ implement `CloudinaryMediaStorage`; tạo storage interface vì controller hiện đang phụ thuộc trực tiếp Cloudinary, nhưng chưa thêm `MEDIA_STORAGE_DRIVER` khi chưa có implementation thứ hai.
+- Chỉ giữ backend multipart upload. Signed direct upload, webhook Cloudinary, S3/MinIO và CDN tự host được ghi là extension point, không nằm trong gate portfolio.
+- Implement thật `MEDIA_PROCESSING_MODE=inline|queue` vì frontend đã hỗ trợ `pending/ready/failed` và backend đã có BullMQ video worker; không thêm mode giả hoặc flag chưa có runtime path.
+- Queue mode upload original lên Cloudinary trước rồi mới enqueue post-processing. Nó không được quảng cáo là làm upload network nhanh hơn; lợi ích là source bền, retry được và có chỗ mở rộng thumbnail/transform.
+- Không tự chuyển mode theo CPU/RAM. Mỗi deployment chọn mode rõ; tải được điều chỉnh bằng concurrency, retention, size limit và rate limit.
+- Không tạo media outbox collection/framework mới. `MediaMetadata` pending có `public_id` là durable work record; một reconciler nhỏ bảo đảm deterministic job tồn tại. Notification outbox hiện tại không bị tổng quát hóa chỉ để phục vụ một loại job media.
+- Không comment-out nguyên khối worker cũ. Code `filepath` không an toàn được thay thế; invariant và extension point được ghi bằng type/comment ngắn và README, lịch sử implementation cũ nằm trong Git.
+- Không thêm `PROCESS_ROLE`, Redis realtime emitter, emitter factory, worker-only entry point hoặc split-process smoke. Notification worker/fan-out/media worker tiếp tục chạy cùng API process trong release portfolio.
+
+**Thứ tự thực hiện trong Phase 6**
+
+```text
+6.1 config + Redis lifecycle
+  → 6.2 cache/retention
+  → 6.3 realtime seam in-process
+  → 6.4 media service + inline
+      → 6.5 durable media queue
+  → 6.6 docs + manual smoke checklist
+```
+
+Mỗi phase con có gate riêng; có thể dừng an toàn sau 6.4 và deploy inline nếu queue mode 6.5 gặp blocker. Hướng tách process chỉ được ghi trong README như future upgrade, không tạo code path chưa dùng.
+
+**Nguyên tắc verification Phase 6**
+
+- AI không tạo test file, integration/E2E test hoặc verification script mới cho Phase 6.
+- Sau mỗi phase con, AI chỉ chạy typecheck/build/lint đã có và liên quan trực tiếp; không chạy toàn bộ audit/test suite theo thói quen.
+- Invariant tĩnh như mode guard, Redis URL fallback, queue payload không có `filepath`, deterministic job id và không có import worker cũ được kiểm tra trực tiếp trên source/diff, không viết script để soi lại source.
+- Các hành vi cần service/credential hoặc thao tác nhiều bước như upload thật, Socket.IO realtime, cache hit/fallback, restart/reconcile và đo dashboard Redis là manual smoke của chủ dự án.
+- Manual smoke chưa được chủ dự án chạy phải báo `NOT VERIFIED — manual smoke required`; không dựng thêm môi trường hoặc test harness để biến nó thành PASS.
+- Static audit đã tồn tại chỉ chạy khi thay đổi trực tiếp chạm contract mà audit đó sở hữu; Phase 6 không bắt chạy toàn bộ notification audit một cách máy móc.
+
+### 6.1. Config contract và lazy Redis lifecycle
+
+**Nghiệp vụ**
+
+Cho portfolio dùng một Redis URL/một process nhưng vẫn có mode rõ cho cache, queue và Socket.IO; chỉ mở connection thực sự cần, không thêm process-role config.
 
 **File sửa**
 
+- `src/config/getEnvConfig.ts`:
+  - parse enum nghiêm ngặt cho `SOCKET_ADAPTER_MODE=memory|redis`, `MEDIA_PROCESSING_MODE=inline|queue` và `CONVERSATION_MESSAGE_CACHE_MODE=off|full`;
+  - thêm `REDIS_CACHE_URL`, `REDIS_QUEUE_URL`, `REDIS_SOCKET_URL` optional và fallback về `REDIS_URL`;
+  - parse positive integer có min/max hợp lý cho upload size, worker concurrency, attempts và retention;
+  - không log URL/credential; error chỉ nêu tên biến hoặc mode sai.
 - `src/config/redis.service.ts`:
-  - luôn tạo/connect cache client;
-  - chỉ duplicate/connect pub/sub khi `SOCKET_REDIS_ADAPTER_ENABLED=true`;
-  - getter adapter trả trạng thái/type an toàn, không giả định client luôn tồn tại;
-  - shutdown chỉ đóng client đã tạo.
+  - cache client dùng `REDIS_CACHE_URL` fallback;
+  - pub client dùng `REDIS_SOCKET_URL`, sub client duplicate từ pub; chỉ tạo/connect cả hai khi socket mode là `redis`;
+  - getter/status typed an toàn và shutdown idempotent chỉ đóng client đã tạo;
+  - log connection name/trạng thái, không log URL.
+- `src/config/redisConfig.ts`:
+  - BullMQ dùng `REDIS_QUEUE_URL` fallback;
+  - giữ `maxRetriesPerRequest=null`, `lazyConnect` và connect/disconnect idempotent;
+  - không thêm queue factory/process-role lifecycle khi toàn bộ worker vẫn chạy cùng process.
 - `src/socket/index.ts`:
-  - chỉ gắn Redis adapter khi flag bật và clients ready;
-  - mode false log một dòng rõ `single-instance in-memory adapter`;
-  - presence dùng default adapter trong process, không đổi frontend contract.
-- `src/config/getEnvConfig.ts`: parse flag strict boolean.
-- Thêm `CONVERSATION_MESSAGE_CACHE_ENABLED=false` cho portfolio Redis Cloud Free; khi false, không `zAdd` full hydrated message vào Redis và read path lấy từ MongoDB. Chỉ cân nhắc bật lại khi Redis transport có TLS.
+  - `memory` giữ default adapter và log `single-instance in-memory adapter`;
+  - `redis` yêu cầu pub/sub ready rồi mới gắn adapter;
+  - room, auth middleware, event name và presence contract không đổi.
+- `src/modules/health/health.service.ts`: readiness vẫn kiểm tra MongoDB, Redis cache và BullMQ Redis của một backend process; không thêm health topology theo role.
+- `src/app.ts`: dùng connect/close API idempotent mới nhưng giữ một startup path và graceful shutdown hiện tại.
+- `.env.example`: thêm các biến trên với default portfolio; không thêm `PROCESS_ROLE` hoặc `REALTIME_DELIVERY_MODE`.
+- `README.md`: thêm bảng preset, không tạo biến `FREE_TIER=true`.
 
-### 6.2. Retention và tối thiểu hóa dữ liệu Redis
+**Config mặc định portfolio**
 
-- Dùng Redis Cloud database riêng cho demo và Redis container riêng cho local; không thêm key-prefix migration xuyên toàn bộ cache/queue trong release này.
-- Không gọi `KEYS *`, `FLUSHALL` hoặc `FLUSHDB` trong runtime/script deploy.
-- Giảm BullMQ retention phù hợp quota portfolio:
-  - completed mặc định tối đa khoảng 300 job/1 giờ cho mỗi queue;
-  - failed mặc định tối đa khoảng 500 job/7 ngày cho mỗi queue, thay cho 50.000/30 ngày;
-  - dead-letter nghiệp vụ tiếp tục có Mongo outbox làm nguồn audit.
-- Không cache full message payload trên Redis Cloud Free không TLS. Cache friend/presence chỉ chứa ID/timestamp, có TTL rõ; key không TTL phải có lý do và kích thước bị chặn.
-- Ghi vai trò queue/cache vào README nhưng không ghi URL Redis.
+```text
+SOCKET_ADAPTER_MODE=memory
+MEDIA_PROCESSING_MODE=inline
+CONVERSATION_MESSAGE_CACHE_MODE=off
+MEDIA_WORKER_CONCURRENCY=1
+MEDIA_QUEUE_MAX_ATTEMPTS=5
+QUEUE_COMPLETED_RETENTION_COUNT=300
+QUEUE_FAILED_RETENTION_COUNT=500
+MAX_IMAGE_UPLOAD_MB=10
+MAX_VIDEO_UPLOAD_MB=20
+MAX_AUDIO_UPLOAD_MB=10
 
-### 6.3. Video upload
+REDIS_URL=redis://localhost:6379
+# REDIS_CACHE_URL / REDIS_QUEUE_URL / REDIS_SOCKET_URL để trống → fallback REDIS_URL
+```
+
+**Validation bắt buộc**
+
+- Chỉ chấp nhận các enum đã hỗ trợ thật; không giữ tên biến adapter boolean cũ song song.
+- `memory + inline + cache off` là preset portfolio.
+- `queue` yêu cầu BullMQ Redis và durable Cloudinary config; worker vẫn được start trong cùng process.
+- Chấp nhận cả `redis://` và `rediss://`; không suy ra TLS hoặc adapter mode từ scheme.
+
+**Đóng góp cho kiến trúc đề xuất**
+
+Portfolio giảm connection; Redis endpoint có thể tách trên VPS mà không sửa business code. Không phải bảo trì process topology hoặc emitter chưa dùng.
+
+**AI verification phase con**
+
+- Typecheck/build/lint phần config, Redis lifecycle và Socket.IO liên quan pass.
+- Review source xác nhận `memory` không tạo Socket pub/sub; `redis` chỉ gắn adapter sau khi client ready.
+- Review source xác nhận cache/queue/socket URL fallback đúng, shutdown idempotent và log/error không lộ URL/credential.
+- Review source xác nhận enum/config sai bị từ chối và không còn tên biến adapter boolean cũ song song.
+
+### 6.2. Giảm Redis data/retention và cache message có mode thật
+
+**Nghiệp vụ**
+
+Giảm memory free-tier, không đưa full chat payload qua Redis không TLS và tập trung queue defaults để sau này tăng quota không phải sửa nhiều file.
+
+**File tạo mới**
+
+- `src/queues/queue-options.ts`: đóng gói exponential backoff và `removeOnComplete/removeOnFail` dùng chung, nhận attempts override theo từng queue; tránh notification, fan-out và media queue drift cấu hình.
 
 **File sửa**
 
-- `src/modules/media/media.controller.ts`: upload video Cloudinary đồng bộ, chỉ insert/update ready metadata khi durable URL tồn tại.
-- `src/utils/file.ts`: giới hạn dung lượng từ env với default portfolio bảo thủ; validate MIME/field; cleanup file tạm trong mọi nhánh.
-- `src/utils/cloudinary.ts`: cleanup bằng async-safe `finally`, không để unlink lỗi che lỗi upload chính.
-- `src/queues/video.queue.ts`: bỏ production worker/caller hoặc chuyển thành module không còn được app start; ưu tiên xóa code chết nếu không còn consumer.
-- `src/app.ts`: không start/close video worker khi flow đồng bộ đã chốt.
-- `package.json`/README/endpoint docs nếu response video chuyển từ pending sang ready ngay.
+- `src/queues/notification.queue.ts`, `src/queues/notification-fanout.queue.ts`: dùng shared queue options; default completed khoảng 300 job/1 giờ và failed khoảng 500 job/7 ngày cho mỗi queue.
+- `src/modules/conversation/conversation-message-delivery.service.ts`: chỉ `zAdd` hydrated message khi cache mode là `full`; mode `off` bỏ cache write nhưng vẫn emit realtime.
+- `src/modules/conversation/conversation.service.ts`: mode `off` đi thẳng MongoDB; mode `full` mới đọc sorted-set và mọi cache error đều fallback MongoDB.
+- `src/modules/conversation/conversation-message-sync.service.ts`: invalidate cache là best-effort, không làm mutation nghiệp vụ fail.
+- `src/socket/index.ts`: friend/presence cache chỉ chứa ID/timestamp; bổ sung TTL/giới hạn cần thiết, không cache token/full profile.
+- `.env.example`, `README.md`: ghi retention knobs, rủi ro `full` mode và yêu cầu chỉ cân nhắc bật khi Redis transport/mạng tin cậy.
 
-### 6.4. Deploy sanity check
+**Không làm trong phase này**
 
-Kịch bản bắt buộc, giới hạn ở hành vi thường gặp của bản demo:
+- Không thêm cache mode `metadata` khi chưa có query chứng minh cần nó.
+- Không chạy `KEYS *`, `FLUSHALL`, `FLUSHDB` hoặc key-prefix migration toàn hệ thống.
 
-1. Backend khởi động và cả `node-redis`/BullMQ kết nối được bằng Redis Cloud URI.
-2. Chat realtime và notification chạy sau deploy.
-3. Restart backend bình thường: clients reconnect, frontend refetch state và outbox pending tiếp tục được xử lý ở mức smoke test.
-4. Upload video rồi restart backend: media đã có durable Cloudinary URL hoặc request đã fail rõ; không có pending job trỏ tới file local đã mất.
+**Đóng góp cho kiến trúc đề xuất**
 
-Diễn tập mất sạch Redis và chứng minh exactly-once recovery là **document only**, không phải release gate portfolio. MongoDB vẫn là nguồn dữ liệu nghiệp vụ; README phải nêu Redis Cloud Free không có persistence và có thể mất queue/cache/presence khi provider reset.
+Redis trở thành cache/queue có thể tái tạo; portfolio tiết kiệm memory, còn VPS vẫn có lựa chọn bật full cache có chủ đích thay vì phải khôi phục code đã xóa.
 
-**Gate hoàn thành**
+**AI verification phase con**
 
-- Mode single-instance không mở Socket pub/sub Redis connections.
-- Số connection và memory quan sát trên dashboard còn dưới quota provider, có buffer hợp lý; không dùng ngưỡng tự đặt làm blocker nếu hệ thống ổn định.
-- Cả `node-redis` và `ioredis` kết nối bằng URI do Redis Cloud cung cấp; free tier dùng `redis://`, không log URI/password.
-- Full hydrated message không xuất hiện trong Redis keyspace khi `CONVERSATION_MESSAGE_CACHE_ENABLED=false`.
-- Không có queue payload production chứa absolute/local `filepath`.
-- Image/video/audio upload đều pass và không để file temp sau success/failure.
+- Typecheck/build/lint các file cache/queue liên quan pass.
+- Review source xác nhận mode `off` bỏ cả read/write full message cache nhưng không bỏ realtime; mode `full` có read/write/invalidate và catch để fallback MongoDB.
+- Review source xác nhận notification/fan-out queue dùng shared options và không còn retention 10.000–50.000 hard-code.
+
+### 6.3. Tạo realtime delivery seam tối thiểu, chỉ implement in-process
+
+**Nghiệp vụ**
+
+Giữ nguyên realtime hiện tại nhưng bỏ phụ thuộc trực tiếp của notification business service vào global `getIO()`. Phase này tạo điểm thay thế cho VPS sau này, không implement cross-process delivery.
+
+**File tạo mới**
+
+- `src/modules/realtime/realtime-emitter.ts`: interface tối thiểu `emit(room, event, payload)`; không đưa notification business type vào transport contract.
+- `src/modules/realtime/in-process-realtime-emitter.ts`: adapter dùng Socket.IO server hiện tại.
+
+**File sửa**
+
+- `src/modules/notification/notification-delivery.service.ts`: inject `RealtimeEmitter`; giữ nguyên event name/payload và semantics `delivered`.
+- `src/modules/notification/notification.service.ts`, `src/modules/notification/notification.worker.ts`, `src/modules/notification/notification-fanout.worker.ts`, `src/modules/notification/directed-notification-read.service.ts`: truyền delivery dependency qua constructor; outer/default composition dùng `InProcessRealtimeEmitter`, không tạo Redis transport hoặc route factory mới.
+
+Chat send/typing/read chạy trong API process nên vẫn dùng Socket.IO server trực tiếp ở release này; không refactor toàn bộ chat qua emitter khi chưa có worker chat riêng.
+
+**Không làm trong phase này**
+
+- Không tạo Redis emitter/factory, không thêm package mới và không thêm `REALTIME_DELIVERY_MODE`.
+- Không tách notification worker khỏi Socket.IO process và không tuyên bố cross-process realtime đã được support.
+
+**Đóng góp cho kiến trúc đề xuất**
+
+Notification delivery dễ test/thay transport hơn mà frontend không đổi socket event, room hoặc REST reconciliation. Khi chuyển VPS, Redis emitter có thể implement interface này mà không sửa notification domain.
+
+**AI verification phase con**
+
+- Typecheck/build/lint các notification/realtime file liên quan pass.
+- Review source xác nhận notification services/workers không gọi trực tiếp `getIO()` ngoài in-process adapter.
+- Review package/env diff xác nhận không có dependency/config Redis emitter mới.
+
+### 6.4. Tách media business flow và hoàn thiện inline mode
+
+**Nghiệp vụ**
+
+Làm controller mỏng, gom invariant durable upload/DB/cleanup vào service và giữ inline mode đơn giản cho deploy portfolio.
+
+**File tạo mới**
+
+- `src/modules/media/media-storage.port.ts`: contract upload/delete và durable result (`secure_url`, `public_id`, resource type); đây là seam để sau này thêm storage khác mà không sửa controller.
+- `src/modules/media/cloudinary-media.storage.ts`: implementation Cloudinary duy nhất của release.
+- `src/modules/media/media-processor.port.ts`: contract finalize media độc lập transport.
+- `src/modules/media/inline-media.processor.ts`: hoàn thiện thumbnail/metadata và trả `ready` ngay trong request.
+- `src/modules/media/media.service.ts`: orchestration upload → process → persist/compensate; controller không gọi Cloudinary/queue trực tiếp.
+
+**File sửa**
+
+- `src/modules/media/media.controller.ts`: parse auth/request, gọi `MediaService`, map response; image/video/audio dùng chung error/cleanup policy.
+- `src/utils/file.ts`: limit từ env, validate đúng field/MIME, trả danh sách temp file và cleanup helper; quyền xóa temp thuộc `MediaService`, không để parser/storage cùng xóa một file.
+- `src/utils/cloudinary.ts`: chuyển thành primitive async-safe dùng bởi storage adapter hoặc gộp vào adapter; bỏ `unlink` khỏi Cloudinary primitive để không double-cleanup hoặc che upload error chính.
+- `src/schemas/MediaMetadata.schema.ts`, `src/constants/enums/media.enum.ts`: giữ contract `pending|ready|failed`; không thêm state chỉ để trang trí. Inline chỉ ghi `ready` khi có durable URL/public id.
+- `src/modules/media/dto/index.ts`, `swagger.yaml`, `endpoint.md`: mô tả response có thể `ready` hoặc `pending` tùy mode nhưng shape không đổi.
+
+**Failure semantics**
+
+- Cloudinary fail: không tạo media `ready`, temp file vẫn bị xóa.
+- Cloudinary success nhưng DB fail: best-effort delete asset vừa upload và trả lỗi; lỗi cleanup được log riêng.
+- Delete media: Cloudinary `success/not_found` mới tiếp tục xóa DB; pending worker thấy record không còn thì no-op, không hồi sinh record đã xóa.
+
+**Đóng góp cho kiến trúc đề xuất**
+
+Portfolio có flow ít dependency, chịu restart tốt hơn; sau này đổi upload/processor không cần viết lại controller hoặc ba flow image/video/audio.
+
+**AI verification phase con**
+
+- Typecheck/build/lint các file media liên quan pass.
+- Review source/diff xác nhận controller không gọi Cloudinary/queue trực tiếp, temp cleanup nằm trong `finally`, DB failure có compensating delete và không ghi `ready` thiếu durable URL/public id.
+
+### 6.5. Thay video filepath worker bằng durable media queue và reconciler nhỏ
+
+**Nghiệp vụ**
+
+Giữ queue mode chạy thật để dùng trên VPS nhưng source luôn nằm trên Cloudinary; dùng media record pending làm recovery source thay vì xây thêm outbox framework.
+
+**File tạo mới**
+
+- `src/modules/media/media-processing-job.type.ts`: versioned payload chỉ chứa `media_id` và durable `{provider, public_id}`; comment invariant cấm local/absolute `filepath`.
+- `src/queues/media-processing.queue.ts`: Queue factory/name/job id deterministic theo media id + version, dùng shared queue options.
+- `src/modules/media/bullmq-media.processor.ts`: enqueue/finalize implementation của `MediaProcessor`; không nhận local path.
+- `src/modules/media/media-processing.worker.ts`: đọc lại media từ MongoDB, kiểm tra durable reference, xử lý idempotent và conditional update `pending → ready`.
+- `src/modules/media/media-processing-reconciler.ts`: định kỳ quét batch nhỏ media `pending` có `public_id`, bảo đảm job missing được enqueue lại; có interval/batch cố định bảo thủ hoặc env nếu thực sự cần tuning.
+
+**File sửa/xóa**
+
+- `src/schemas/MediaMetadata.schema.ts`: nếu cần chỉ thêm field vận hành nhỏ như `processing_attempts`/`last_error`; không lưu queue payload lớn hoặc secret.
+- `src/config/database.service.ts`: index `{status: 1, updated_at: 1}` phục vụ scan pending có giới hạn; không tạo collection mới.
+- `src/modules/media/media.service.ts`: queue mode upload Cloudinary trước, lưu `pending` với durable reference rồi để reconciler/processor dispatch.
+- `src/modules/media/media.controller.ts`: không import queue trực tiếp.
+- `src/queues/video.queue.ts`: xóa sau khi caller đã chuyển hết; không để commented worker hoặc production import cũ.
+- `src/app.ts`: cùng process chỉ start/close media queue, reconciler và worker khi mode là `queue`; inline mode không start media worker.
+- `package.json`: không thêm test/verification script hoặc start script theo process role.
+
+**Semantics queue tối thiểu**
+
+- Worker hiện chỉ hoàn thiện metadata/thumbnail đang có; không thêm transcoding/moderation giả.
+- Sau khi lưu pending, API thử enqueue ngay bằng deterministic job id; enqueue lỗi không làm mất durable work record và reconciler sẽ thử lại.
+- Retry dùng job id deterministic và update có điều kiện nên enqueue/chạy lặp không tạo media thứ hai.
+- Chỉ chuyển `failed` khi đã hết attempts; lỗi tạm thời tiếp tục retry.
+- Redis mất job: media vẫn `pending` và reconciler enqueue lại. Cloudinary source/Mongo record không mất.
+- Media bị xóa khi job còn chờ: worker thấy record không còn/hết quyền xử lý thì no-op thành công, không tạo lại record.
+
+**Đóng góp cho kiến trúc đề xuất**
+
+Queue mode không còn gắn với disk của process; VPS có thể tăng concurrency, còn việc tách worker được hoãn mà không phải đổi API/media schema. Recovery đủ thực tế cho project hiện tại mà không chạm notification outbox phức tạp.
+
+**AI verification phase con**
+
+- Typecheck/build/lint các file media queue liên quan pass.
+- Review source/diff xác nhận job DTO, caller và log không có local/absolute `filepath`; job id deterministic và queue dùng shared retention.
+- Review source xác nhận worker update có điều kiện, media missing là no-op và app không còn import worker cũ.
+
+### 6.6. Đồng bộ frontend/API docs và bàn giao manual smoke checklist
+
+**Nghiệp vụ**
+
+Đồng bộ contract người dùng và bàn giao checklist ngắn để chủ dự án tự kiểm tra trên web; AI không dựng test harness hoặc tự động hóa smoke matrix.
+
+**File frontend kiểm tra/sửa khi cần**
+
+- `X-frontend/src/features/media/types/media.type.ts`: giữ `pending|ready|failed` đồng bộ backend.
+- `X-frontend/src/features/media/api/media.service.ts`: không giả định upload luôn trả `pending` hoặc luôn `ready`.
+- `X-frontend/src/features/media/hooks/useMediaUpload.ts`: inline `ready` kết thúc ngay; queue `pending` tiếp tục poll, timeout không tự biến thành backend `failed`.
+- `X-frontend/src/features/media/components/MediaPreviewGrid.tsx`: giữ processing/error/retry UX; không thêm UI direct upload trong release này.
+
+**File tài liệu sửa**
+
+- `swagger.yaml`, `endpoint.md`: hai media response semantics, `GET /media/:id` polling và error status.
+- `.env.example`, `README.md`: preset single-process, Redis URL fallback, connection budget, queue retention, recovery, giới hạn free-tier và mục “nâng cấp VPS sau này”.
+- `phase-release.md`: đánh dấu phase con sau khi AI verification pass; manual smoke được báo trạng thái riêng.
+
+**Future upgrade notes, không phải code scope**
+
+README chỉ ghi thứ tự khi có nhu cầu thật:
+
+1. Tách startup composition thành API/notification/media process role.
+2. Thêm Redis implementation cho `RealtimeEmitter` và bật Socket.IO Redis adapter trên API.
+3. Cấu hình sticky session hoặc WebSocket-only nếu chạy nhiều API instance.
+4. Tách worker/Redis endpoint và scale concurrency theo số đo.
+5. Chỉ sau đó cân nhắc signed direct upload hoặc storage driver khác.
+
+Không tạo file runtime role, package script worker-only hay dependency emitter trong Phase 6.
+
+**Manual smoke checklist của chủ dự án**
+
+1. Portfolio preset: một backend process, socket memory, notification realtime in-process, media inline.
+2. Queue preset local: cùng backend process bật media queue; upload trả pending rồi ready, restart backend/worker lifecycle và missing-job reconciliation.
+3. Socket adapter `redis` local: một process vẫn giữ room/presence/event contract; không tuyên bố đã smoke multi-instance.
+4. Cache `off`: chat send/receive/pagination đúng và Redis không có full message.
+5. Cache `full` trên local Redis: cache hit/fallback/invalidation đúng; không dùng mode này trên Redis Cloud Free không TLS.
+6. Image/video/audio success/failure cleanup; backend restart không làm media đã durable mất URL.
+
+Checklist này không phải gate AI. Mục chưa được chủ dự án chạy được ghi `NOT VERIFIED — manual smoke required`; không yêu cầu AI tự dựng service, credential, dữ liệu hoặc client để chạy thay.
+
+Diễn tập mất sạch Redis và chứng minh exactly-once toàn hệ thống vẫn là **document only**, không phải release gate portfolio. Nếu chủ dự án muốn kiểm tra reconciler, chỉ cần xóa một media job local và quan sát job được tạo lại; notification tiếp tục dựa trên outbox hiện có.
+
+**Gate hoàn thành Phase 6**
+
+- Typecheck/build/lint liên quan trực tiếp pass bằng script đã có; không tạo test hoặc verification script mới.
+- Review source/diff xác nhận Redis URL/mode/lifecycle đúng, cache `off` không ghi full message và queue không còn retention lớn hard-code.
+- Review source/diff xác nhận production media queue payload/caller không có local `filepath`, media source là durable và worker/reconciler giữ semantics idempotent.
+- Review source/diff xác nhận notification phát qua in-process `RealtimeEmitter`; không có Redis emitter/process-role code hoặc dependency chưa dùng.
+- Env example, README, frontend type/flow và API docs đồng bộ với implementation.
+- Manual smoke chưa chạy không làm AI implementation fail; báo rõ từng mục `NOT VERIFIED — manual smoke required` để chủ dự án kiểm tra trên web trước public release.
 
 **Rollback**
 
-- Có thể bật lại Redis Socket adapter bằng flag khi chuyển sang nhiều instance.
-- Video sync rollback chỉ được phép nếu thay bằng durable source staging; không rollback về job giữ ephemeral filepath trên môi trường deploy.
+- Portfolio giữ một process với `memory + inline + cache off`; rollback từng capability bằng config mà không quay lại worker chứa filepath.
+- Nếu queue mode gặp lỗi, chuyển `MEDIA_PROCESSING_MODE=inline` sau khi xử lý/reconcile media pending; không bỏ mặc record pending và không xóa Redis/Mongo tùy tiện.
+- Không rollback về full message cache trên Redis không TLS hoặc queue media dùng ephemeral filepath.
 
 ---
 
@@ -767,6 +1031,7 @@ Region: Singapore
 - MongoDB network access chỉ mở theo khả năng platform; credential là user riêng cho demo database.
 - Redis Cloud đặt AWS Singapore nếu Render ở Singapore; đây vẫn là public TCP endpoint, không phải Render private network.
 - `REDIS_URL` dùng đúng URI Redis Cloud Connect wizard, chỉ nằm trong Render secret manager. Free tier không TLS nên scheme là `redis://`; README phải ghi đây là portfolio limitation.
+- Render portfolio dùng `SOCKET_ADAPTER_MODE=memory`, `MEDIA_PROCESSING_MODE=inline` và `CONVERSATION_MESSAGE_CACHE_MODE=off`; các Redis URL theo capability để trống để fallback `REDIS_URL`. Toàn bộ API/worker vẫn chạy trong process `start:prod` hiện tại.
 - Không truyền secret bằng Docker build arg, không bake `.env` vào image và không in Redis URI trong build/runtime log.
 - Cloudinary dùng credential riêng cho demo nếu provider cho phép; không cấu hình email provider.
 - Feature flags notification được ghi rõ, không dựa vào default ngầm trong dashboard.
@@ -835,11 +1100,12 @@ Chứng minh feature thật sự chạy xuyên frontend, backend và managed ser
 2. Hoàn thiện Redis Cloud: tên `clone-x-portfolio`, Redis 8.2, RESP2, `no eviction`, AWS Singapore nếu Render Singapore; xác nhận no HA/persistence/backup/TLS là giới hạn free.
 3. Nếu database hiện được tạo ở Virginia và vẫn 0 key/0 connection, tạo lại ở Singapore trước khi đưa credential/dữ liệu vào. Region không đổi tại chỗ được.
 4. Lấy URI từ Connect wizard, lưu `REDIS_URL` trong Render secret manager; xác minh `node-redis` và `ioredis` cùng ping được mà không log URI/password.
-5. Deploy Render backend bằng Docker, xác nhận bind `0.0.0.0:$PORT`, với frontend origin tạm thời hoặc origin dự kiến.
-6. Kiểm tra `/health/live`, `/health/ready`, `/api-docs` nếu bật.
-7. Deploy frontend trên Vercel với backend URL chính xác.
-8. Cập nhật `CORS_ORIGIN` theo frontend URL cuối và restart backend một lần.
-9. Mở hai browser profile/private window để test realtime A/B.
+5. Chốt preset Render một process với `memory + inline + cache off`; không thêm process role/Redis emitter chỉ để demo capability.
+6. Deploy Render backend bằng Docker, xác nhận bind `0.0.0.0:$PORT`, với frontend origin tạm thời hoặc origin dự kiến.
+7. Kiểm tra `/health/live`, `/health/ready`, `/api-docs` nếu bật.
+8. Deploy frontend trên Vercel với backend URL chính xác.
+9. Cập nhật `CORS_ORIGIN` theo frontend URL cuối và restart backend một lần.
+10. Mở hai browser profile/private window để test realtime A/B.
 
 ### 8.2. Account matrix
 
@@ -964,12 +1230,12 @@ Bổ sung:
 
 1. Production-like/free-tier topology và yêu cầu WebSocket/long-running process.
 2. MongoDB transaction requirement.
-3. Redis Cloud 8.2/RESP2, public TCP không TLS trên free tier, `no eviction`, single-instance adapter flag, quota/connection budget, retention và outbox recovery.
+3. Redis Cloud 8.2/RESP2, public TCP không TLS trên free tier, `no eviction`, Socket.IO adapter mode, in-process realtime seam, URL fallback theo capability, quota/connection budget, retention và outbox/reconciliation recovery.
 4. Docker topology: backend image trên Render; Compose Redis chỉ dành cho local, không phải production datastore.
 5. Env matrix required/optional/default.
 6. Health endpoints và deploy commands.
 7. Notification outbox/idempotency/reconciliation giải thích ngắn.
-8. Media persistence và giới hạn demo.
+8. Media inline/queue semantics, durable Cloudinary source, pending reconciliation và giới hạn backend-upload của demo.
 9. Smoke checklist/known limitations/rollback.
 10. Auth scope: register auto-verified/login ngay; email verification và password recovery cố ý không deploy.
 11. Không tự nhận production-ready; dùng cụm “portfolio deployment” hoặc “production-like demo”.
@@ -1004,7 +1270,7 @@ Baseline
   → Phase 3 dependencies
   → Phase 4 env/font/build
   → Phase 5 health/proxy
-  → Phase 6 Redis/media free-tier
+  → Phase 6 Redis/media upgrade-ready, realtime in-process
   → Phase 7 packaging/deploy config
   → Phase 8 deploy + smoke
   → Phase 9 demo/README/handoff
@@ -1012,14 +1278,14 @@ Baseline
 
 - Phase 2 và Phase 3 không chạy song song vì cần lint làm gate cho dependency update.
 - Phase 5 phải xong trước deploy để health probe không tạo restart loop.
-- Phase 6 phải xong trước video smoke; không chấp nhận job local filepath trên host có ephemeral disk.
+- Phase 6 phải xong trước video smoke; deploy portfolio dùng inline nhưng queue mode local cũng phải chứng minh durable source/reconciliation, không chấp nhận job local filepath trên host có ephemeral disk.
 - Phase 9 chỉ ghi URL/kết quả thật sau Phase 8, không viết README như thể demo đã deploy trước khi có bằng chứng.
 
 ## 7. Release milestone và rollback
 
 1. **Release A — Security/quality:** Phase 1–2. Không đổi hạ tầng; rollback theo repo.
 2. **Release B — Dependency/build:** Phase 3–4. Lockfile/font/env contract trong commit riêng.
-3. **Release C — Free-tier runtime:** Phase 5–6. Health, Redis mode và video persistence phải đi cùng deploy config tương thích.
+3. **Release C — Upgrade-ready runtime:** Phase 5–6. Health, Redis/cache mode, in-process realtime seam và durable media pipeline phải đi cùng deploy config tương thích; preset public vẫn là single-instance free-tier.
 4. **Release D — Staging portfolio:** Phase 7–8. Deploy một backend instance và chạy smoke A/B/C.
 5. **Release E — Public handoff:** Phase 9. Chỉ public link sau khi account/demo/README đã kiểm tra.
 
@@ -1056,10 +1322,12 @@ Mỗi milestone ghi:
 - [ ] Backend host hỗ trợ WebSocket và long-running Node process.
 - [ ] MongoDB tier chạy transaction.
 - [ ] Redis Cloud 8.2 dùng RESP2/TCP và hỗ trợ BullMQ; free tier không TLS được ghi rõ, không dùng nhầm `rediss://`.
-- [ ] Socket Redis adapter tắt ở single-instance; connection/memory có số đo và còn buffer dưới quota provider.
+- [ ] Portfolio dùng Socket.IO adapter `memory`; notification delivery đi qua in-process emitter seam và không tuyên bố đã hỗ trợ split-worker realtime.
+- [ ] Redis cache/queue/socket URL fallback đúng; connection/memory có số đo và còn buffer dưới quota provider.
 - [ ] Queue/cache retention nằm trong 30 MB; không dùng Redis làm unread/data source duy nhất và không cache full message payload.
 - [ ] Redis Cloud dùng AWS Singapore khi Render Singapore và eviction `no eviction`; giới hạn không persistence được ghi trong README.
 - [ ] Không có BullMQ payload giữ ephemeral filepath.
+- [ ] Media inline deploy pass; media queue local dùng durable Cloudinary reference, deterministic job và missing-job reconciliation pass.
 - [ ] Health live/ready tối giản hoạt động, không bị limiter và không lộ config.
 - [ ] Cold start/restart khôi phục socket state qua REST và xử lý outbox backlog.
 - [ ] Frontend hiển thị trạng thái khởi động demo và không logout nhầm khi Render timeout/`502`/`503`.

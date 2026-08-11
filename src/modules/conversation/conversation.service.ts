@@ -1040,18 +1040,23 @@ class ConversationService {
 
     let rawMessages: MessageWithMediaInfo[] = []
 
-    if (!cursor) {
-      const cachedMessages = await redisService.clientInstance.zRange(redisKey, 0, limit, { REV: true })
-      if (cachedMessages && cachedMessages.length > limit) {
-        const visibleCachedMessages = cachedMessages
-          .map((msg: string) => JSON.parse(msg) as MessageWithMediaInfo)
-          .filter(
-            (message) =>
-              isMessageVisibleToUser(message, userId) && isMessageAfterCutoff(message._id, historyCutoffMessageId)
-          )
-        if (visibleCachedMessages.length > limit) {
-          rawMessages = visibleCachedMessages
+    if (envConfig.conversation.messageCacheMode === 'full' && !cursor) {
+      try {
+        const cachedMessages = await redisService.clientInstance.zRange(redisKey, 0, limit, { REV: true })
+        if (cachedMessages.length > limit) {
+          const visibleCachedMessages = cachedMessages
+            .map((msg: string) => JSON.parse(msg) as MessageWithMediaInfo)
+            .filter(
+              (message) =>
+                isMessageVisibleToUser(message, userId) && isMessageAfterCutoff(message._id, historyCutoffMessageId)
+            )
+          if (visibleCachedMessages.length > limit) {
+            rawMessages = visibleCachedMessages
+          }
         }
+      } catch (error) {
+        const errorName = error instanceof Error ? error.name : 'UnknownError'
+        console.error(`Could not read conversation message cache; falling back to MongoDB (${errorName})`)
       }
     }
 

@@ -8,7 +8,7 @@ Yêu cầu:
 
 - Node.js và dependencies từ `package-lock.json`.
 - MongoDB hỗ trợ multi-document transaction.
-- Redis cho cache, Socket.IO adapter và BullMQ.
+- Redis TCP cho cache và BullMQ; Socket.IO chỉ dùng Redis khi chọn adapter `redis`.
 - File `.env` local hợp lệ. Không commit token, mật khẩu hoặc connection string.
 
 Tạo file cấu hình từ contract mẫu:
@@ -23,7 +23,7 @@ Trên macOS/Linux, dùng `cp .env.example .env`. Điền MongoDB, Cloudinary và
 node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"
 ```
 
-Các biến collection và feature flag đã có default. Những biến Phase 5/6 chưa có runtime consumer được để dạng comment trong `.env.example`, không cần đặt ở Phase 4.
+Các biến collection và feature flag đã có default. Một `REDIS_URL` là đủ cho local; các URL Redis theo capability để trống sẽ fallback về URL này.
 
 ```bash
 npm ci
@@ -36,6 +36,23 @@ Startup kết nối MongoDB, ensure index, kiểm tra read-state/lifecycle basel
 - `notifications`, `notificationActors`, `notificationStates`;
 - `messages`, `conversationReadStates`, `userMessageStates`;
 - `tweets` nếu còn Retweet relation trùng trước unique index.
+
+## Redis và runtime preset
+
+Preset portfolio một process trong `.env.example`:
+
+| Capability | Giá trị | Hành vi |
+| --- | --- | --- |
+| Socket.IO | `SOCKET_ADAPTER_MODE=memory` | Dùng adapter in-memory, không mở Redis pub/sub. |
+| Media | `MEDIA_PROCESSING_MODE=inline` | Contract mặc định; thay đổi media orchestration thuộc phase con riêng. |
+| Message cache | `CONVERSATION_MESSAGE_CACHE_MODE=off` | Đọc message từ MongoDB và không ghi hydrated message vào Redis. |
+| Queue | concurrency `1`, attempts `5` | Giữ tải media worker ở mức bảo thủ. |
+
+`REDIS_CACHE_URL`, `REDIS_QUEUE_URL` và `REDIS_SOCKET_URL` là optional và lần lượt fallback về `REDIS_URL`. Cả `redis://` và `rediss://` đều được chấp nhận; scheme không tự đổi adapter hoặc processing mode. Readiness vẫn ping MongoDB, Redis cache và BullMQ Redis.
+
+Notification và fan-out queue dùng chung exponential backoff. Mỗi queue giữ tối đa `QUEUE_COMPLETED_RETENTION_COUNT=300` job thành công trong 1 giờ và `QUEUE_FAILED_RETENTION_COUNT=500` job lỗi trong 7 ngày. Tăng count bằng env khi có quota lớn hơn, không sửa từng queue.
+
+Chỉ cân nhắc `CONVERSATION_MESSAGE_CACHE_MODE=full` khi Redis transport và mạng đủ tin cậy: mode này lưu hydrated message payload trong sorted set. Portfolio dùng Redis không TLS phải giữ `off`; cache miss, dữ liệu cache lỗi hoặc Redis cache lỗi đều fallback về MongoDB. Presence chỉ lưu user ID/timestamp best-effort có TTL; friend ID cache có TTL 5 phút.
 
 ## Notification backend
 

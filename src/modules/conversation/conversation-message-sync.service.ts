@@ -38,7 +38,8 @@ export class ConversationMessageSyncService {
     try {
       await this.deleteMessageCache(`chat:messages:${conversationId}`)
     } catch (error) {
-      console.error('Could not invalidate conversation message cache:', error)
+      const errorName = error instanceof Error ? error.name : 'UnknownError'
+      console.error(`Could not invalidate conversation message cache (${errorName})`)
     }
   }
 
