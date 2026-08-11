@@ -127,10 +127,7 @@ export interface TweetRepostInteractionPayload extends TweetInteractionPayload {
 
 export type TweetLikedEvent = ActorDomainEventEnvelope<DomainEventType.TweetLiked, TweetLikeInteractionPayload>
 export type TweetUnlikedEvent = ActorDomainEventEnvelope<DomainEventType.TweetUnliked, TweetLikeInteractionPayload>
-export type TweetRepostedEvent = ActorDomainEventEnvelope<
-  DomainEventType.TweetReposted,
-  TweetRepostInteractionPayload
->
+export type TweetRepostedEvent = ActorDomainEventEnvelope<DomainEventType.TweetReposted, TweetRepostInteractionPayload>
 export type TweetUndoRepostEvent = ActorDomainEventEnvelope<
   DomainEventType.TweetUndoRepost,
   TweetRepostInteractionPayload
@@ -155,7 +152,12 @@ export interface GroupManagementChangedPayload extends Record<string, unknown> {
   system_event_type: ConversationSystemEventType
   affected_user_ids: ObjectId[]
   direct_recipient_ids: ObjectId[]
-  notification_type: NotificationType.GroupAdd | NotificationType.GroupKick | NotificationType.AdminGranted | NotificationType.AdminRevoked | null
+  notification_type:
+    | NotificationType.GroupAdd
+    | NotificationType.GroupKick
+    | NotificationType.AdminGranted
+    | NotificationType.AdminRevoked
+    | null
   source_type: 'GROUP_EVENT'
   source_id: string
 }

@@ -37,7 +37,9 @@ export const authenticateAccessToken = async (req: Request, res: Response, next:
 }
 
 // Middleware xác thực access token nhưng không bắt buộc (dành cho các endpoint cho cả khách và user)
-export const isUserLoggedInValidator = (middleware: (req: Request, res: Response, next: NextFunction) => Promise<void>) => {
+export const isUserLoggedInValidator = (
+  middleware: (req: Request, res: Response, next: NextFunction) => Promise<void>
+) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     if (req.headers.authorization) {
       return middleware(req, res, next)

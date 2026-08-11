@@ -266,10 +266,7 @@ class TweetService {
     let created = false
     try {
       await session.withTransaction(async () => {
-        const target = await databaseService.tweets.findOne(
-          { _id: tweetId },
-          { projection: { user_id: 1 }, session }
-        )
+        const target = await databaseService.tweets.findOne({ _id: tweetId }, { projection: { user_id: 1 }, session })
         if (!target) throw new HttpError('Tweet not found', HTTP_STATUS.NOT_FOUND)
         const result = await databaseService.likes.findOneAndUpdate(
           { user_id: actorId, tweet_id: tweetId },
@@ -319,10 +316,7 @@ class TweetService {
     let removed: Like | null = null
     try {
       await session.withTransaction(async () => {
-        removed = await databaseService.likes.findOneAndDelete(
-          { user_id: actorId, tweet_id: tweetId },
-          { session }
-        )
+        removed = await databaseService.likes.findOneAndDelete({ user_id: actorId, tweet_id: tweetId }, { session })
         if (!removed) return
         const removedId = removed._id
         if (!removedId) throw new Error('Removed like relation has no ID')
@@ -1076,25 +1070,11 @@ class TweetService {
         if (!tweet) throw new Error('Tweet not found')
         if (!tweet.user_id.equals(actorId)) throw new Error('You do not have permission to edit this tweet')
 
-        if (
-          useNotificationOutbox &&
-          body.audience !== undefined &&
-          tweet.audience !== body.audience
-        ) {
+        if (useNotificationOutbox && body.audience !== undefined && tweet.audience !== body.audience) {
           if (body.audience === TweetAudience.Everyone) {
-            await this.lifecycleGuard.markTargetRestored(
-              NotificationTargetType.Tweet,
-              tweetId,
-              occurredAt,
-              session
-            )
+            await this.lifecycleGuard.markTargetRestored(NotificationTargetType.Tweet, tweetId, occurredAt, session)
           } else if (tweet.audience === TweetAudience.Everyone) {
-            await this.lifecycleGuard.markTargetHidden(
-              NotificationTargetType.Tweet,
-              tweetId,
-              occurredAt,
-              session
-            )
+            await this.lifecycleGuard.markTargetHidden(NotificationTargetType.Tweet, tweetId, occurredAt, session)
           }
         }
 

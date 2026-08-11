@@ -328,7 +328,7 @@ rg "console\.(log|error).*token|console\.log\(token\)" src
 
 ## Phase 2 — Đưa lint về pass và sửa package script không trung thực
 
-**Trạng thái: Chưa triển khai.**
+**Trạng thái: Đã hoàn thành.**
 
 **Mục tiêu**
 

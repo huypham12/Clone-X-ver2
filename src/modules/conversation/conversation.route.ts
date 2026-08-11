@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { wrapController } from '~/utils/wrap-controller'
 import { authenticateAccessToken } from '~/middleware/verify.middleware'
 import { accessTokenValidator } from '../auth/auth.validator'
-import { 
+import {
   getConversationsController,
   searchGroupConversationsController,
   getDirectConversationController,
@@ -36,10 +36,10 @@ import {
   grantGroupAdminController,
   revokeGroupAdminController
 } from './conversation.controller'
-import { 
-  paginationValidator, 
-  createGroupValidator, 
-  conversationIdParamValidator, 
+import {
+  paginationValidator,
+  createGroupValidator,
+  conversationIdParamValidator,
   reactMessageValidator,
   updateGroupValidator,
   addMembersValidator,
@@ -63,15 +63,9 @@ const conversationRouter = Router()
 conversationRouter.use(accessTokenValidator, authenticateAccessToken)
 
 // 1. Quản lý Hội thoại
-conversationRouter.get(
-  '/', 
-  wrapController(getConversationsController)
-)
+conversationRouter.get('/', wrapController(getConversationsController))
 
-conversationRouter.get(
-  '/unread-summary',
-  wrapController(getConversationUnreadSummaryController)
-)
+conversationRouter.get('/unread-summary', wrapController(getConversationUnreadSummaryController))
 
 conversationRouter.get(
   '/groups/search',
@@ -85,11 +79,7 @@ conversationRouter.post(
   wrapController(getDirectConversationController)
 )
 
-conversationRouter.post(
-  '/group',
-  createGroupValidator,
-  wrapController(createGroupConversationController)
-)
+conversationRouter.post('/group', createGroupValidator, wrapController(createGroupConversationController))
 
 conversationRouter.delete(
   '/:conversation_id',
@@ -121,11 +111,7 @@ conversationRouter.delete(
   wrapController(unpinConversationController)
 )
 
-conversationRouter.patch(
-  '/:conversation_id',
-  updateGroupValidator,
-  wrapController(updateGroupController)
-)
+conversationRouter.patch('/:conversation_id', updateGroupValidator, wrapController(updateGroupController))
 
 conversationRouter.get(
   '/:conversation_id/members',
@@ -133,11 +119,7 @@ conversationRouter.get(
   wrapController(getGroupMembersController)
 )
 
-conversationRouter.post(
-  '/:conversation_id/members',
-  addMembersValidator,
-  wrapController(addGroupMembersController)
-)
+conversationRouter.post('/:conversation_id/members', addMembersValidator, wrapController(addGroupMembersController))
 
 conversationRouter.delete(
   '/:conversation_id/members/:user_id',
@@ -145,11 +127,7 @@ conversationRouter.delete(
   wrapController(removeGroupMemberController)
 )
 
-conversationRouter.delete(
-  '/:conversation_id/leave',
-  conversationIdParamValidator,
-  wrapController(leaveGroupController)
-)
+conversationRouter.delete('/:conversation_id/leave', conversationIdParamValidator, wrapController(leaveGroupController))
 
 conversationRouter.post(
   '/:conversation_id/transfer-admin-and-leave',
@@ -197,11 +175,7 @@ conversationRouter.get(
   wrapController(getConversationMediaController)
 )
 
-conversationRouter.post(
-  '/:conversation_id/read',
-  markConversationReadValidator,
-  wrapController(markReadController)
-)
+conversationRouter.post('/:conversation_id/read', markConversationReadValidator, wrapController(markReadController))
 
 // 3. Thao tác với từng tin nhắn cụ thể
 conversationRouter.post(
@@ -210,17 +184,9 @@ conversationRouter.post(
   wrapController(revokeMessageController)
 )
 
-conversationRouter.delete(
-  '/messages/:message_id',
-  messageIdParamValidator,
-  wrapController(deleteMessageController)
-)
+conversationRouter.delete('/messages/:message_id', messageIdParamValidator, wrapController(deleteMessageController))
 
-conversationRouter.post(
-  '/messages/:message_id/react',
-  reactMessageValidator,
-  wrapController(reactMessageController)
-)
+conversationRouter.post('/messages/:message_id/react', reactMessageValidator, wrapController(reactMessageController))
 
 conversationRouter.delete(
   '/messages/:message_id/react',
@@ -234,11 +200,7 @@ conversationRouter.get(
   wrapController(getMessageReactionsController)
 )
 
-conversationRouter.patch(
-  '/messages/:message_id',
-  editMessageValidator,
-  wrapController(editMessageController)
-)
+conversationRouter.patch('/messages/:message_id', editMessageValidator, wrapController(editMessageController))
 
 conversationRouter.post(
   '/messages/:message_id/forward',
@@ -246,11 +208,7 @@ conversationRouter.post(
   wrapController(forwardMessageController)
 )
 
-conversationRouter.post(
-  '/:conversation_id/mute',
-  muteConversationValidator,
-  wrapController(muteConversationController)
-)
+conversationRouter.post('/:conversation_id/mute', muteConversationValidator, wrapController(muteConversationController))
 
 conversationRouter.delete(
   '/:conversation_id/mute',

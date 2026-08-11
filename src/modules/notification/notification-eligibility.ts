@@ -1,9 +1,6 @@
 import { NotificationType } from '~/constants/enums'
 
-export const SUPPRESSED_NOTIFICATION_TYPES = [
-  NotificationType.Message,
-  NotificationType.MessageReaction
-] as const
+export const SUPPRESSED_NOTIFICATION_TYPES = [NotificationType.Message, NotificationType.MessageReaction] as const
 
 export type EligibleNotificationType = Exclude<
   NotificationType,

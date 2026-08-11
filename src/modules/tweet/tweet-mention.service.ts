@@ -38,10 +38,7 @@ export class TweetMentionService {
     const users = await this.databaseService.users
       .find(
         {
-          $and: [
-            filters.length === 1 ? filters[0] : { $or: filters },
-            { verify: { $ne: UserVerifyStatus.Banned } }
-          ]
+          $and: [filters.length === 1 ? filters[0] : { $or: filters }, { verify: { $ne: UserVerifyStatus.Banned } }]
         },
         { projection: { _id: 1 }, session }
       )

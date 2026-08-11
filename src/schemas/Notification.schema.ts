@@ -53,7 +53,8 @@ export default class Notification {
     this.is_read = notification.is_read ?? false
     this.created_at = notification.created_at ?? new Date()
     if (notification.target_type !== undefined) this.target_type = notification.target_type
-    if (notification.actor_ids_preview !== undefined) this.actor_ids_preview = notification.actor_ids_preview.slice(0, 3)
+    if (notification.actor_ids_preview !== undefined)
+      this.actor_ids_preview = notification.actor_ids_preview.slice(0, 3)
     if (notification.actor_count !== undefined) this.actor_count = notification.actor_count
     if (notification.context !== undefined) this.context = notification.context
     if (notification.deduplication_key !== undefined) this.deduplication_key = notification.deduplication_key

@@ -35,10 +35,7 @@ export class NotificationAggregationService {
       { notification_id: active._id, actor_id: command.actor_id },
       { session: options.session }
     )
-    if (
-      existingActor?.source_key === command.source_key &&
-      existingActor.last_event_id === command.event_id
-    ) {
+    if (existingActor?.source_key === command.source_key && existingActor.last_event_id === command.event_id) {
       return { status: 'duplicate', notification: active }
     }
 

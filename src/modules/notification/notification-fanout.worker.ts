@@ -84,9 +84,7 @@ export class NotificationFanoutWorker {
           throw new Error(`Fanout source must be TweetCreated: ${job.data.event_id}`)
         }
         const event: TweetCreatedEvent = parsed
-        const afterRelationId = job.data.after_relation_id
-          ? new ObjectId(job.data.after_relation_id)
-          : undefined
+        const afterRelationId = job.data.after_relation_id ? new ObjectId(job.data.after_relation_id) : undefined
         const relations = await this.databaseService.followers
           .find(
             {

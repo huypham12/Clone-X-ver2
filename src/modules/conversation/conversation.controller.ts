@@ -38,11 +38,7 @@ export const getConversationUnreadSummaryController: GetHandler<
 > = async (req, res) => {
   const { user_id } = req.decoded_authorization as TokenPayload
   const result = await conversationService.getUnreadSummary(user_id)
-  const response = new SuccessResponseDto(
-    HTTP_STATUS.OK,
-    'Get conversation unread summary successfully',
-    result
-  )
+  const response = new SuccessResponseDto(HTTP_STATUS.OK, 'Get conversation unread summary successfully', result)
   res.status(response.statusCode).json(response)
 }
 
@@ -63,33 +59,47 @@ export const searchGroupConversationsController: GetHandler<
   res.status(response.statusCode).json(response)
 }
 
-export const getDirectConversationController: PostHandler<any, ConversationResponseDto, { receiver_id: string }> = async (req, res) => {
+export const getDirectConversationController: PostHandler<
+  any,
+  ConversationResponseDto,
+  { receiver_id: string }
+> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { receiver_id } = req.params
 
   const result = await conversationService.getOrCreateDirectConversation(user_id, receiver_id)
-  
+
   const response = new ConversationResponseDto(HTTP_STATUS.OK, 'Get direct conversation successfully', result)
   res.status(response.statusCode).json(response)
 }
 
-export const createGroupConversationController: PostHandler<CreateGroupConversationBodyDto, ConversationResponseDto> = async (req, res) => {
+export const createGroupConversationController: PostHandler<
+  CreateGroupConversationBodyDto,
+  ConversationResponseDto
+> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { name, members, avatar_url } = req.body
 
   const result = await conversationService.createGroupConversation(user_id, name, members, avatar_url)
-  
+
   const response = new ConversationResponseDto(HTTP_STATUS.CREATED, 'Group created successfully', result)
   res.status(response.statusCode).json(response)
 }
 
-export const deleteConversationController: DeleteHandler<ConversationResponseDto, { conversation_id: string }> = async (req, res) => {
+export const deleteConversationController: DeleteHandler<ConversationResponseDto, { conversation_id: string }> = async (
+  req,
+  res
+) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { conversation_id } = req.params
 
   const result = await conversationService.deleteConversation(user_id, conversation_id)
-  
-  const response = new ConversationResponseDto(HTTP_STATUS.OK, 'Conversation hidden from your inbox successfully', result)
+
+  const response = new ConversationResponseDto(
+    HTTP_STATUS.OK,
+    'Conversation hidden from your inbox successfully',
+    result
+  )
   res.status(response.statusCode).json(response)
 }
 
@@ -118,18 +128,26 @@ export const unhideConversationController: PostHandler<
   const { conversation_id } = req.params
 
   const result = await conversationService.unhideConversation(user_id, conversation_id)
-  const response = new ConversationResponseDto(HTTP_STATUS.OK, 'Conversation restored to your inbox successfully', result)
+  const response = new ConversationResponseDto(
+    HTTP_STATUS.OK,
+    'Conversation restored to your inbox successfully',
+    result
+  )
   res.status(response.statusCode).json(response)
 }
 
-export const getMessagesController: GetHandler<GetMessagesResponseDto, { conversation_id: string }, PaginationQueryDto> = async (req, res) => {
+export const getMessagesController: GetHandler<
+  GetMessagesResponseDto,
+  { conversation_id: string },
+  PaginationQueryDto
+> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { conversation_id } = req.params
   const cursor = (req.query as any).cursor as string | undefined
   const limit = Number((req.query as any).limit ?? 10)
-  
+
   const result = await conversationService.getMessages(user_id, conversation_id, cursor, limit)
-  
+
   const response = new GetMessagesResponseDto(HTTP_STATUS.OK, 'Get messages successfully', result)
   res.status(response.statusCode).json(response)
 }
@@ -159,91 +177,119 @@ export const markReadController: PostHandler<
   const { conversation_id } = req.params
 
   const result = await conversationService.markAsRead(user_id, conversation_id, req.body?.message_id)
-  
+
   const response = new MessageActionResponseDto(HTTP_STATUS.OK, 'Marked as read successfully', result)
   res.status(response.statusCode).json(response)
 }
 
-export const revokeMessageController: PostHandler<any, MessageActionResponseDto, { message_id: string }> = async (req, res) => {
+export const revokeMessageController: PostHandler<any, MessageActionResponseDto, { message_id: string }> = async (
+  req,
+  res
+) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { message_id } = req.params
 
   const result = await conversationService.revokeMessage(user_id, message_id)
-  
+
   const response = new MessageActionResponseDto(HTTP_STATUS.OK, 'Message revoked successfully', result)
   res.status(response.statusCode).json(response)
 }
 
-export const deleteMessageController: DeleteHandler<MessageActionResponseDto, { message_id: string }> = async (req, res) => {
+export const deleteMessageController: DeleteHandler<MessageActionResponseDto, { message_id: string }> = async (
+  req,
+  res
+) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { message_id } = req.params
 
   const result = await conversationService.deleteMessage(user_id, message_id)
-  
+
   const response = new MessageActionResponseDto(HTTP_STATUS.OK, 'Message deleted for you successfully', result)
   res.status(response.statusCode).json(response)
 }
 
-export const reactMessageController: PostHandler<ReactMessageBodyDto, MessageActionResponseDto, { message_id: string }> = async (req, res) => {
+export const reactMessageController: PostHandler<
+  ReactMessageBodyDto,
+  MessageActionResponseDto,
+  { message_id: string }
+> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { message_id } = req.params
   const { emoji } = req.body
 
   const result = await conversationService.reactMessage(user_id, message_id, emoji)
-  
+
   const response = new MessageActionResponseDto(HTTP_STATUS.OK, 'Reacted to message successfully', result)
   res.status(response.statusCode).json(response)
 }
 
-export const pinConversationController: PostHandler<any, ConversationResponseDto, { conversation_id: string }> = async (req, res) => {
+export const pinConversationController: PostHandler<any, ConversationResponseDto, { conversation_id: string }> = async (
+  req,
+  res
+) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { conversation_id } = req.params
 
   const result = await conversationService.pinConversation(user_id, conversation_id)
-  
+
   const response = new ConversationResponseDto(HTTP_STATUS.OK, 'Conversation pinned successfully', result)
   res.status(response.statusCode).json(response)
 }
 
-export const unpinConversationController: DeleteHandler<ConversationResponseDto, { conversation_id: string }> = async (req, res) => {
+export const unpinConversationController: DeleteHandler<ConversationResponseDto, { conversation_id: string }> = async (
+  req,
+  res
+) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { conversation_id } = req.params
 
   const result = await conversationService.unpinConversation(user_id, conversation_id)
-  
+
   const response = new ConversationResponseDto(HTTP_STATUS.OK, 'Conversation unpinned successfully', result)
   res.status(response.statusCode).json(response)
 }
 
-export const searchMessagesController: GetHandler<SearchResponseDto<MessagePageData>, { conversation_id: string }, SearchQueryDto> = async (req, res) => {
+export const searchMessagesController: GetHandler<
+  SearchResponseDto<MessagePageData>,
+  { conversation_id: string },
+  SearchQueryDto
+> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { conversation_id } = req.params
   const { q, cursor, limit = 10 } = req.query as any
 
   const result = await conversationService.searchMessages(user_id, conversation_id, q, cursor, Number(limit))
-  
+
   const response = new SearchResponseDto(HTTP_STATUS.OK, 'Search messages successfully', result)
   res.status(response.statusCode).json(response)
 }
 
-export const getConversationMediaController: GetHandler<GetMessagesResponseDto, { conversation_id: string }, PaginationQueryDto> = async (req, res) => {
+export const getConversationMediaController: GetHandler<
+  GetMessagesResponseDto,
+  { conversation_id: string },
+  PaginationQueryDto
+> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { conversation_id } = req.params
   const { cursor, limit = 10 } = req.query as any
 
   const result = await conversationService.getConversationMedia(user_id, conversation_id, cursor, Number(limit))
-  
+
   const response = new GetMessagesResponseDto(HTTP_STATUS.OK, 'Get conversation media successfully', result)
   res.status(response.statusCode).json(response)
 }
 
-export const muteConversationController: PostHandler<{ type: 'direct' | 'group', duration_hours?: number }, ConversationResponseDto, { conversation_id: string }> = async (req, res) => {
+export const muteConversationController: PostHandler<
+  { type: 'direct' | 'group'; duration_hours?: number },
+  ConversationResponseDto,
+  { conversation_id: string }
+> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { conversation_id } = req.params
   const { type, duration_hours } = req.body
 
   const result = await conversationService.muteConversation(user_id, conversation_id, type, duration_hours)
-  
+
   const response = new ConversationResponseDto(HTTP_STATUS.OK, 'Conversation muted successfully', result)
   res.status(response.statusCode).json(response)
 }
@@ -258,59 +304,75 @@ export const unmuteConversationController: DeleteHandler<
   const { type } = req.query
 
   const result = await conversationService.unmuteConversation(user_id, conversation_id, type)
-  
+
   const response = new ConversationResponseDto(HTTP_STATUS.OK, 'Conversation unmuted successfully', result)
   res.status(response.statusCode).json(response)
 }
 
-export const updateGroupController: PatchHandler<any, ConversationResponseDto, { conversation_id: string }> = async (req, res) => {
+export const updateGroupController: PatchHandler<any, ConversationResponseDto, { conversation_id: string }> = async (
+  req,
+  res
+) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { conversation_id } = req.params
   const { name, avatar_url } = req.body
 
   const result = await conversationService.updateGroupInfo(user_id, conversation_id, { name, avatar_url })
-  
+
   const response = new ConversationResponseDto(HTTP_STATUS.OK, 'Group updated successfully', result)
   res.status(response.statusCode).json(response)
 }
 
-export const getGroupMembersController: GetHandler<SuccessResponseDto, { conversation_id: string }> = async (req, res) => {
+export const getGroupMembersController: GetHandler<SuccessResponseDto, { conversation_id: string }> = async (
+  req,
+  res
+) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { conversation_id } = req.params
 
   const result = await conversationService.getGroupMembers(user_id, conversation_id)
-  
+
   const response = new SuccessResponseDto(HTTP_STATUS.OK, 'Get group members successfully', result)
   res.status(response.statusCode).json(response)
 }
 
-export const addGroupMembersController: PostHandler<{ members: string[] }, SuccessResponseDto, { conversation_id: string }> = async (req, res) => {
+export const addGroupMembersController: PostHandler<
+  { members: string[] },
+  SuccessResponseDto,
+  { conversation_id: string }
+> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { conversation_id } = req.params
   const { members } = req.body
 
   const result = await conversationService.addGroupMembers(user_id, conversation_id, members)
-  
+
   const response = new SuccessResponseDto(HTTP_STATUS.OK, 'Add members successfully', result)
   res.status(response.statusCode).json(response)
 }
 
-export const removeGroupMemberController: DeleteHandler<SuccessResponseDto, { conversation_id: string, user_id: string }> = async (req, res) => {
+export const removeGroupMemberController: DeleteHandler<
+  SuccessResponseDto,
+  { conversation_id: string; user_id: string }
+> = async (req, res) => {
   const admin_id = (req as any).decoded_authorization.user_id
   const { conversation_id, user_id } = req.params
 
   const result = await conversationService.removeGroupMember(admin_id, conversation_id, user_id)
-  
+
   const response = new SuccessResponseDto(HTTP_STATUS.OK, 'Remove member successfully', result)
   res.status(response.statusCode).json(response)
 }
 
-export const leaveGroupController: DeleteHandler<SuccessResponseDto, { conversation_id: string }> = async (req, res) => {
+export const leaveGroupController: DeleteHandler<SuccessResponseDto, { conversation_id: string }> = async (
+  req,
+  res
+) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { conversation_id } = req.params
 
   const result = await conversationService.leaveGroup(user_id, conversation_id)
-  
+
   const response = new SuccessResponseDto(HTTP_STATUS.OK, 'Leave group successfully', result)
   res.status(response.statusCode).json(response)
 }
@@ -350,33 +412,43 @@ export const revokeGroupAdminController: DeleteHandler<
   res.json(new SuccessResponseDto(HTTP_STATUS.OK, 'Group admin revoked successfully', result))
 }
 
-export const editMessageController: PatchHandler<{ content: string }, MessageActionResponseDto, { message_id: string }> = async (req, res) => {
+export const editMessageController: PatchHandler<
+  { content: string },
+  MessageActionResponseDto,
+  { message_id: string }
+> = async (req, res) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { message_id } = req.params
   const { content } = req.body
 
   const result = await conversationService.editMessage(user_id, message_id, content)
-  
+
   const response = new MessageActionResponseDto(HTTP_STATUS.OK, 'Message edited successfully', result)
   res.status(response.statusCode).json(response)
 }
 
-export const unreactMessageController: DeleteHandler<MessageActionResponseDto, { message_id: string }> = async (req, res) => {
+export const unreactMessageController: DeleteHandler<MessageActionResponseDto, { message_id: string }> = async (
+  req,
+  res
+) => {
   const user_id = (req as any).decoded_authorization.user_id
   const { message_id } = req.params
 
   const result = await conversationService.unreactMessage(user_id, message_id)
-  
+
   const response = new MessageActionResponseDto(HTTP_STATUS.OK, 'Unreacted successfully', result)
   res.status(response.statusCode).json(response)
 }
 
-export const getMessageReactionsController: GetHandler<SuccessResponseDto, { message_id: string }> = async (req, res) => {
+export const getMessageReactionsController: GetHandler<SuccessResponseDto, { message_id: string }> = async (
+  req,
+  res
+) => {
   const { user_id } = req.decoded_authorization as TokenPayload
   const { message_id } = req.params
 
   const result = await conversationService.getMessageReactions(user_id, message_id)
-  
+
   const response = new SuccessResponseDto(HTTP_STATUS.OK, 'Get reactions successfully', result)
   res.status(response.statusCode).json(response)
 }
@@ -390,13 +462,8 @@ export const forwardMessageController: PostHandler<
   const { message_id } = req.params
   const { conversation_ids, client_operation_id } = req.body
 
-  const result = await conversationService.forwardMessage(
-    user_id,
-    message_id,
-    conversation_ids,
-    client_operation_id
-  )
-  
+  const result = await conversationService.forwardMessage(user_id, message_id, conversation_ids, client_operation_id)
+
   const response = new SuccessResponseDto(HTTP_STATUS.OK, 'Forwarded message successfully', result)
   res.status(response.statusCode).json(response)
 }

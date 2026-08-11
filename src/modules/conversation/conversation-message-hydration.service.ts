@@ -56,26 +56,21 @@ export class ConversationMessageHydrationService {
         ...(historyCutoffMessageId ? { $gt: historyCutoffMessageId } : {})
       },
       status: { $in: ['sent', 'revoked'] },
-      ...(viewerUserId
-        ? { deleted_by: { $ne: new this.databaseService.ObjectId(viewerUserId) } }
-        : {})
+      ...(viewerUserId ? { deleted_by: { $ne: new this.databaseService.ObjectId(viewerUserId) } } : {})
     }
     const replyMessages: ReplyMessage[] = replyObjectIds.length
       ? await this.databaseService.messages
-          .find(
-            replyFilter,
-            {
-              projection: {
-                _id: 1,
-                conversation_id: 1,
-                conversation_type: 1,
-                sender_id: 1,
-                content: 1,
-                media_ids: 1,
-                status: 1
-              }
+          .find(replyFilter, {
+            projection: {
+              _id: 1,
+              conversation_id: 1,
+              conversation_type: 1,
+              sender_id: 1,
+              content: 1,
+              media_ids: 1,
+              status: 1
             }
-          )
+          })
           .toArray()
       : []
     const senderIds = [
@@ -96,10 +91,7 @@ export class ConversationMessageHydrationService {
         .toArray(),
       firstReplyMediaIds.length
         ? this.databaseService.medias
-            .find(
-              { _id: { $in: firstReplyMediaIds } },
-              { projection: { _id: 1, type: 1 } }
-            )
+            .find({ _id: { $in: firstReplyMediaIds } }, { projection: { _id: 1, type: 1 } })
             .toArray()
         : Promise.resolve([])
     ])
@@ -140,9 +132,7 @@ export class ConversationMessageHydrationService {
           _id: replyMessage._id,
           sender_info: senderInfoById.get(replyMessage.sender_id.toString()) ?? null,
           content: isRevoked ? '' : replyMessage.content.trim().slice(0, REPLY_PREVIEW_CONTENT_LIMIT),
-          ...(isRevoked || !firstMediaId
-            ? {}
-            : { media_type: replyMediaTypeById.get(firstMediaId) }),
+          ...(isRevoked || !firstMediaId ? {} : { media_type: replyMediaTypeById.get(firstMediaId) }),
           status: isRevoked ? 'revoked' : 'sent'
         }
       }
@@ -174,11 +164,7 @@ export class ConversationMessageHydrationService {
     viewerUserId?: string,
     historyCutoffMessageId?: ObjectId
   ): Promise<HydratedMessage> {
-    const [hydratedMessage] = await this.hydrateSenderInfo(
-      [message],
-      viewerUserId,
-      historyCutoffMessageId
-    )
+    const [hydratedMessage] = await this.hydrateSenderInfo([message], viewerUserId, historyCutoffMessageId)
     return hydratedMessage
   }
 }

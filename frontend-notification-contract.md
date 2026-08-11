@@ -195,13 +195,13 @@ Endpoint luôn đọc `NotificationState`, nguồn runtime duy nhất của noti
 
 Frontend nên ưu tiên `actor_info`, `actor_infos_preview`, `target_type`, `target_info`, `context`; các ID legacy vẫn là fallback.
 
-| `type` | `target_type` hiện tại | Điều hướng đề xuất |
-| --- | --- | --- |
-| `follow` | `USER` | Mở profile `actor_info._id`; `target_id` có thể là `null` với caller legacy. |
-| `like`, `reply`, `retweet`, `quote`, `mention`, `followed_user_tweet` | `TWEET` | Mở tweet bằng `target_info._id`, fallback `target_id`. |
-| `group_add`, `group_join`, `group_kick`, `admin_granted`, `admin_revoked` | `CONVERSATION` | Mở conversation bằng `target_info._id`, fallback `target_id`. Với user đã bị kick, `target_info` chủ động là `null`; không cố fetch nội dung group. |
-| `message_reply`, `message_mention` | `MESSAGE` | Mở conversation có thẩm quyền rồi focus message target. |
-| `system` | `null` nếu caller không cung cấp target | Chỉ điều hướng khi `target_type/target_info` thực sự có dữ liệu. |
+| `type`                                                                    | `target_type` hiện tại                  | Điều hướng đề xuất                                                                                                                                  |
+| ------------------------------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `follow`                                                                  | `USER`                                  | Mở profile `actor_info._id`; `target_id` có thể là `null` với caller legacy.                                                                        |
+| `like`, `reply`, `retweet`, `quote`, `mention`, `followed_user_tweet`     | `TWEET`                                 | Mở tweet bằng `target_info._id`, fallback `target_id`.                                                                                              |
+| `group_add`, `group_join`, `group_kick`, `admin_granted`, `admin_revoked` | `CONVERSATION`                          | Mở conversation bằng `target_info._id`, fallback `target_id`. Với user đã bị kick, `target_info` chủ động là `null`; không cố fetch nội dung group. |
+| `message_reply`, `message_mention`                                        | `MESSAGE`                               | Mở conversation có thẩm quyền rồi focus message target.                                                                                             |
+| `system`                                                                  | `null` nếu caller không cung cấp target | Chỉ điều hướng khi `target_type/target_info` thực sự có dữ liệu.                                                                                    |
 
 `target_info` là một trong các projection công khai sau:
 

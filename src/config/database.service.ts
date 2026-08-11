@@ -112,8 +112,7 @@ export default class DatabaseService {
   }
 
   private async verifyNotificationLifecycleBaseline(): Promise<void> {
-    const [notification, actor, state, orphanActor, orphanState, missingState, actorlessAggregate] =
-      await Promise.all([
+    const [notification, actor, state, orphanActor, orphanState, missingState, actorlessAggregate] = await Promise.all([
       this.notifications.findOne({}, { projection: { _id: 1 } }),
       this.notificationActors.findOne({}, { projection: { _id: 1 } }),
       this.notificationStates.findOne({}, { projection: { _id: 1 } }),
@@ -175,13 +174,7 @@ export default class DatabaseService {
         ])
         .hasNext()
     ])
-    if (
-      (!notification && (actor || state)) ||
-      orphanActor ||
-      orphanState ||
-      missingState ||
-      actorlessAggregate
-    ) {
+    if ((!notification && (actor || state)) || orphanActor || orphanState || missingState || actorlessAggregate) {
       throw new Error(
         'Notification read-state/lifecycle baseline is incompatible; reset notifications, notificationActors and notificationStates together'
       )
@@ -260,14 +253,8 @@ export default class DatabaseService {
       { name: 'followed_user_post_notifications_relation' }
     )
     await Promise.all([
-      this.followers.createIndex(
-        { follow_user_id: 1, updated_at: -1 },
-        { name: 'follow_user_id_1_updated_at_-1' }
-      ),
-      this.followers.createIndex(
-        { followed_user_id: 1, updated_at: -1 },
-        { name: 'followed_user_id_1_updated_at_-1' }
-      )
+      this.followers.createIndex({ follow_user_id: 1, updated_at: -1 }, { name: 'follow_user_id_1_updated_at_-1' }),
+      this.followers.createIndex({ followed_user_id: 1, updated_at: -1 }, { name: 'followed_user_id_1_updated_at_-1' })
     ])
   }
 
@@ -324,10 +311,7 @@ export default class DatabaseService {
       )
     }
 
-    await this.userBlocks.createIndex(
-      { blocked_user_id: 1, user_id: 1 },
-      { name: 'blocked_user_id_1_user_id_1' }
-    )
+    await this.userBlocks.createIndex({ blocked_user_id: 1, user_id: 1 }, { name: 'blocked_user_id_1_user_id_1' })
   }
 
   private async indexMessages() {
@@ -394,10 +378,7 @@ export default class DatabaseService {
   }
 
   private async indexUserMessageStates() {
-    await this.userMessageStates.createIndex(
-      { user_id: 1 },
-      { name: 'user_message_state_user_unique', unique: true }
-    )
+    await this.userMessageStates.createIndex({ user_id: 1 }, { name: 'user_message_state_user_unique', unique: true })
   }
 
   private async verifyConversationReadStateBaseline() {

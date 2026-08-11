@@ -1,9 +1,11 @@
 # Tổng hợp API Endpoints của hệ thống X-Clone
 
-Dưới đây là danh sách tất cả các API Endpoints được trích xuất từ mã nguồn các route, phân chia theo từng module. *(Ghi chú: Prefix URL có thể thay đổi tùy thuộc vào file `app.ts` hoặc `index.ts`, ví dụ `/api/users`, `/api/tweets`... ở đây chỉ liệt kê các path bên trong module router)*.
+Dưới đây là danh sách tất cả các API Endpoints được trích xuất từ mã nguồn các route, phân chia theo từng module. _(Ghi chú: Prefix URL có thể thay đổi tùy thuộc vào file `app.ts` hoặc `index.ts`, ví dụ `/api/users`, `/api/tweets`... ở đây chỉ liệt kê các path bên trong module router)_.
 
 ## 1. Auth Module (`/auth`)
-*Chịu trách nhiệm xác thực, phân quyền và quản lý thông tin bảo mật.*
+
+_Chịu trách nhiệm xác thực, phân quyền và quản lý thông tin bảo mật._
+
 - `POST /register`: Đăng ký tài khoản người dùng mới.
 - `POST /login`: Đăng nhập vào hệ thống, trả về `AccessToken` và `RefreshToken`.
 - `POST /logout`: Đăng xuất, vô hiệu hóa `RefreshToken`.
@@ -16,7 +18,9 @@ Dưới đây là danh sách tất cả các API Endpoints được trích xuấ
 - `PATCH /change-password`: Thay đổi mật khẩu khi đang đăng nhập.
 
 ## 2. User Module (`/users`)
-*Quản lý thông tin hồ sơ và mạng lưới theo dõi (Follow/Block).*
+
+_Quản lý thông tin hồ sơ và mạng lưới theo dõi (Follow/Block)._
+
 - `GET /me`: Lấy thông tin cá nhân của người dùng hiện tại.
 - `GET /profile/:username`: Lấy thông tin hồ sơ công khai. Khi có đăng nhập, response có `is_blocked` (người gọi đã chặn profile) và `is_blocked_by_user` (profile đã chặn người gọi).
 - `PATCH /me`: Cập nhật thông tin cá nhân (ảnh đại diện, tiểu sử,...).
@@ -34,7 +38,9 @@ Dưới đây là danh sách tất cả các API Endpoints được trích xuấ
 - `GET /:username/media`: Lấy danh sách các ảnh/video (Media) của người dùng.
 
 ## 3. Tweet Module (`/tweets`)
-*Quản lý các thao tác liên quan đến đăng bài viết (Tweet) và các hoạt động tương tác.*
+
+_Quản lý các thao tác liên quan đến đăng bài viết (Tweet) và các hoạt động tương tác._
+
 - `GET /`: Lấy danh sách News Feed (Các bài viết mới của người mình theo dõi hoặc ngẫu nhiên).
 - `POST /`: Tạo Tweet mới. Explicit mention ID được normalize/dedupe với username `@...` trong content; user không tồn tại và self mention bị loại. Khi notification outbox path được bật, Tweet, parent counter, news feed và event notification được commit cùng transaction; Reply/Quote ưu tiên hơn Mention cho parent owner. Tweet gốc public còn tạo fan-out notification bất đồng bộ theo batch 500 cho các follow relation đã opt-in; request không chờ fan-out.
 - `PATCH /:tweet_id`: Sửa audience/content/hashtags/mentions/medias theo contract cũ. `mentions` là field PATCH optional: bỏ qua field này sẽ giữ nguyên danh sách mention đã lưu, kể cả khi chỉ sửa `content`; muốn thêm hoặc bỏ mention, client phải gửi toàn bộ danh sách explicit mention mong muốn. Khi `mentions` được gửi, backend dedupe danh sách đó với username `@...` trong content hiện tại; nếu notification outbox path được bật, mention mới tạo notification idempotent, mention bị bỏ được invalidate và biến khỏi notification REST feed.
@@ -52,8 +58,10 @@ Dưới đây là danh sách tất cả các API Endpoints được trích xuấ
 Notification durable và các handler social/directed/group mặc định bật cho local. Có thể đặt `false` để rollback/debug: Follow dùng `NOTIFICATION_OUTBOX_ENABLED` + `NOTIFICATION_FOLLOW_OUTBOX_ENABLED`; Reply/Quote/Mention dùng global flag + `NOTIFICATION_TWEET_OUTBOX_ENABLED`; Like/Repost dùng global flag + `NOTIFICATION_SOCIAL_AGGREGATION_ENABLED`; Message Reply/Group Mention dùng global flag + `NOTIFICATION_MESSAGE_DIRECTED_ENABLED`; group system/direct notification dùng global flag + `NOTIFICATION_GROUP_MANAGEMENT_ENABLED`; tweet gốc opt-in dùng global flag + TweetCreated outbox + `NOTIFICATION_FOLLOWED_TWEET_ENABLED`. Generic `message` và `message_reaction` không thuộc durable Notification policy; reaction chỉ cập nhật Chat. Các flag không làm đổi REST request/response và không bật lại legacy writer.
 
 ## 4. Conversation Module (`/conversations`)
-*Quản lý tính năng trò chuyện, bao gồm Chat 1-1 và Chat Group, cùng với tin nhắn.*
+
+_Quản lý tính năng trò chuyện, bao gồm Chat 1-1 và Chat Group, cùng với tin nhắn._
 Các endpoint có `conversation_id` chỉ cho phép thành viên của hội thoại truy cập hoặc thay đổi dữ liệu; người dùng đã xác thực nhưng không phải thành viên nhận `403 Forbidden`.
+
 - `GET /`: Lấy danh sách các hội thoại hiện có của người dùng. Mỗi item bổ sung `unread_message_count`, `last_read_message_id`, `last_read_at`; các field cũ và thứ tự pin/thời gian giữ nguyên.
 - `GET /unread-summary`: Trả `{ unread_conversation_count, total_unread_message_count, version, updated_at }`. Badge inbox dùng `unread_conversation_count`, không dùng tổng số message.
 - `GET /groups/search?q=...&cursor=...&limit=10`: Tìm theo tên trong các group mà người gọi vẫn là thành viên, bao gồm group người gọi đã ẩn; trả cursor và tối đa 20 kết quả mỗi trang.
@@ -103,7 +111,9 @@ Các endpoint có `conversation_id` chỉ cho phép thành viên của hội tho
 HTTP error response có trường optional `code`. Các lỗi group ổn định hiện có: `GROUP_ADMIN_CANNOT_REMOVE_SELF`, `GROUP_SOLE_ADMIN_CANNOT_LEAVE`, `GROUP_ADMIN_SUCCESSOR_INVALID` và `GROUP_ADMIN_TRANSFER_CONFLICT`; frontend không cần parse `message`.
 
 ## 5. Search Module (`/search`)
-*Hệ thống tìm kiếm chung.*
+
+_Hệ thống tìm kiếm chung._
+
 - `GET /users`: Tìm kiếm người dùng bằng từ khóa.
 - `GET /tweets`: Tìm kiếm Tweet bằng từ khóa.
 - `GET /hashtags`: Tìm kiếm và trả về danh sách các Hashtag thịnh hành/liên quan.
@@ -112,7 +122,9 @@ HTTP error response có trường optional `code`. Các lỗi group ổn định
 - `DELETE /history`: Xóa lịch sử tìm kiếm của người dùng.
 
 ## 6. Notification Module (`/notifications`)
-*Trung tâm thông báo (Notification center).*
+
+_Trung tâm thông báo (Notification center)._
+
 - `GET /`: Lấy notification chưa bị invalidated theo tuple `{ created_at: -1, _id: -1 }`. Query `limit` là số nguyên `1..100`, mặc định `10`; `cursor` mới là chuỗi opaque từ `next_cursor`, đồng thời backend vẫn nhận cursor ObjectId 24-hex cũ nếu document đó thuộc caller. Response giữ `notifications`, `unreadCount`, `next_cursor`, `has_next_page` và bổ sung field schema v2, `actor_info`, `actor_infos_preview`, `target_info` đã giới hạn projection công khai. Nếu actor/target đã bị block, banned, xóa hoặc mất quyền xem trong lúc lifecycle cleanup chưa hoàn tất, backend đặt raw `sender_id`/`target_id` tương ứng thành `null`, lọc `actor_ids_preview`, trả `context={}` và bỏ các key dedup/aggregation của item đó.
 - `GET /unread-count`: Trả `{ unreadCount, version, updated_at }` từ `NotificationState`, là nguồn runtime duy nhất của notification badge. Không có `countDocuments` fallback; môi trường local phải reset đồng thời notification/state/actor nếu baseline cũ không tương thích.
 - `POST /read-all`: Đánh dấu notification chưa đọc/chưa invalidated tới cutoff của request, set `read_at`/`updated_at` và đóng aggregate window nếu có. Item mới hoặc reactivation sau cutoff vẫn unread nhờ unread-generation marker nội bộ; dữ liệu compatibility chưa có marker dùng tuple `{created_at, _id}`. Có thể gọi lặp lại; response `{ updatedCount, unreadCount, version }` và `updatedCount=0` nếu không có transition.
@@ -127,7 +139,9 @@ Like/Repost và Message Reaction aggregate giữ nguyên `type`, `sender_id` và
 Lifecycle notification dùng outbox khi `NOTIFICATION_OUTBOX_ENABLED=true`: xóa tweet, chuyển tweet public sang audience hạn chế hoặc revoke message làm item trỏ target biến khỏi feed; delete-for-me chỉ xóa item của chính actor; block làm sạch individual item hai chiều và loại actor hai phía khỏi aggregate. Cleanup lớn chạy theo continuation tối đa 500 item/transaction. Unblock không khôi phục item cũ. Future event giữa hai user bị block và event có actor bị banned/deleted bị suppress; REST không hydrate hoặc trả raw ID của actor/target không còn hợp lệ. Retry lifecycle chỉ chuyển unread một lần. Trước khi bật v2 outbox phải reset đồng thời local `notifications`, `notificationActors`, `notificationStates`; startup từ chối notification legacy, actor/state mồ côi, notification thiếu state và active aggregate thiếu actor edge; backend không infer dữ liệu cũ.
 
 ## 7. Media Module (`/media`)
-*Xử lý tải lên đa phương tiện.*
+
+_Xử lý tải lên đa phương tiện._
+
 - `POST /upload-image`: Upload tệp hình ảnh.
 - `POST /upload-video`: Upload tệp video (Sẽ đưa vào queue chờ xử lý).
 - `POST /upload-audio`: Upload tệp âm thanh (Voice message, audio).

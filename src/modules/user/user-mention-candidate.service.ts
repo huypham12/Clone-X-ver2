@@ -40,8 +40,7 @@ export class UserMentionCandidateService {
         )
       : null
     const canUseContext = Boolean(
-      contextTweet &&
-        (contextTweet.audience === TweetAudience.Everyone || contextTweet.user_id.equals(actorId))
+      contextTweet && (contextTweet.audience === TweetAudience.Everyone || contextTweet.user_id.equals(actorId))
     )
 
     const [following, followers, contextAuthor, likers, participants] = await Promise.all([
@@ -100,9 +99,7 @@ export class UserMentionCandidateService {
 
     const eligible = new Set<string>()
     for (const relation of relations) {
-      const candidateId = relation.follow_user_id.equals(actorId)
-        ? relation.followed_user_id
-        : relation.follow_user_id
+      const candidateId = relation.follow_user_id.equals(actorId) ? relation.followed_user_id : relation.follow_user_id
       eligible.add(candidateId.toHexString())
     }
 
@@ -112,23 +109,16 @@ export class UserMentionCandidateService {
         { projection: { user_id: 1, audience: 1 }, session }
       )
       const canUseContext = Boolean(
-        contextTweet &&
-          (contextTweet.audience === TweetAudience.Everyone || contextTweet.user_id.equals(actorId))
+        contextTweet && (contextTweet.audience === TweetAudience.Everyone || contextTweet.user_id.equals(actorId))
       )
       if (canUseContext && contextTweet) {
         if (uniqueIds.has(contextTweet.user_id.toHexString())) eligible.add(contextTweet.user_id.toHexString())
         const [likes, childTweets] = await Promise.all([
           this.databaseService.likes
-            .find(
-              { tweet_id: contextTweetId, user_id: { $in: ids } },
-              { projection: { user_id: 1 }, session }
-            )
+            .find({ tweet_id: contextTweetId, user_id: { $in: ids } }, { projection: { user_id: 1 }, session })
             .toArray(),
           this.databaseService.tweets
-            .find(
-              { parent_id: contextTweetId, user_id: { $in: ids } },
-              { projection: { user_id: 1 }, session }
-            )
+            .find({ parent_id: contextTweetId, user_id: { $in: ids } }, { projection: { user_id: 1 }, session })
             .toArray()
         ])
         for (const like of likes) eligible.add(like.user_id.toHexString())

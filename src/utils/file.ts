@@ -44,7 +44,7 @@ export const handleUploadImage = async (req: Request) => {
       if (!files.image) {
         return reject(new HttpError('File is empty', HTTP_STATUS.BAD_REQUEST))
       }
-      
+
       resolve(files.image as File[])
     })
   })
@@ -73,7 +73,7 @@ export const handleUploadVideo = async (req: Request) => {
       if (!files.video) {
         return reject(new HttpError('File is empty', HTTP_STATUS.BAD_REQUEST))
       }
-      
+
       resolve(files.video as File[])
     })
   })
@@ -102,7 +102,7 @@ export const handleUploadAudio = async (req: Request) => {
       if (!files.audio) {
         return reject(new HttpError('File is empty', HTTP_STATUS.BAD_REQUEST))
       }
-      
+
       resolve(files.audio as File[])
     })
   })

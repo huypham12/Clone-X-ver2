@@ -1866,25 +1866,25 @@ business mutation → typed domain event + transactional outbox → publisher/wo
 
 ## 6. Bảng dependency giữa các phase
 
-| Phase                        | Phụ thuộc bắt buộc         | Phase phụ thuộc về sau |
-| ---------------------------- | -------------------------- | ---------------------- |
-| 1 DB/index foundation        | Baseline                   | 2–18                   |
-| 2 REST correctness           | 1                          | 3–4, 9                 |
-| 3 Schema v2/cursor           | 2                          | 4–10, 13–18            |
-| 4 Repository/policy/delivery | 3                          | 5–18                   |
-| 5 Typed event/idempotency    | 4                          | 6–18                   |
-| 6 Outbox/BullMQ              | 1, 5, transaction verified | 7–18                   |
-| 7 Follow                     | 6                          | 16–17                  |
-| 8 Reply/Quote/Mention        | 6–7                        | 10, 16–17              |
-| 9 Notification unread        | 3–6                        | 10, 13–18              |
-| 10 Like/Repost aggregation   | 6, 9                       | 14, 17–18              |
-| 11 Unified Message command   | 1, 5–6                     | 12–15, 17              |
-| 12 Message read state        | 11, group limit verified   | 13–15, 18              |
-| 13 Message Reply/Mention     | 9, 11–12                   | 14–17                  |
-| 14 Message Reaction          | 10–13                      | 17–18                  |
-| 15 Group events/admin        | 11–13                      | 17–18                  |
-| 16 Followed tweet fan-out    | 6–9, 7–8                   | 17–18                  |
-| 17 Lifecycle/privacy/cleanup | 7–16                       | 18                     |
+| Phase                          | Phụ thuộc bắt buộc         | Phase phụ thuộc về sau |
+| ------------------------------ | -------------------------- | ---------------------- |
+| 1 DB/index foundation          | Baseline                   | 2–18                   |
+| 2 REST correctness             | 1                          | 3–4, 9                 |
+| 3 Schema v2/cursor             | 2                          | 4–10, 13–18            |
+| 4 Repository/policy/delivery   | 3                          | 5–18                   |
+| 5 Typed event/idempotency      | 4                          | 6–18                   |
+| 6 Outbox/BullMQ                | 1, 5, transaction verified | 7–18                   |
+| 7 Follow                       | 6                          | 16–17                  |
+| 8 Reply/Quote/Mention          | 6–7                        | 10, 16–17              |
+| 9 Notification unread          | 3–6                        | 10, 13–18              |
+| 10 Like/Repost aggregation     | 6, 9                       | 14, 17–18              |
+| 11 Unified Message command     | 1, 5–6                     | 12–15, 17              |
+| 12 Message read state          | 11, group limit verified   | 13–15, 18              |
+| 13 Message Reply/Mention       | 9, 11–12                   | 14–17                  |
+| 14 Message Reaction            | 10–13                      | 17–18                  |
+| 15 Group events/admin          | 11–13                      | 17–18                  |
+| 16 Followed tweet fan-out      | 6–9, 7–8                   | 17–18                  |
+| 17 Lifecycle/privacy/cleanup   | 7–16                       | 18                     |
 | 18 Backend final audit/handoff | 1–17                       | Không có               |
 
 Thay đổi thứ tự so với gợi ý ban đầu: NotificationState nằm trước aggregation vì aggregate read/new-actor transition không thể có gate đo được nếu unread vẫn chỉ là `countDocuments` rời rạc.

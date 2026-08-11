@@ -17,36 +17,19 @@ const searchRouter = Router()
 // All search endpoints require authentication
 searchRouter.use(accessTokenValidator, authenticateAccessToken)
 
-searchRouter.get(
-  '/users',
-  searchQueryValidator,
-  wrapController(searchUsersController)
-)
+searchRouter.get('/users', searchQueryValidator, wrapController(searchUsersController))
 
-searchRouter.get(
-  '/tweets',
-  searchTweetsQueryValidator,
-  wrapController(searchTweetsController)
-)
+searchRouter.get('/tweets', searchTweetsQueryValidator, wrapController(searchTweetsController))
 
-searchRouter.get(
-  '/history',
-  wrapController(getSearchHistoryController)
-)
+searchRouter.get('/history', wrapController(getSearchHistoryController))
 
-searchRouter.delete(
-  '/history',
-  wrapController(deleteSearchHistoryController)
-)
+searchRouter.delete('/history', wrapController(deleteSearchHistoryController))
 
 searchRouter.get(
   '/hashtags',
   wrapController(searchHashtagsController) // Basic query check is handled inside or by generic validator
 )
 
-searchRouter.get(
-  '/hashtags/:tag/tweets',
-  wrapController(getHashtagTweetsController)
-)
+searchRouter.get('/hashtags/:tag/tweets', wrapController(getHashtagTweetsController))
 
 export default searchRouter

@@ -205,26 +205,14 @@ export const envConfig: EnvConfig = {
         false,
         dbCollectionDefaults.DIRECT_CONVERSATIONS
       ),
-      groupConversations: getEnvVar(
-        dbCollections.GROUP_CONVERSATIONS,
-        false,
-        dbCollectionDefaults.GROUP_CONVERSATIONS
-      ),
+      groupConversations: getEnvVar(dbCollections.GROUP_CONVERSATIONS, false, dbCollectionDefaults.GROUP_CONVERSATIONS),
       userBlocks: getEnvVar(dbCollections.USER_BLOCKS, false, dbCollectionDefaults.USER_BLOCKS),
       medias: getEnvVar(dbCollections.MEDIAS, false, dbCollectionDefaults.MEDIAS),
       newsFeeds: getEnvVar(dbCollections.NEWSFEEDS, false, dbCollectionDefaults.NEWSFEEDS),
       notifications: getEnvVar(dbCollections.NOTIFICATIONS, false, dbCollectionDefaults.NOTIFICATIONS),
       outboxEvents: getEnvVar(dbCollections.OUTBOX_EVENTS, false, dbCollectionDefaults.OUTBOX_EVENTS),
-      notificationStates: getEnvVar(
-        dbCollections.NOTIFICATION_STATES,
-        false,
-        dbCollectionDefaults.NOTIFICATION_STATES
-      ),
-      notificationActors: getEnvVar(
-        dbCollections.NOTIFICATION_ACTORS,
-        false,
-        dbCollectionDefaults.NOTIFICATION_ACTORS
-      ),
+      notificationStates: getEnvVar(dbCollections.NOTIFICATION_STATES, false, dbCollectionDefaults.NOTIFICATION_STATES),
+      notificationActors: getEnvVar(dbCollections.NOTIFICATION_ACTORS, false, dbCollectionDefaults.NOTIFICATION_ACTORS),
       notificationLifecycleGuards: getEnvVar(
         dbCollections.NOTIFICATION_LIFECYCLE_GUARDS,
         false,
@@ -235,11 +223,7 @@ export const envConfig: EnvConfig = {
         false,
         dbCollectionDefaults.CONVERSATION_READ_STATES
       ),
-      userMessageStates: getEnvVar(
-        dbCollections.USER_MESSAGE_STATES,
-        false,
-        dbCollectionDefaults.USER_MESSAGE_STATES
-      )
+      userMessageStates: getEnvVar(dbCollections.USER_MESSAGE_STATES, false, dbCollectionDefaults.USER_MESSAGE_STATES)
     }
   },
   secrets: {

@@ -1,6 +1,11 @@
 import { Request, Response } from 'express'
 import { handleUploadImage, handleUploadVideo, handleUploadAudio } from '~/utils/file'
-import { uploadImageToCloudinary, uploadVideoToCloudinary, uploadAudioToCloudinary, deleteFromCloudinary } from '~/utils/cloudinary'
+import {
+  uploadImageToCloudinary,
+  uploadVideoToCloudinary,
+  uploadAudioToCloudinary,
+  deleteFromCloudinary
+} from '~/utils/cloudinary'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 import { MESSAGES } from '~/constants/messages'
 import { databaseService } from '~/config/database.service'
@@ -38,7 +43,7 @@ export const uploadImageController: PostHandler<any, UploadMediaResponseDto> = a
 export const uploadVideoController: PostHandler<any, UploadMediaResponseDto> = async (req, res) => {
   const files = await handleUploadVideo(req)
   const user_id = new ObjectId((req as any).decoded_authorization.user_id)
-  
+
   const result = await Promise.all(
     files.map(async (file) => {
       // 1. Lưu DB với trạng thái Pending
@@ -103,7 +108,7 @@ export const getMediaController: GetHandler<any, { media_id: string }> = async (
 export const deleteMediaController: DeleteHandler<SuccessResponseDto, { media_id: string }> = async (req, res) => {
   const { media_id } = req.params
   const user_id = (req as any).decoded_authorization.user_id
-  
+
   const media = await databaseService.medias.findOne({ _id: new ObjectId(media_id) })
 
   if (!media) {
@@ -113,7 +118,11 @@ export const deleteMediaController: DeleteHandler<SuccessResponseDto, { media_id
   }
 
   if (media.uploaded_by?.toString() !== user_id) {
-    const response = new SuccessResponseDto(HTTP_STATUS.FORBIDDEN, 'You do not have permission to delete this media', null)
+    const response = new SuccessResponseDto(
+      HTTP_STATUS.FORBIDDEN,
+      'You do not have permission to delete this media',
+      null
+    )
     res.status(response.statusCode).json(response)
     return
   }

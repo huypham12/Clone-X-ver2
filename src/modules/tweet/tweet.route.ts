@@ -1,10 +1,10 @@
 import { Router } from 'express'
-import { 
-  createTweetController, 
-  getTweetController, 
-  likeTweetController, 
-  unlikeTweetController, 
-  bookmarkTweetController, 
+import {
+  createTweetController,
+  getTweetController,
+  likeTweetController,
+  unlikeTweetController,
+  bookmarkTweetController,
   unbookmarkTweetController,
   unretweetController,
   getTweetChildrenController,
@@ -77,18 +77,9 @@ tweetRouter.get(
   wrapController(getTweetChildrenController)
 )
 
-tweetRouter.get(
-  '/:tweet_id/likes',
-  paginationValidator,
-  wrapController(getTweetLikesController)
-)
+tweetRouter.get('/:tweet_id/likes', paginationValidator, wrapController(getTweetLikesController))
 
-tweetRouter.post(
-  '/:tweet_id/like',
-  accessTokenValidator,
-  authenticateAccessToken,
-  wrapController(likeTweetController)
-)
+tweetRouter.post('/:tweet_id/like', accessTokenValidator, authenticateAccessToken, wrapController(likeTweetController))
 
 tweetRouter.delete(
   '/:tweet_id/like',

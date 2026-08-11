@@ -12,8 +12,8 @@ class SearchService {
   async searchUsers(q: string, cursor: string | undefined, limit: number, user_id?: string) {
     const cacheKey = `search:users:${q}:cursor:${cursor || 'first'}:limit:${limit}`
     const cachedData = await redisService.clientInstance.get(cacheKey)
-    
-    let result: any;
+
+    let result: any
     if (cachedData) {
       result = JSON.parse(cachedData)
     } else {
@@ -22,7 +22,7 @@ class SearchService {
       const filter: any = {
         $or: [{ name: { $regex: regex } }, { username: { $regex: regex } }]
       }
-      
+
       if (cursor) {
         filter._id = { $lt: new this.databaseService.ObjectId(cursor) }
       }
@@ -36,9 +36,9 @@ class SearchService {
 
       const has_next_page = users.length === limit
       const next_cursor = has_next_page ? users[users.length - 1]._id.toString() : null
-      
+
       result = { users, next_cursor, has_next_page }
-      
+
       // Cache for 60 seconds
       await redisService.clientInstance.setEx(cacheKey, 60, JSON.stringify(result))
     }
@@ -163,10 +163,10 @@ class SearchService {
     }
 
     const tweets = await this.databaseService.tweets.aggregate(pipeline).toArray()
-    
+
     const has_next_page = tweets.length === limit
     const next_cursor = has_next_page ? tweets[tweets.length - 1]._id?.toString() : null
-    
+
     return { tweets, next_cursor, has_next_page }
   }
 
@@ -176,7 +176,7 @@ class SearchService {
     if (cachedData) return JSON.parse(cachedData)
 
     const regex = new RegExp(q, 'i')
-    const filter: any = { 
+    const filter: any = {
       content: { $regex: regex },
       $or: [
         { audience: 0 },
@@ -187,13 +187,13 @@ class SearchService {
     if (type === 'media') {
       filter.medias = { $exists: true, $not: { $size: 0 } }
     }
-    
+
     if (cursor) {
       filter._id = { $lt: new this.databaseService.ObjectId(cursor) }
     }
 
     const result = await this.aggregateTweets(filter, user_id, limit)
-    
+
     // Cache for 60 seconds
     await redisService.clientInstance.setEx(cacheKey, 60, JSON.stringify(result))
 
@@ -239,7 +239,7 @@ class SearchService {
     const hashtag = await this.databaseService.hashtags.findOne({ normalized_name: normalizedTag })
     if (!hashtag) return { tweets: [], next_cursor: null, has_next_page: false }
 
-    const matchStage: any = { 
+    const matchStage: any = {
       hashtags: hashtag._id,
       $or: [
         { audience: 0 },
