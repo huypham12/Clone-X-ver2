@@ -1,13 +1,11 @@
 import { v2 as cloudinary } from 'cloudinary'
 import fs from 'fs'
-import { config } from 'dotenv'
-
-config() // Load env variables
+import { envConfig } from '~/config/getEnvConfig'
 
 cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
+  cloud_name: envConfig.cloudinary.cloudName,
+  api_key: envConfig.cloudinary.apiKey,
+  api_secret: envConfig.cloudinary.apiSecret
 })
 
 export const uploadImageToCloudinary = async (filepath: string) => {
@@ -73,11 +71,5 @@ export const uploadAudioToCloudinary = async (filepath: string) => {
   }
 }
 
-export const deleteFromCloudinary = async (public_id: string, resource_type: 'image' | 'video' | 'raw' = 'image') => {
-  try {
-    const result = await cloudinary.uploader.destroy(public_id, { resource_type })
-    return result
-  } catch (error) {
-    throw error
-  }
-}
+export const deleteFromCloudinary = async (public_id: string, resource_type: 'image' | 'video' | 'raw' = 'image') =>
+  cloudinary.uploader.destroy(public_id, { resource_type })

@@ -16,7 +16,6 @@ config({
 interface EnvConfig {
   app: {
     port: number
-    host: string
   }
   cors: {
     origin: string[]
@@ -50,33 +49,23 @@ interface EnvConfig {
       userMessageStates: string
     }
   }
-  google: {
-    clientId: string
-    clientSecret: string
-    redirectUri: string
-  }
-  clientRedirectUri: string
   secrets: {
-    password: string
     jwt: {
       access: string
       refresh: string
-      emailVerify: string
-      forgotPassword: string
     }
   }
   tokenExpires: {
     access: string
     refresh: string
-    emailVerify: string
-    forgotPassword: string
   }
-  sendGrid: {
-    apiKey: string
-  }
-  resendApiKey: string
   redis: {
     url: string
+  }
+  cloudinary: {
+    cloudName: string
+    apiKey: string
+    apiSecret: string
   }
   features: {
     notificationOutboxEnabled: boolean
@@ -125,6 +114,29 @@ const dbCollections = {
   USER_MESSAGE_STATES: 'DB_USER_MESSAGE_STATES_COLLECTION'
 }
 
+const dbCollectionDefaults = {
+  USERS: 'users',
+  REFRESH_TOKEN: 'refresh-token',
+  FOLLOWERS: 'followers',
+  TWEETS: 'tweets',
+  HASHTAGS: 'hashtags',
+  BOOKMARKS: 'bookmarks',
+  LIKES: 'likes',
+  MESSAGES: 'messages',
+  DIRECT_CONVERSATIONS: 'direct-conversations',
+  GROUP_CONVERSATIONS: 'group-conversations',
+  USER_BLOCKS: 'user-blocks',
+  MEDIAS: 'medias',
+  NEWSFEEDS: 'newsFeeds',
+  NOTIFICATIONS: 'notifications',
+  OUTBOX_EVENTS: 'outboxEvents',
+  NOTIFICATION_STATES: 'notificationStates',
+  NOTIFICATION_ACTORS: 'notificationActors',
+  NOTIFICATION_LIFECYCLE_GUARDS: 'notificationLifecycleGuards',
+  CONVERSATION_READ_STATES: 'conversationReadStates',
+  USER_MESSAGE_STATES: 'userMessageStates'
+}
+
 const getBooleanEnvVar = (key: string, defaultValue: boolean): boolean => {
   const value = process.env[key]
   if (value === undefined || value === '') return defaultValue
@@ -160,79 +172,93 @@ const getCsvEnvVar = (key: string, defaultValue: string): string[] => {
   return values
 }
 
+const mongodbUri = getEnvVar('MONGODB_URI', false)
+const dbClusterHost = mongodbUri ? '' : getEnvVar('DB_CLUSTER_HOST')
+const dbUsername = mongodbUri ? '' : getEnvVar('DB_USERNAME')
+const dbPassword = mongodbUri ? '' : getEnvVar('DB_PASSWORD')
+
 // Export configuration
 export const envConfig: EnvConfig = {
   app: {
-    port: getPortEnvVar('PORT', 3000),
-    host: getEnvVar('HOST', true, 'http://localhost:3000')
+    port: getPortEnvVar('PORT', 3000)
   },
   cors: {
     origin: getCsvEnvVar('CORS_ORIGIN', 'http://localhost:3001,http://localhost:5173')
   },
   db: {
-    uri: getEnvVar('MONGODB_URI', false),
-    clusterHost: getEnvVar('DB_CLUSTER_HOST', false, 'clone-x-ver2.qhuiotw.mongodb.net'),
-    username: getEnvVar('DB_USERNAME'),
-    password: getEnvVar('DB_PASSWORD'),
+    uri: mongodbUri,
+    clusterHost: dbClusterHost,
+    username: dbUsername,
+    password: dbPassword,
     name: getEnvVar('DB_NAME'),
     collections: {
-      users: getEnvVar(dbCollections.USERS),
-      refreshToken: getEnvVar(dbCollections.REFRESH_TOKEN),
-      followers: getEnvVar(dbCollections.FOLLOWERS),
-      tweets: getEnvVar(dbCollections.TWEETS),
-      hashtags: getEnvVar(dbCollections.HASHTAGS),
-      bookmarks: getEnvVar(dbCollections.BOOKMARKS),
-      likes: getEnvVar(dbCollections.LIKES),
-      messages: getEnvVar(dbCollections.MESSAGES),
-      directConversations: getEnvVar(dbCollections.DIRECT_CONVERSATIONS),
-      groupConversations: getEnvVar(dbCollections.GROUP_CONVERSATIONS),
-      userBlocks: getEnvVar(dbCollections.USER_BLOCKS),
-      medias: getEnvVar(dbCollections.MEDIAS, false, 'medias'),
-      newsFeeds: getEnvVar(dbCollections.NEWSFEEDS, false, 'newsFeeds'),
-      notifications: getEnvVar(dbCollections.NOTIFICATIONS, false, 'notifications'),
-      outboxEvents: getEnvVar(dbCollections.OUTBOX_EVENTS, false, 'outboxEvents'),
-      notificationStates: getEnvVar(dbCollections.NOTIFICATION_STATES, false, 'notificationStates'),
-      notificationActors: getEnvVar(dbCollections.NOTIFICATION_ACTORS, false, 'notificationActors'),
+      users: getEnvVar(dbCollections.USERS, false, dbCollectionDefaults.USERS),
+      refreshToken: getEnvVar(dbCollections.REFRESH_TOKEN, false, dbCollectionDefaults.REFRESH_TOKEN),
+      followers: getEnvVar(dbCollections.FOLLOWERS, false, dbCollectionDefaults.FOLLOWERS),
+      tweets: getEnvVar(dbCollections.TWEETS, false, dbCollectionDefaults.TWEETS),
+      hashtags: getEnvVar(dbCollections.HASHTAGS, false, dbCollectionDefaults.HASHTAGS),
+      bookmarks: getEnvVar(dbCollections.BOOKMARKS, false, dbCollectionDefaults.BOOKMARKS),
+      likes: getEnvVar(dbCollections.LIKES, false, dbCollectionDefaults.LIKES),
+      messages: getEnvVar(dbCollections.MESSAGES, false, dbCollectionDefaults.MESSAGES),
+      directConversations: getEnvVar(
+        dbCollections.DIRECT_CONVERSATIONS,
+        false,
+        dbCollectionDefaults.DIRECT_CONVERSATIONS
+      ),
+      groupConversations: getEnvVar(
+        dbCollections.GROUP_CONVERSATIONS,
+        false,
+        dbCollectionDefaults.GROUP_CONVERSATIONS
+      ),
+      userBlocks: getEnvVar(dbCollections.USER_BLOCKS, false, dbCollectionDefaults.USER_BLOCKS),
+      medias: getEnvVar(dbCollections.MEDIAS, false, dbCollectionDefaults.MEDIAS),
+      newsFeeds: getEnvVar(dbCollections.NEWSFEEDS, false, dbCollectionDefaults.NEWSFEEDS),
+      notifications: getEnvVar(dbCollections.NOTIFICATIONS, false, dbCollectionDefaults.NOTIFICATIONS),
+      outboxEvents: getEnvVar(dbCollections.OUTBOX_EVENTS, false, dbCollectionDefaults.OUTBOX_EVENTS),
+      notificationStates: getEnvVar(
+        dbCollections.NOTIFICATION_STATES,
+        false,
+        dbCollectionDefaults.NOTIFICATION_STATES
+      ),
+      notificationActors: getEnvVar(
+        dbCollections.NOTIFICATION_ACTORS,
+        false,
+        dbCollectionDefaults.NOTIFICATION_ACTORS
+      ),
       notificationLifecycleGuards: getEnvVar(
         dbCollections.NOTIFICATION_LIFECYCLE_GUARDS,
         false,
-        'notificationLifecycleGuards'
+        dbCollectionDefaults.NOTIFICATION_LIFECYCLE_GUARDS
       ),
       conversationReadStates: getEnvVar(
         dbCollections.CONVERSATION_READ_STATES,
         false,
-        'conversationReadStates'
+        dbCollectionDefaults.CONVERSATION_READ_STATES
       ),
-      userMessageStates: getEnvVar(dbCollections.USER_MESSAGE_STATES, false, 'userMessageStates')
+      userMessageStates: getEnvVar(
+        dbCollections.USER_MESSAGE_STATES,
+        false,
+        dbCollectionDefaults.USER_MESSAGE_STATES
+      )
     }
   },
-  google: {
-    clientId: getEnvVar('GOOGLE_CLIENT_ID'),
-    clientSecret: getEnvVar('GOOGLE_CLIENT_SECRET'),
-    redirectUri: getEnvVar('GOOGLE_REDIRECT_URI')
-  },
-  clientRedirectUri: getEnvVar('CLIENT_REDIRECT_URI'),
   secrets: {
-    password: getEnvVar('PASSWORD_SECRET'),
     jwt: {
       access: getEnvVar('JWT_SECRET_ACCESS_TOKEN'),
-      refresh: getEnvVar('JWT_SECRET_REFRESH_TOKEN'),
-      emailVerify: getEnvVar('JWT_SECRET_EMAIL_VERIFY_TOKEN'),
-      forgotPassword: getEnvVar('JWT_SECRET_FORGOT_PASSWORD_TOKEN')
+      refresh: getEnvVar('JWT_SECRET_REFRESH_TOKEN')
     }
   },
   tokenExpires: {
     access: getEnvVar('ACCESS_TOKEN_EXPIRES_IN'),
-    refresh: getEnvVar('REFRESH_TOKEN_EXPIRES_IN'),
-    emailVerify: getEnvVar('EMAIL_VERIFY_TOKEN_EXPIRES_IN'),
-    forgotPassword: getEnvVar('FORGOT_PASSWORD_TOKEN_EXPIRES_IN')
+    refresh: getEnvVar('REFRESH_TOKEN_EXPIRES_IN')
   },
-  sendGrid: {
-    apiKey: getEnvVar('SENDGRID_API_KEY')
-  },
-  resendApiKey: getEnvVar('RESEND_API_KEY'),
   redis: {
     url: getEnvVar('REDIS_URL', false, 'redis://localhost:6379')
+  },
+  cloudinary: {
+    cloudName: getEnvVar('CLOUDINARY_CLOUD_NAME'),
+    apiKey: getEnvVar('CLOUDINARY_API_KEY'),
+    apiSecret: getEnvVar('CLOUDINARY_API_SECRET')
   },
   features: {
     notificationOutboxEnabled: getBooleanEnvVar('NOTIFICATION_OUTBOX_ENABLED', true),
@@ -264,16 +290,3 @@ export const isCorsOriginAllowed = (origin: string | undefined): boolean => {
     return false
   }
 }
-
-// Optional: Validate critical configurations on initialization
-;(() => {
-  try {
-    // Ensure critical environment variables are present
-    const criticalVars = ['PORT', 'HOST', 'DB_NAME', 'DB_USERNAME', 'DB_PASSWORD']
-    criticalVars.forEach((key) => getEnvVar(key))
-    console.log('[ENV] All critical environment variables loaded successfully.')
-  } catch (error) {
-    console.error('[ENV] Configuration validation failed:', error)
-    process.exit(1)
-  }
-})()
