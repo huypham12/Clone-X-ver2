@@ -1011,15 +1011,28 @@ Container chỉ cần writable temp directory nhỏ cho multipart; không thêm 
 - Vì backend là repository riêng, không set `rootDir: X-ver2`; `dockerfilePath` là `./Dockerfile` hoặc bỏ để dùng default repo root.
 - Các secret/credential (`MONGODB_URI`, `REDIS_URL`, Cloudinary, JWT) chỉ khai báo tên bằng `sync: false`; không hard-code value, không dùng Docker build arg và không log URI.
 - Các default portfolio không nhạy cảm được ghi rõ: `SOCKET_ADAPTER_MODE=memory`, `MEDIA_PROCESSING_MODE=inline`, `CONVERSATION_MESSAGE_CACHE_MODE=off`, worker concurrency/attempts/retention và notification feature flags.
-- `CORS_ORIGIN` là giá trị runtime phải nhập ở Phase 8 sau khi có frontend URL thật; không dùng `*` cùng credentials.
+- `CORS_ORIGIN` là giá trị runtime phải chốt ở Phase 8 sau khi frontend custom domain hoạt động; target của release này là exact origin `https://x.cacbonat.top`, không dùng `*` cùng credentials.
 - Vercel dùng native Next.js deployment. Không tạo `vercel.json` nếu code không cần rewrite/header/runtime override; frontend repository root là project root.
 - Deploy guide mô tả Render/Vercel/MongoDB/Redis/Cloudinary từng bước nhưng để URL, credential, quota quan sát và ngày đo cho Phase 8–9.
 
 Quota/chính sách provider là dữ liệu thay đổi: Phase 7 chỉ ghi expectation và link tài liệu chính thức, không đóng đinh connection/ops/timeout chưa được dashboard xác nhận.
 
+**Custom-domain contract của release này**
+
+```text
+https://x.cacbonat.top             → Vercel frontend
+https://api.x.cacbonat.top         → Render backend API + Socket.IO
+https://api.x.cacbonat.top/api     → frontend API base URL
+```
+
+- Phase 7 chỉ chuẩn bị env contract, deploy guide và code tương thích; không tạo DNS record, add domain vào provider hoặc tuyên bố HTTPS/domain đã hoạt động.
+- Domain được truyền qua runtime/build environment, không hard-code vào source. Production target là `NEXT_PUBLIC_API_URL=https://api.x.cacbonat.top/api` và `CORS_ORIGIN=https://x.cacbonat.top`.
+- Domain mặc định `.vercel.app`/`.onrender.com` có thể tiếp tục tồn tại như provider endpoint/fallback, nhưng không là URL portfolio chính sau khi custom domain đã được Phase 8 xác minh.
+- Không hard-code loại record hoặc DNS target. Deploy guide yêu cầu copy chính xác record/target do Vercel và Render hiển thị khi add custom domain.
+
 ### 7.4. Frontend artifact và cold-start handling
 
-- Production env contract chỉ có public `NEXT_PUBLIC_API_URL=https://<backend-domain>/api`; không đặt backend secret trong bất kỳ `NEXT_PUBLIC_*` variable nào.
+- Production env contract chỉ có public `NEXT_PUBLIC_API_URL`; target của deployment này là `https://api.x.cacbonat.top/api`. Không đặt backend secret trong bất kỳ `NEXT_PUBLIC_*` variable nào.
 - Thêm trạng thái `Đang khởi động máy chủ demo…` khi health/bootstrap chưa phản hồi; không phát toast lỗi chung lặp lại.
 - Retry `/health/live` hoặc bootstrap request bằng backoff có giới hạn và có nút thử lại; không treo vô hạn hoặc dùng keep-alive để lách free-tier.
 - Chỉ xóa session khi refresh/login trả `401` xác thực rõ ràng. Timeout, network error, `502` hoặc `503` không được tự logout user.
@@ -1040,6 +1053,7 @@ Hoàn thiện từ Phase 7 mọi nội dung suy ra được từ code; Phase 9 k
 - Backend README: single-process portfolio topology, WebSocket/transaction requirement, Redis modes/URL fallback/retention, Docker/Compose, env matrix, health/deploy commands, notification outbox, media durable source/reconciliation, rollback và auth scope.
 - Dùng “portfolio deployment” hoặc “production-like demo”, không tự nhận production-ready.
 - Section demo dùng nhãn rõ `URL sẽ được điền sau Phase 8`, không tạo broken link hoặc mô tả placeholder như deployment thật.
+- README/deploy guide ghi topology dự kiến `x.cacbonat.top` → Vercel và `api.x.cacbonat.top` → Render, nhưng đánh dấu `NOT VERIFIED` cho tới khi DNS và HTTPS pass ở Phase 8.
 - Chọn self-registration cho release này; không thêm `demo:seed` hoặc lifecycle credential công khai. Registration auto-verified/login ngay và không có email recovery phải được mô tả rõ.
 - Mermaid/sơ đồ kiến trúc tĩnh làm ở Phase 7; screenshot/video của deployment thật để Phase 9.
 
@@ -1051,6 +1065,7 @@ Hoàn thiện từ Phase 7 mọi nội dung suy ra được từ code; Phase 9 k
 - Frontend production build pass với một syntactically valid placeholder API URL, không chứa credential và không được mô tả là URL deploy thật. Có thể dùng reserved domain nếu validation hiện tại chấp nhận.
 - Source review xác nhận timeout/network/`502`/`503` không clear auth; health-ready transition refetch state cần thiết.
 - `render.yaml` validate được; secret dùng `sync: false`, không có root directory sai và không override Docker `CMD` vô cớ.
+- Env/docs dùng nhất quán custom-domain contract nhưng source vẫn nhận URL từ environment; không có DNS target giả hoặc tuyên bố domain đã verify.
 - README/env/deploy guide đủ để Phase 8 chỉ nhập giá trị thật và thao tác dashboard.
 - Không có process-role, Redis realtime emitter, keep-alive service hoặc dependency chưa dùng.
 
@@ -1075,6 +1090,7 @@ Tạo managed services, nhập secret, deploy hai repository và chứng minh P0
 
 - Phase 7 đã đạt CODE READY, bao gồm Docker image build/start local.
 - Chủ dự án có hoặc tạo tài khoản Render, Vercel, MongoDB Atlas, Redis Cloud và Cloudinary demo.
+- Chủ dự án có quyền quản lý DNS zone `cacbonat.top` để tạo record cho `x.cacbonat.top` và `api.x.cacbonat.top`.
 
 ### 8.1. Provider setup và dữ liệu cần xác minh tại ngày deploy
 
@@ -1083,19 +1099,26 @@ Tạo managed services, nhập secret, deploy hai repository và chứng minh P0
 - Render: Free Web Service hỗ trợ Docker/WebSocket/long-running process, một instance và ephemeral filesystem; kiểm tra lại sleep/cold-start/quota hiện hành.
 - Vercel: dùng Hobby chỉ khi portfolio đáp ứng điều kiện personal/non-commercial hiện hành.
 - Cloudinary: credential riêng cho demo nếu provider cho phép; không cấu hình email provider.
+- Domain: xác minh quyền chỉnh DNS của `cacbonat.top`; record type/target, verification state và HTTPS certificate phải lấy từ dashboard Vercel/Render tại ngày deploy, không dùng giá trị ví dụ như constant.
 
 Không sao chép quota cũ từ kế hoạch thành fact. Ghi provider, region, tier, limitation và ngày xác minh; nếu dashboard khác tài liệu thì dashboard hiện tại là evidence cho deployment này.
 
 ### 8.2. Thứ tự deploy
 
 1. Chuẩn bị MongoDB Atlas và Redis Cloud; kiểm tra transaction/ping mà không log URI/password.
-2. Tạo Render Blueprint/Web Service từ backend repository. Root directory để trống/repo root; dùng `render.yaml`, `./Dockerfile`, `/health/ready`, Singapore và một instance.
+2. Tạo Render Blueprint/Web Service từ backend repository. Root directory để trống/repo root; dùng `render.yaml`, `./Dockerfile`, `/health/ready`, region đã chọn và một instance.
 3. Nhập secret vào Render secret manager: MongoDB, Redis, Cloudinary, JWT, CORS tạm thời và các value `sync: false`; không truyền secret bằng build arg.
 4. Deploy backend với preset `memory + inline + cache off`; xác nhận bind `0.0.0.0:$PORT` và toàn bộ API/worker chạy trong `start:prod`.
-5. Kiểm tra `/health/live`, `/health/ready`, `/api-docs` và log startup không lộ secret.
-6. Tạo Vercel project từ frontend repository. Root directory để trống/repo root; đặt `NEXT_PUBLIC_API_URL=https://<backend-domain>/api` trước build.
-7. Deploy frontend, lấy origin cuối, cập nhật exact `CORS_ORIGIN` trên Render và restart backend một lần.
-8. Mở hai browser profile/private window và bắt đầu P0 smoke.
+5. Trên domain `.onrender.com` do provider cấp, kiểm tra `/health/live`, `/health/ready`, `/api-docs` và log startup không lộ secret.
+6. Add `api.x.cacbonat.top` vào Render service, tạo đúng DNS record/target mà Render dashboard yêu cầu và chờ provider verify domain + cấp HTTPS.
+7. Xác nhận `https://api.x.cacbonat.top/health/live`, `/health/ready` và `/api-docs` hoạt động trước khi build frontend production.
+8. Tạo Vercel project từ frontend repository. Root directory để trống/repo root; đặt `NEXT_PUBLIC_API_URL=https://api.x.cacbonat.top/api` trước build rồi deploy.
+9. Trên domain `.vercel.app` do provider cấp, xác nhận frontend production load được và request API không bị build-time misconfiguration.
+10. Add `x.cacbonat.top` vào Vercel project, tạo đúng DNS record/target mà Vercel dashboard yêu cầu và chờ provider verify domain + cấp HTTPS.
+11. Mở `https://x.cacbonat.top` và xác nhận thanh địa chỉ không đổi sang `.vercel.app`; không yêu cầu vô hiệu hóa domain mặc định của Vercel/Render.
+12. Cập nhật Render `CORS_ORIGIN=https://x.cacbonat.top`, restart/redeploy backend một lần và xác nhận credentialed request không bị CORS chặn.
+13. Xác nhận frontend production gọi HTTP API và Socket.IO qua `https://api.x.cacbonat.top`, không dùng `.onrender.com` trong production config và không có mixed-content HTTP.
+14. Mở hai browser profile/private window tại `https://x.cacbonat.top` và bắt đầu P0 smoke.
 
 ### 8.3. Account matrix
 
@@ -1109,7 +1132,7 @@ Tạo account bằng self-registration; không dùng dữ liệu cá nhân thậ
 
 ### 8.4. P0 smoke — bắt buộc trước khi public
 
-Mỗi nhóm chỉ cần một happy path và một kiểm tra lỗi quan trọng; ghi pass/fail note, không mở rộng thành full regression suite.
+Mọi P0 được chạy từ `https://x.cacbonat.top`; Network/Socket evidence phải cho thấy backend target là `https://api.x.cacbonat.top`. Mỗi nhóm chỉ cần một happy path và một kiểm tra lỗi quan trọng; ghi pass/fail note, không mở rộng thành full regression suite.
 
 **Auth**
 
@@ -1157,7 +1180,18 @@ Mỗi nhóm chỉ cần một happy path và một kiểm tra lỗi quan trọng
 - Add/remove member, edit group, leave/transfer admin; mute/pin/hide/delete-history/search/shared-media.
 - Ngắt mạng một tab để kiểm tra reconciliation. Mất sạch Redis/exactly-once recovery vẫn là hardening ngoài gate portfolio.
 
-### 8.6. Minimal remediation loop
+### 8.6. Custom-domain gate
+
+- `https://x.cacbonat.top` resolve qua HTTPS và phục vụ đúng frontend production; browser không redirect sang `.vercel.app`.
+- `https://api.x.cacbonat.top/health/live`, `/health/ready` và `/api-docs` hoạt động qua HTTPS.
+- Frontend production dùng `NEXT_PUBLIC_API_URL=https://api.x.cacbonat.top/api`; API và Socket.IO không phụ thuộc `.onrender.com` trong production config.
+- Backend dùng exact `CORS_ORIGIN=https://x.cacbonat.top`; credentialed request pass và không dùng wildcard.
+- Không có mixed-content, certificate error hoặc DNS record chưa verify. P0 smoke đã được chạy qua custom domain.
+- Domain mặc định `.vercel.app`/`.onrender.com` có thể hoạt động song song nhưng không được quảng bá làm URL portfolio chính.
+
+Gate cần DNS propagation/provider certificate nhưng chưa có evidence phải ghi `NOT VERIFIED`, không suy ra PASS chỉ từ config hoặc DNS record đã nhập.
+
+### 8.7. Minimal remediation loop
 
 Phase 8 ưu tiên dashboard, deployment và runtime verification. Nếu evidence thật phát hiện lỗi code/config trực tiếp chặn deploy hoặc P0:
 
@@ -1172,6 +1206,7 @@ Không dùng remediation loop để kéo Phase 9 polish, P1 hoặc kiến trúc 
 **Gate hoàn thành**
 
 - Backend/frontend deployment thành công từ đúng repository root; health/live/docs và CORS hoạt động trên URL thật.
+- Custom-domain gate pass cho `x.cacbonat.top` và `api.x.cacbonat.top`; production API/Socket.IO traffic dùng backend custom domain.
 - Tất cả P0 có pass/fail note; không còn blocker khiến interviewer không register/login hoặc không dùng được tweet/chat/realtime/media đại diện.
 - Cold-start/restart không logout nhầm và phục hồi socket/read state đúng ở mức smoke.
 - Redis/MongoDB/provider metrics còn trong quota với buffer hợp lý; secret không xuất hiện trong source/log/evidence.
@@ -1200,7 +1235,12 @@ Chuyển deployment đã verify thành portfolio public dễ hiểu trong vài p
 
 ### 9.1. URL và measured limitations
 
-- Điền frontend URL, backend URL, API docs/health link thật vào README; không giữ placeholder Phase 7.
+- Dùng các URL canonical đã verify ở Phase 8 làm URL chính trong README/portfolio:
+  - Demo: `https://x.cacbonat.top`
+  - Backend: `https://api.x.cacbonat.top`
+  - API docs: `https://api.x.cacbonat.top/api-docs`
+  - Health: `https://api.x.cacbonat.top/health/live`
+- Không giữ placeholder Phase 7 và không đưa `.vercel.app`/`.onrender.com` lên vị trí URL public chính, dù provider domain vẫn có thể tồn tại làm fallback.
 - Ghi cold-start quan sát, ngày đo, region/tier và quota/limitation thực tế đã xác minh ở Phase 8.
 - Known limitations phải khớp deployment: single backend instance, free-tier sleep, Redis transport/persistence/HA/TLS thực tế, không email recovery, token storage debt, media limits và UI capability còn thiếu.
 - Không công khai URI, secret, database username, dashboard identifier nhạy cảm hoặc log chứa credential.
@@ -1216,6 +1256,7 @@ Chuyển deployment đã verify thành portfolio public dễ hiểu trong vài p
 README structure, architecture, setup và deploy guide đã được hoàn thành ở Phase 7. Phase 9 chỉ:
 
 - thay placeholder bằng URL/fact thật;
+- dùng `https://x.cacbonat.top` làm demo link canonical và mọi API/docs link public dùng `https://api.x.cacbonat.top`;
 - thêm screenshot/GIF ngắn và feature highlights cuối;
 - liên kết frontend ↔ backend README/API docs;
 - cập nhật smoke result, rollback và limitation theo Phase 8;
@@ -1226,7 +1267,7 @@ Không audit lại toàn repository hoặc viết lại architecture nếu Phase
 
 ### 9.4. Portfolio evidence và release checklist
 
-- Video 2–4 phút: self-registration/login, tweet, hai cửa sổ chat realtime, notification badge và media.
+- Video 2–4 phút quay từ `https://x.cacbonat.top`: self-registration/login, tweet, hai cửa sổ chat realtime, notification badge và media.
 - Một screenshot kiến trúc và một screenshot API docs/health; có thể tái sử dụng Mermaid đã tạo ở Phase 7.
 - Ghi ngắn phần khó tự thiết kế: transactional outbox, idempotent message, aggregation, unread source of truth và free-tier Redis trade-off.
 - Không đưa secret, dashboard URI hoặc email định danh thật vào ảnh/video.
@@ -1235,7 +1276,7 @@ Không audit lại toàn repository hoặc viết lại architecture nếu Phase
 **Gate hoàn thành**
 
 - Người mới mở README có thể vào demo hoặc chạy local mà không hỏi env key bị thiếu.
-- URL/API docs hoạt động và self-registration đã được test ngay trước khi chia sẻ.
+- Custom domain demo/backend/API docs hoạt động qua HTTPS và self-registration đã được test ngay trước khi chia sẻ.
 - Screenshot/video không lộ secret; known limitations khớp code và measurement thật.
 - Không còn placeholder giả, `Create Next App` metadata hoặc tuyên bố production-ready thiếu evidence.
 - Phase 9 không chứa runtime refactor; blocker runtime mới phải quay lại remediation có scope/evidence rõ.
@@ -1304,7 +1345,7 @@ Mỗi milestone ghi:
 - [ ] Email provider/routes/CTA không nằm trong runtime portfolio; register auto-verified và login ngay.
 - [ ] `.env.example` đủ và không có secret.
 - [ ] MONGODB_URI mode không yêu cầu dummy DB username/password.
-- [ ] CORS exact origin; frontend không chứa backend secret.
+- [ ] `CORS_ORIGIN=https://x.cacbonat.top`; frontend dùng `NEXT_PUBLIC_API_URL=https://api.x.cacbonat.top/api` và không chứa backend secret.
 
 ### Free-tier runtime
 
@@ -1325,7 +1366,8 @@ Mỗi milestone ghi:
 
 Các mục dưới đây là P0; edge case P1 trong Phase 8 không chặn public release.
 
-- [ ] Register auto-verified/login/logout chạy trên domain deploy, không phụ thuộc email.
+- [ ] `x.cacbonat.top` và `api.x.cacbonat.top` đã verify DNS/HTTPS; API/Socket.IO dùng backend custom domain, không có mixed-content.
+- [ ] Register auto-verified/login/logout chạy trên `https://x.cacbonat.top`, không phụ thuộc email.
 - [ ] Create/like/reply/repost tweet đúng.
 - [ ] Follow/block đúng.
 - [ ] Direct/group chat và realtime hai browser đúng.
@@ -1334,11 +1376,11 @@ Các mục dưới đây là P0; edge case P1 trong Phase 8 không chặn public
 
 ### Portfolio handoff
 
-- [ ] Frontend/backend README khớp code, measurement và URL thật.
+- [ ] Frontend/backend README khớp code, measurement và dùng `https://x.cacbonat.top`/`https://api.x.cacbonat.top` làm URL canonical.
 - [ ] Self-registration đã được kiểm tra ngay trước khi chia sẻ; không có demo credential hard-code/public.
 - [ ] Có screenshot/video ngắn không lộ secret.
 - [ ] Docker image backend chạy non-root, chứa `swagger.yaml`, không chứa secret; Compose Redis chỉ dùng local/loopback.
-- [ ] Known limitations ghi free-tier sleep, Redis không TLS/HA/persistence/backup, single instance, không email recovery, auth token technical debt và feature UI chưa nối.
+- [ ] Known limitations ghi free-tier sleep, Redis TLS/HA/persistence/backup theo evidence thực tế Phase 8, single instance, không email recovery, auth token technical debt và feature UI chưa nối.
 - [ ] Không dùng từ “production-ready” nếu chưa có load/fault/multi-instance/migration evidence.
 
 ### Phần chủ dự án tự thực hiện
