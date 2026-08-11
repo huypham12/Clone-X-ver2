@@ -397,7 +397,7 @@ X-ver2: npm run prettier → exit 0
 
 ## Phase 3 — Dependency cleanup và bản vá tối thiểu
 
-**Trạng thái: Đã triển khai ngày 2026-08-11.**
+**Trạng thái: Đã hoàn thành.**
 
 **Mục tiêu**
 

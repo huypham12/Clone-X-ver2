@@ -11,8 +11,22 @@ Yêu cầu:
 - Redis cho cache, Socket.IO adapter và BullMQ.
 - File `.env` local hợp lệ. Không commit token, mật khẩu hoặc connection string.
 
+Tạo file cấu hình từ contract mẫu:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Trên macOS/Linux, dùng `cp .env.example .env`. Điền MongoDB, Cloudinary và hai JWT secret bắt buộc trước khi start. Sinh riêng từng JWT secret mạnh bằng Node.js (chạy lệnh hai lần, không tái sử dụng cùng một giá trị):
+
 ```bash
-npm install
+node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"
+```
+
+Các biến collection và feature flag đã có default. Những biến Phase 5/6 chưa có runtime consumer được để dạng comment trong `.env.example`, không cần đặt ở Phase 4.
+
+```bash
+npm ci
 npm run build
 npm run start:dev
 ```
