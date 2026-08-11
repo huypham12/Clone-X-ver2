@@ -54,6 +54,11 @@ class RedisService {
     ])
   }
 
+  async ping(): Promise<void> {
+    if (!this.client.isReady) throw new Error('Redis cache client is not ready')
+    await this.client.ping()
+  }
+
   // Tiện ích lấy Cache
   async get(key: string): Promise<unknown | null> {
     const data = await this.client.get(key)

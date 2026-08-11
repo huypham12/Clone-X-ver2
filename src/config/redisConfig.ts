@@ -36,6 +36,11 @@ export const connectBullMqRedis = async (): Promise<void> => {
   }
 }
 
+export const pingBullMqRedis = async (): Promise<void> => {
+  if (connection.status !== 'ready') throw new Error('BullMQ Redis connection is not ready')
+  await connection.ping()
+}
+
 export const disconnectBullMqRedis = async (): Promise<void> => {
   if (connection.status === 'wait' || connection.status === 'end') {
     connection.disconnect()

@@ -2,6 +2,13 @@
 
 Dưới đây là danh sách tất cả các API Endpoints được trích xuất từ mã nguồn các route, phân chia theo từng module. _(Ghi chú: Prefix URL có thể thay đổi tùy thuộc vào file `app.ts` hoặc `index.ts`, ví dụ `/api/users`, `/api/tweets`... ở đây chỉ liệt kê các path bên trong module router)_.
 
+## 0. Health (`/health`)
+
+Hai endpoint public, không yêu cầu auth và không đi qua global rate limiter:
+
+- `GET /live`: Trả `200` khi process còn phản hồi; không gọi MongoDB hoặc Redis.
+- `GET /ready`: Ping MongoDB, Redis cache và BullMQ Redis với timeout ngắn. Trả `200` khi tất cả dependency sẵn sàng, ngược lại trả `503`. Response chỉ nêu trạng thái `mongodb`/`redis`, không chứa URI, database name hoặc error detail.
+
 ## 1. Auth Module (`/auth`)
 
 _Chịu trách nhiệm xác thực, phân quyền và quản lý thông tin bảo mật._

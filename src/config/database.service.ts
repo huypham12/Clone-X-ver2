@@ -47,12 +47,16 @@ export default class DatabaseService {
 
   async connect() {
     try {
-      await this.db.command({ ping: 1 })
+      await this.ping()
       console.log('MongoDB connected')
     } catch (err) {
       console.error('MongoDB connection error:', err)
       throw err
     }
+  }
+
+  async ping(): Promise<void> {
+    await this.db.command({ ping: 1 })
   }
 
   async disconnect() {

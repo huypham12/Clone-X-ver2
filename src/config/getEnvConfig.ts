@@ -16,6 +16,7 @@ config({
 interface EnvConfig {
   app: {
     port: number
+    trustProxyHops: number
   }
   cors: {
     origin: string[]
@@ -154,6 +155,15 @@ const getPortEnvVar = (key: string, defaultValue: number): number => {
   return value
 }
 
+const getTrustProxyHopsEnvVar = (key: string, defaultValue: number): number => {
+  const rawValue = getEnvVar(key, false, String(defaultValue))
+  const value = Number(rawValue)
+  if (!Number.isSafeInteger(value) || value < 0 || value > 10) {
+    throw new Error(`${key} must be an integer between 0 and 10`)
+  }
+  return value
+}
+
 const getPositiveIntegerEnvVar = (key: string, defaultValue: number): number => {
   const rawValue = getEnvVar(key, false, String(defaultValue))
   const value = Number(rawValue)
@@ -180,7 +190,8 @@ const dbPassword = mongodbUri ? '' : getEnvVar('DB_PASSWORD')
 // Export configuration
 export const envConfig: EnvConfig = {
   app: {
-    port: getPortEnvVar('PORT', 3000)
+    port: getPortEnvVar('PORT', 3000),
+    trustProxyHops: getTrustProxyHopsEnvVar('TRUST_PROXY_HOPS', 0)
   },
   cors: {
     origin: getCsvEnvVar('CORS_ORIGIN', 'http://localhost:3001,http://localhost:5173')

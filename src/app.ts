@@ -28,6 +28,9 @@ import swaggerUi from 'swagger-ui-express'
 import YAML from 'yaml'
 import fs from 'fs'
 import { initFolder } from './utils/file'
+import healthRouter from './modules/health/health.route'
+import { HttpError } from './common/http-error'
+import { HTTP_STATUS } from './constants/httpStatus'
 
 // Khởi tạo các thư mục upload
 initFolder()
@@ -35,6 +38,7 @@ initFolder()
 const main = async () => {
   const app = express()
   const port = envConfig.app.port
+  app.set('trust proxy', envConfig.app.trustProxyHops)
   let httpServer: ReturnType<typeof createServer> | undefined
   let outboxPublisher: OutboxQueuePublisher | undefined
   let notificationWorker: NotificationWorker | undefined
@@ -123,16 +127,17 @@ const main = async () => {
     await connectBullMqRedis()
     console.log('Redis dependencies are ready')
 
-    // CORS phải chạy trước rate limiter để cả phản hồi 429 cũng có CORS headers.
+    // CORS và security headers áp dụng cho probe, nhưng probe không đi qua global limiter.
     app.use(
       cors({
         origin: (origin, callback) => callback(null, isCorsOriginAllowed(origin)),
         credentials: true
       })
     )
-    app.use(limiter)
     app.use(helmet())
+    app.use('/health', healthRouter)
     app.use(express.json())
+    app.use(limiter)
     app.use('/api/auth', authRouter)
     app.use('/api/user', userRouter)
     app.use('/api/media', mediaRouter)
@@ -142,6 +147,7 @@ const main = async () => {
     app.use('/api/notifications', notificationRouter)
 
     app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, swaggerOptions, swaggerUiOptions))
+    app.use((_req, _res, next) => next(new HttpError('Route not found', HTTP_STATUS.NOT_FOUND)))
     app.use(errorHandler)
 
     httpServer = createServer(app)

@@ -560,7 +560,7 @@ MAX_AUDIO_UPLOAD_MB
 
 ## Phase 5 — Health/readiness và hành vi đúng sau reverse proxy
 
-**Trạng thái: Chưa triển khai.**
+**Trạng thái: Đã hoàn thành.**
 
 **Mục tiêu**
 

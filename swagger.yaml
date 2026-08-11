@@ -21,6 +21,8 @@ servers:
   - url: https://your-production-url.com
     description: Production server
 tags:
+  - name: health
+    description: Public liveness and dependency readiness probes
   - name: auth
     description: Authentication operations
   - name: user
@@ -106,6 +108,47 @@ x-socket-events:
       $ref: '#/components/schemas/ConversationHistoryClearedEvent'
 
 paths:
+  /health/live:
+    get:
+      tags:
+        - health
+      summary: Check whether the API process is responding
+      operationId: getHealthLive
+      responses:
+        '200':
+          description: The process is live. This probe does not call external dependencies.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, timestamp]
+                properties:
+                  status:
+                    type: string
+                    enum: [live]
+                  timestamp:
+                    type: string
+                    format: date-time
+  /health/ready:
+    get:
+      tags:
+        - health
+      summary: Check required backend dependencies
+      description: Checks MongoDB, the Redis cache client, and the BullMQ Redis connection with a short timeout.
+      operationId: getHealthReady
+      responses:
+        '200':
+          description: All required dependencies are ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+        '503':
+          description: At least one required dependency is unavailable. Connection details are never returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
   /api/auth/register:
     post:
       tags:
@@ -1781,6 +1824,26 @@ components:
         type: string
         pattern: '^[a-fA-F0-9]{24}$'
   schemas:
+    ReadinessResponse:
+      type: object
+      required: [status, checks, timestamp]
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+        checks:
+          type: object
+          required: [mongodb, redis]
+          properties:
+            mongodb:
+              type: string
+              enum: [up, down]
+            redis:
+              type: string
+              enum: [up, down]
+        timestamp:
+          type: string
+          format: date-time
     NullDataSuccessResponse:
       type: object
       required: [statusCode, message, data]
