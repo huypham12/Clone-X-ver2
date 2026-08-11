@@ -971,143 +971,133 @@ Diễn tập mất sạch Redis và chứng minh exactly-once toàn hệ thống
 
 ---
 
-## Phase 7 — Đóng gói và cấu hình Vercel/Render
+## Phase 7 — Repository release preparation
 
 **Trạng thái: Chưa triển khai.**
 
 **Mục tiêu**
 
-Hai repository deploy được trên stack đã chốt, không phụ thuộc thao tác bí mật ngoài tài liệu và có UX hợp lý khi Render cold start.
+Hoàn thành toàn bộ code, artifact, deploy-as-code và tài liệu có thể xác minh trước khi tạo managed service. Sau Phase 7, hai repository ở trạng thái **CODE READY**: chỉ còn nhập credential, deploy và kiểm tra runtime thật.
+
+Phase này là repository-owned/local preparation, không gọi là “AI 100%”: Docker build/start vẫn là gate bắt buộc và cần Docker daemon, nhưng không cần tài khoản Render, Vercel, MongoDB Atlas hoặc Redis Cloud để hoàn thành implementation.
 
 **Phụ thuộc**
 
 - Phase 3–6.
+- Backend và frontend là hai Git repository độc lập. Khi deploy riêng, root directory của mỗi project là repository root (`.` hoặc để trống trong UI), không phải `X-ver2`/`X-frontend`.
 
-### 7.1. Backend artifact
+### 7.1. Backend Docker artifact
 
-**File tạo/sửa đề xuất**
+- `Dockerfile`: multi-stage trên Node 22 Debian slim; build stage chạy `npm ci` + compile `dist`, runtime chỉ cài production dependency và chạy user non-root.
+- Runtime image copy `dist`, `package*.json` và `swagger.yaml`; không copy `.env`, source, test hoặc tài liệu kế hoạch.
+- Tạo/chown `uploads/images/temp`, `uploads/videos`, `uploads/audios` để user non-root ghi trong thời gian request; các thư mục vẫn ephemeral.
+- `CMD ["npm", "run", "start:prod"]`; không dùng nodemon và không cần override Docker command.
+- `.dockerignore` loại `.git`, `node_modules`, `dist`, `.env*`, uploads local, log, test output và tài liệu không cần runtime.
+- `package.json` giữ Node engine, build/start command rõ; Swagger không được làm startup fail do thiếu file hoặc working directory khác.
 
-- `Dockerfile`: multi-stage trên Node 22 Debian slim; build stage chạy `npm ci` + compile `dist`, runtime chỉ cài production dependency, chạy user non-root.
-- Runtime image phải copy `dist`, `package*.json` và `swagger.yaml`; không copy `.env`, source, test hoặc tài liệu kế hoạch.
-- Tạo/chown `uploads/images/temp`, `uploads/videos`, `uploads/audios` để user non-root ghi được trong thời gian request; các thư mục này vẫn là ephemeral.
-- `CMD ["npm", "run", "start:prod"]`; không override Docker Command trên Render nếu không có lý do.
-- `.dockerignore`: bỏ `.git`, `node_modules`, `dist`, `.env*` (ngoại trừ example không cần copy vào runtime), uploads local, log, test output và tài liệu không cần runtime.
-- `package.json`: Node engine, build/start command rõ; không dùng nodemon production.
-- Bảo đảm `swagger.yaml` được copy hoặc API docs có feature flag, tránh startup fail vì working directory khác.
-
-Container/runtime phải có writable temp directory nhỏ cho multipart trong thời gian request; không coi đây là persistent volume.
+Container chỉ cần writable temp directory nhỏ cho multipart; không thêm persistent volume hoặc đưa local filepath trở lại media queue.
 
 ### 7.2. Docker Compose chỉ dành cho local
 
-- `docker-compose.yml` hiện chỉ là local Redis helper, không deploy file này lên Render và không chạy Redis container production song song với Redis Cloud.
-- Bỏ trường Compose `version` cũ; dùng image Redis 8.2 Alpine để gần Redis Cloud 8.2.
-- Bind port `127.0.0.1:6379:6379`, không expose Redis local ra LAN/Internet.
-- Local Redis bật AOF `appendonly yes`, `appendfsync everysec`, volume riêng và `maxmemory-policy noeviction` để hành vi queue gần production.
+- `docker-compose.yml` tiếp tục là Redis helper local, không deploy lên Render và không chạy Redis container production song song với Redis Cloud.
+- Bỏ trường Compose `version` cũ; dùng Redis 8.2 Alpine, bind `127.0.0.1:6379:6379` và không expose ra LAN/Internet.
+- Bật AOF `appendonly yes`, `appendfsync everysec`, volume riêng và `maxmemory-policy noeviction`.
 - Có healthcheck `redis-cli ping`; backend local dùng `REDIS_URL=redis://localhost:6379`.
-- Có thể thêm backend service/profile để smoke Docker image, nhưng Redis service local phải tiếp tục dùng được độc lập cho workflow `npm run dev`.
+- Backend service/profile là optional; Redis service phải vẫn chạy độc lập cho workflow `npm run dev`.
 
-### 7.3. Frontend artifact
+### 7.3. Render Blueprint và production env contract
 
-- Dùng Vercel Hobby cho portfolio cá nhân/non-commercial và native Next.js deployment.
-- Project root phải là `X-frontend`; build `npm ci && npm run build`.
-- Production env `NEXT_PUBLIC_API_URL=https://<backend-domain>/api` phải có trước build vì đây là public build-time variable.
-- Không đặt backend secret trong bất kỳ `NEXT_PUBLIC_*` variable nào.
+- Tạo `render.yaml` ở root backend repository để giữ cấu hình ổn định: web service, `runtime: docker`, free plan, Singapore, một instance, `healthCheckPath: /health/ready` và dùng `CMD` từ image.
+- Vì backend là repository riêng, không set `rootDir: X-ver2`; `dockerfilePath` là `./Dockerfile` hoặc bỏ để dùng default repo root.
+- Các secret/credential (`MONGODB_URI`, `REDIS_URL`, Cloudinary, JWT) chỉ khai báo tên bằng `sync: false`; không hard-code value, không dùng Docker build arg và không log URI.
+- Các default portfolio không nhạy cảm được ghi rõ: `SOCKET_ADAPTER_MODE=memory`, `MEDIA_PROCESSING_MODE=inline`, `CONVERSATION_MESSAGE_CACHE_MODE=off`, worker concurrency/attempts/retention và notification feature flags.
+- `CORS_ORIGIN` là giá trị runtime phải nhập ở Phase 8 sau khi có frontend URL thật; không dùng `*` cùng credentials.
+- Vercel dùng native Next.js deployment. Không tạo `vercel.json` nếu code không cần rewrite/header/runtime override; frontend repository root là project root.
+- Deploy guide mô tả Render/Vercel/MongoDB/Redis/Cloudinary từng bước nhưng để URL, credential, quota quan sát và ngày đo cho Phase 8–9.
 
-### 7.4. Backend managed service settings
+Quota/chính sách provider là dữ liệu thay đổi: Phase 7 chỉ ghi expectation và link tài liệu chính thức, không đóng đinh connection/ops/timeout chưa được dashboard xác nhận.
 
-```text
-Root directory: X-ver2
-Language/runtime: Docker
-Dockerfile path: ./Dockerfile
-Docker command: để trống, dùng CMD trong image
-Health: /health/ready
-Instance count: 1
-Region: Singapore
-```
+### 7.4. Frontend artifact và cold-start handling
 
-- Dùng Render Free Web Service; server phải bind `0.0.0.0` và đọc port từ `process.env.PORT`, không hard-code port production.
-- Render phải hỗ trợ WebSocket và long-running process; không chuyển backend này thành Vercel/serverless functions.
-- `CORS_ORIGIN` là exact frontend origin, nhiều origin phân cách theo contract hiện tại; không dùng `*` cùng credentials.
-- MongoDB network access chỉ mở theo khả năng platform; credential là user riêng cho demo database.
-- Redis Cloud đặt AWS Singapore nếu Render ở Singapore; đây vẫn là public TCP endpoint, không phải Render private network.
-- `REDIS_URL` dùng đúng URI Redis Cloud Connect wizard, chỉ nằm trong Render secret manager. Free tier không TLS nên scheme là `redis://`; README phải ghi đây là portfolio limitation.
-- Render portfolio dùng `SOCKET_ADAPTER_MODE=memory`, `MEDIA_PROCESSING_MODE=inline` và `CONVERSATION_MESSAGE_CACHE_MODE=off`; các Redis URL theo capability để trống để fallback `REDIS_URL`. Toàn bộ API/worker vẫn chạy trong process `start:prod` hiện tại.
-- Không truyền secret bằng Docker build arg, không bake `.env` vào image và không in Redis URI trong build/runtime log.
-- Cloudinary dùng credential riêng cho demo nếu provider cho phép; không cấu hình email provider.
-- Feature flags notification được ghi rõ, không dựa vào default ngầm trong dashboard.
-
-### 7.5. Frontend UX khi Render cold start
-
-Render Free có thể spin down sau thời gian không có inbound HTTP/WebSocket và request đánh thức có thể mất khoảng một phút. Frontend phải phân biệt cold start/network error với hết phiên đăng nhập:
-
-- Thêm trạng thái `Đang khởi động máy chủ demo…` khi health/API đầu tiên chưa phản hồi; không hiện toast lỗi chung lặp lại.
-- Retry `/health/live` hoặc request bootstrap với backoff có giới hạn trong khoảng thời gian được đo thực tế; có nút thử lại thay vì treo vô hạn.
-- Chỉ xóa session khi refresh/login endpoint trả `401` xác thực rõ ràng. Timeout, network error, `502` hoặc `503` trong lúc backend thức dậy không được tự logout user.
-- Socket giữ cơ chế reconnect; sau khi backend ready phải refetch notification state và conversation unread summary.
-- Không dùng keep-alive/ping bên thứ ba để lách chính sách free-tier.
+- Production env contract chỉ có public `NEXT_PUBLIC_API_URL=https://<backend-domain>/api`; không đặt backend secret trong bất kỳ `NEXT_PUBLIC_*` variable nào.
+- Thêm trạng thái `Đang khởi động máy chủ demo…` khi health/bootstrap chưa phản hồi; không phát toast lỗi chung lặp lại.
+- Retry `/health/live` hoặc bootstrap request bằng backoff có giới hạn và có nút thử lại; không treo vô hạn hoặc dùng keep-alive để lách free-tier.
+- Chỉ xóa session khi refresh/login trả `401` xác thực rõ ràng. Timeout, network error, `502` hoặc `503` không được tự logout user.
+- Socket giữ reconnect; sau khi backend ready phải refetch notification state và conversation unread summary.
 
 **File frontend trọng điểm**
 
 - `src/features/auth/components/auth-initializer.tsx` hoặc bootstrap auth tương đương.
-- API client/interceptor xử lý refresh và lỗi network.
+- API client/interceptor xử lý refresh và transient network error.
 - Socket provider/reconnect hook.
-- Component trạng thái demo-server dùng ở màn hình khởi tạo.
+- Component trạng thái demo-server ở màn hình khởi tạo.
 
-### 7.6. Free-tier limitation checklist trước khi tạo service
+### 7.5. README, architecture và deploy guide trước deployment
 
-- Có sleep/cold start không, thời gian request đầu khoảng bao lâu.
-- Có WebSocket không và idle timeout bao lâu.
-- Build/runtime disk/RAM/CPU/request timeout đủ cho Node + Sharp + upload giới hạn đã chốt không.
-- Redis Cloud còn buffer dưới 30 connection/30 MB/100 ops/s; eviction là `no eviction`; không TLS/persistence/HA/backup được ghi là limitation.
-- MongoDB tier hỗ trợ transaction.
-- Outbound HTTPS/TLS tới Cloudinary/MongoDB và outbound TCP tới Redis Cloud được phép.
+Hoàn thiện từ Phase 7 mọi nội dung suy ra được từ code; Phase 9 không nghiên cứu lại repository:
 
-Không ghi cứng quota theo tên nhà cung cấp trong code; quota thay đổi phải được kiểm tra tại thời điểm tạo service và ghi ngày kiểm tra trong README deploy.
+- Frontend README: tên dự án, feature highlights, stack, sơ đồ frontend ↔ API/Socket ↔ MongoDB/Redis/BullMQ/Cloudinary, local setup, scripts, self-registration và known limitations đã biết.
+- Backend README: single-process portfolio topology, WebSocket/transaction requirement, Redis modes/URL fallback/retention, Docker/Compose, env matrix, health/deploy commands, notification outbox, media durable source/reconciliation, rollback và auth scope.
+- Dùng “portfolio deployment” hoặc “production-like demo”, không tự nhận production-ready.
+- Section demo dùng nhãn rõ `URL sẽ được điền sau Phase 8`, không tạo broken link hoặc mô tả placeholder như deployment thật.
+- Chọn self-registration cho release này; không thêm `demo:seed` hoặc lifecycle credential công khai. Registration auto-verified/login ngay và không có email recovery phải được mô tả rõ.
+- Mermaid/sơ đồ kiến trúc tĩnh làm ở Phase 7; screenshot/video của deployment thật để Phase 9.
 
-**Gate hoàn thành**
+### 7.6. Local/static gate — bắt buộc để đạt CODE READY
 
-- Docker image backend build/start local được bằng env example đã điền.
-- Image chạy non-root, có `swagger.yaml`, ghi được temp upload; `.dockerignore` loại `.env*` và build không truyền secret qua build arg.
-- `docker-compose.yml` local chỉ bind Redis vào loopback và healthcheck pass.
-- Frontend build với production API URL.
-- Health ready `200` sau dependency startup.
-- Cold-start UI không xóa auth khi backend tạm timeout/`502`/`503` và chuyển sang app bình thường sau khi health ready.
-- Swagger/API docs không làm backend crash vì thiếu file.
-- Restart container không làm app phụ thuộc persistent local uploads.
+- Backend/frontend typecheck, build và lint liên quan pass bằng script đã có.
+- Docker image backend build và start local; image chạy non-root, có `swagger.yaml`, ghi được temp upload và không chứa `.env`/secret/source không cần runtime.
+- `docker-compose.yml` chỉ bind Redis loopback; Compose config hợp lệ và Redis healthcheck pass.
+- Frontend production build pass với một syntactically valid placeholder API URL, không chứa credential và không được mô tả là URL deploy thật. Có thể dùng reserved domain nếu validation hiện tại chấp nhận.
+- Source review xác nhận timeout/network/`502`/`503` không clear auth; health-ready transition refetch state cần thiết.
+- `render.yaml` validate được; secret dùng `sync: false`, không có root directory sai và không override Docker `CMD` vô cớ.
+- README/env/deploy guide đủ để Phase 8 chỉ nhập giá trị thật và thao tác dashboard.
+- Không có process-role, Redis realtime emitter, keep-alive service hoặc dependency chưa dùng.
+
+Nếu thiếu Docker daemon, Docker gate là `NOT VERIFIED — Docker daemon required` và Phase 7 chưa được APPROVE hoàn toàn; không biến static review Dockerfile thành bằng chứng image chạy được.
 
 **Rollback**
 
-- Có thể dùng Render native Node làm rollback nếu Docker build gặp blocker; build `npm ci && npm run build`, start `npm run start:prod`, health/env contract không đổi.
+- Docker/config/docs rollback theo commit độc lập; không ảnh hưởng managed service vì Phase 7 chưa tạo chúng.
+- Render native Node chỉ là fallback khi Docker có blocker đã xác minh: build `npm ci && npm run build`, start `npm run start:prod`, health/env contract không đổi.
 
 ---
 
-## Phase 8 — Deploy và manual smoke test các luồng P0 portfolio
+## Phase 8 — Managed deployment và production smoke
 
 **Trạng thái: Chưa triển khai.**
 
 **Mục tiêu**
 
-Chứng minh feature thật sự chạy xuyên frontend, backend và managed services; không chỉ build thành công.
+Tạo managed services, nhập secret, deploy hai repository và chứng minh P0 chạy trên Internet. Đây là phase dashboard/runtime chính; kết quả là **DEMO VERIFIED**.
 
 **Phụ thuộc**
 
-- Phase 7.
-- Chủ dự án đã tạo Vercel project, Render Web Service, Redis Cloud Free, MongoDB Atlas database và Cloudinary account demo.
+- Phase 7 đã đạt CODE READY, bao gồm Docker image build/start local.
+- Chủ dự án có hoặc tạo tài khoản Render, Vercel, MongoDB Atlas, Redis Cloud và Cloudinary demo.
 
-### 8.1. Thứ tự deploy
+### 8.1. Provider setup và dữ liệu cần xác minh tại ngày deploy
 
-1. Tạo MongoDB Atlas Free database demo mới, xác minh `withTransaction()` hoạt động thật.
-2. Hoàn thiện Redis Cloud: tên `clone-x-portfolio`, Redis 8.2, RESP2, `no eviction`, AWS Singapore nếu Render Singapore; xác nhận no HA/persistence/backup/TLS là giới hạn free.
-3. Nếu database hiện được tạo ở Virginia và vẫn 0 key/0 connection, tạo lại ở Singapore trước khi đưa credential/dữ liệu vào. Region không đổi tại chỗ được.
-4. Lấy URI từ Connect wizard, lưu `REDIS_URL` trong Render secret manager; xác minh `node-redis` và `ioredis` cùng ping được mà không log URI/password.
-5. Chốt preset Render một process với `memory + inline + cache off`; không thêm process role/Redis emitter chỉ để demo capability.
-6. Deploy Render backend bằng Docker, xác nhận bind `0.0.0.0:$PORT`, với frontend origin tạm thời hoặc origin dự kiến.
-7. Kiểm tra `/health/live`, `/health/ready`, `/api-docs` nếu bật.
-8. Deploy frontend trên Vercel với backend URL chính xác.
-9. Cập nhật `CORS_ORIGIN` theo frontend URL cuối và restart backend một lần.
-10. Mở hai browser profile/private window để test realtime A/B.
+- MongoDB Atlas: tạo demo database/user riêng, cấu hình network access tối thiểu khả dụng và xác minh `withTransaction()` chạy thật.
+- Redis Cloud: chọn region gần Render, protocol/version/eviction phù hợp BullMQ và lấy URI từ Connect wizard; xác minh TLS/persistence/HA/backup, memory, connection và ops quota từ dashboard tại thời điểm deploy.
+- Render: Free Web Service hỗ trợ Docker/WebSocket/long-running process, một instance và ephemeral filesystem; kiểm tra lại sleep/cold-start/quota hiện hành.
+- Vercel: dùng Hobby chỉ khi portfolio đáp ứng điều kiện personal/non-commercial hiện hành.
+- Cloudinary: credential riêng cho demo nếu provider cho phép; không cấu hình email provider.
 
-### 8.2. Account matrix
+Không sao chép quota cũ từ kế hoạch thành fact. Ghi provider, region, tier, limitation và ngày xác minh; nếu dashboard khác tài liệu thì dashboard hiện tại là evidence cho deployment này.
+
+### 8.2. Thứ tự deploy
+
+1. Chuẩn bị MongoDB Atlas và Redis Cloud; kiểm tra transaction/ping mà không log URI/password.
+2. Tạo Render Blueprint/Web Service từ backend repository. Root directory để trống/repo root; dùng `render.yaml`, `./Dockerfile`, `/health/ready`, Singapore và một instance.
+3. Nhập secret vào Render secret manager: MongoDB, Redis, Cloudinary, JWT, CORS tạm thời và các value `sync: false`; không truyền secret bằng build arg.
+4. Deploy backend với preset `memory + inline + cache off`; xác nhận bind `0.0.0.0:$PORT` và toàn bộ API/worker chạy trong `start:prod`.
+5. Kiểm tra `/health/live`, `/health/ready`, `/api-docs` và log startup không lộ secret.
+6. Tạo Vercel project từ frontend repository. Root directory để trống/repo root; đặt `NEXT_PUBLIC_API_URL=https://<backend-domain>/api` trước build.
+7. Deploy frontend, lấy origin cuối, cập nhật exact `CORS_ORIGIN` trên Render và restart backend một lần.
+8. Mở hai browser profile/private window và bắt đầu P0 smoke.
+
+### 8.3. Account matrix
 
 ```text
 A: chủ tweet, admin group
@@ -1115,149 +1105,145 @@ B: follower, direct-message partner, group member
 C: user được add/remove/block để kiểm tra quyền và lifecycle
 ```
 
-Không tái sử dụng account chứa thông tin cá nhân thật.
+Tạo account bằng self-registration; không dùng dữ liệu cá nhân thật hoặc credential tái sử dụng ở nơi khác.
 
-### 8.3. P0 smoke — bắt buộc trước khi public
+### 8.4. P0 smoke — bắt buộc trước khi public
 
-Mỗi nhóm chỉ cần một happy path và một kiểm tra lỗi quan trọng; không mở rộng thành full regression suite.
+Mỗi nhóm chỉ cần một happy path và một kiểm tra lỗi quan trọng; ghi pass/fail note, không mở rộng thành full regression suite.
 
 **Auth**
 
-- Register account mới, auto-verified và login ngay, không cần email; logout rồi login lại thành công.
-- UI không còn CTA verify/forgot/reset email. Sai password hiển thị lỗi phù hợp; log không chứa raw token.
+- Register auto-verified, login ngay, logout rồi login lại; không phụ thuộc email.
+- Sai password hiển thị lỗi phù hợp; timeout/network/`502`/`503` không logout nhầm và log không chứa raw token.
 
 **Tweet/social**
 
-- A tạo tweet text/ảnh; B lần lượt like, reply và repost; count/UI và notification của A đúng ở mức smoke.
-- Follow/unfollow chạy; sau khi A block B, B không gửi được direct message. Unblock khôi phục khả năng gửi mới.
+- A tạo tweet text/ảnh; B like, reply và repost; count/UI và notification đại diện của A đúng.
+- Follow/unfollow; A block B thì B không gửi được direct message, unblock cho phép gửi mới.
 
 **Chat/realtime**
 
-- A và B tạo direct, gửi text và thấy message realtime trên hai browser; reply/reaction và unread badge chạy.
-- A tạo group với B/C và gửi một message realtime; reload vẫn thấy conversation/message.
+- A/B tạo direct, gửi text realtime trên hai browser; reply/reaction và unread badge chạy.
+- A tạo group với B/C, gửi một message realtime; reload vẫn thấy conversation/message.
 
 **Notification/unread**
 
-- Notification đại diện từ social và direct message đến đúng recipient.
-- Mark-one hoặc read-all cập nhật notification badge; mở conversation cập nhật inbox unread badge.
+- Social và directed-message notification đến đúng recipient.
+- Mark-one/read-all cập nhật notification badge; mở conversation cập nhật inbox unread badge.
 
 **Media**
 
-- Upload ít nhất một image, một audio và một video; URL Cloudinary load lại được sau backend restart.
-- File sai MIME hoặc quá giới hạn bị từ chối rõ; upload fail không để metadata ready thiếu URL.
+- Upload image, audio và video; URL Cloudinary load lại sau backend restart.
+- File sai MIME/quá giới hạn bị từ chối; upload fail không tạo metadata `ready` thiếu durable URL.
 
 **Cold start/restart**
 
-- Dùng restart hợp lệ hoặc chờ service sleep nếu provider áp dụng; UI hiển thị trạng thái khởi động và retry, không logout nhầm vì `502`/`503` tạm thời.
-- Socket reconnect và notification/conversation refetch sau backend hoạt động lại.
-- README ghi thời gian cold start quan sát thực tế và ngày đo, không hứa con số cố định.
+- Dùng restart hợp lệ hoặc chờ sleep nếu provider áp dụng; UI hiển thị trạng thái khởi động/retry và không logout nhầm.
+- Socket reconnect, notification state và conversation unread được refetch sau backend ready.
+- Ghi thời gian cold start quan sát thật và ngày đo; không hứa con số cố định.
 
-### 8.4. P1 smoke — nếu còn thời gian, không chặn release
+### 8.5. Provider sanity và P1 optional
 
-- Change password và access-token refresh/expiry edge case.
-- Unlike/undo repost, revoke/delete-for-me và semantics notification chi tiết.
-- Add/remove member, edit group, leave/transfer admin và quyền của member bị remove.
-- Mute/pin/hide/delete-history/search/shared-media.
-- Ngắt mạng một tab rồi kiểm tra reconciliation toàn bộ event bị lỡ.
-- Restart đúng thời điểm outbox pending để quan sát duplicate; diễn tập mất sạch Redis/exactly-once recovery chỉ là hardening sau portfolio release.
+**Provider sanity bắt buộc**
 
-### 8.5. Provider sanity check
-
-- Redis dashboard dùng `no eviction`, RESP2 và không có full message payload/token/credential trong keyspace.
-- Connection, memory và ops/sec còn dưới quota provider với buffer hợp lý; nếu gần trần thì giảm worker/cache/retention trước khi public.
+- Redis dùng eviction/protocol đã chốt và không chứa full message payload/token/credential trong keyspace.
+- Connection, memory và ops/sec còn buffer hợp lý; nếu gần trần thì giảm worker/cache/retention trước public release.
 - `REDIS_URL` không xuất hiện trong source, build/runtime log, screenshot hoặc README; Docker build context không chứa `.env`.
-- Kiểm tra quota Cloudinary, Redis, MongoDB và Render sau P0 smoke; ghi mọi giới hạn có ảnh hưởng vào README.
+- Kiểm tra quota Cloudinary, Redis, MongoDB, Render và Vercel sau P0 smoke; ghi limitation có ảnh hưởng cho Phase 9.
+
+**P1 nếu còn thời gian, không chặn release**
+
+- Change password/access-token expiry; unlike/undo repost; revoke/delete-for-me.
+- Add/remove member, edit group, leave/transfer admin; mute/pin/hide/delete-history/search/shared-media.
+- Ngắt mạng một tab để kiểm tra reconciliation. Mất sạch Redis/exactly-once recovery vẫn là hardening ngoài gate portfolio.
+
+### 8.6. Minimal remediation loop
+
+Phase 8 ưu tiên dashboard, deployment và runtime verification. Nếu evidence thật phát hiện lỗi code/config trực tiếp chặn deploy hoặc P0:
+
+1. Ghi failed case và bằng chứng cụ thể.
+2. AI được sửa tối thiểu đúng blocker, không refactor hoặc mở rộng technical debt.
+3. Chạy lại build/lint/static gate liên quan trực tiếp.
+4. Redeploy component bị ảnh hưởng và chỉ xác minh lại failed case cùng smoke phụ thuộc trực tiếp.
+5. Review remediation diff trước khi tiếp tục gate Phase 8.
+
+Không dùng remediation loop để kéo Phase 9 polish, P1 hoặc kiến trúc tương lai vào Phase 8.
 
 **Gate hoàn thành**
 
-- Tất cả P0 case có pass/fail note và bằng chứng screenshot/video ngắn cho luồng chính; P1 không chặn release.
-- Không còn blocker khiến interviewer không đăng nhập hoặc không dùng được chat/realtime.
-- Redis connection/memory, MongoDB storage và provider log không vượt quota sau smoke.
-- Nếu một feature bị giới hạn bởi free-tier, UI/README nói rõ thay vì để timeout im lặng.
+- Backend/frontend deployment thành công từ đúng repository root; health/live/docs và CORS hoạt động trên URL thật.
+- Tất cả P0 có pass/fail note; không còn blocker khiến interviewer không register/login hoặc không dùng được tweet/chat/realtime/media đại diện.
+- Cold-start/restart không logout nhầm và phục hồi socket/read state đúng ở mức smoke.
+- Redis/MongoDB/provider metrics còn trong quota với buffer hợp lý; secret không xuất hiện trong source/log/evidence.
+- Minimal remediation, nếu có, đã được review, redeploy và xác minh lại.
+- Screenshot/video portfolio không phải gate Phase 8; evidence trình bày được hoàn thiện ở Phase 9.
 
 **Rollback**
 
-- Frontend rollback về deployment trước.
-- Backend rollback image/commit trước với env contract tương thích.
-- Có thể tắt từng notification handler bằng feature flag; không xóa MongoDB/Redis production-demo tùy tiện.
+- Frontend rollback deployment trước; backend rollback image/commit trước với env contract tương thích.
+- Có thể tắt notification handler bằng feature flag; không xóa MongoDB/Redis demo tùy tiện.
+- Nếu remediation fail, quay lại deployment cuối pass và giữ failed case rõ ràng thay vì sửa tiếp ngoài scope.
 
 ---
 
-## Phase 9 — Tài khoản demo, README và portfolio handoff
+## Phase 9 — Portfolio handoff
 
 **Trạng thái: Chưa triển khai.**
 
 **Mục tiêu**
 
-Giúp interviewer hiểu và trải nghiệm dự án trong vài phút mà không cần đọc toàn bộ source.
+Chuyển deployment đã verify thành portfolio public dễ hiểu trong vài phút. Phase này chỉ điền fact/evidence thật và polish handoff; không là một phase kỹ thuật lớn. Kết quả là **PUBLIC READY**.
 
 **Phụ thuộc**
 
-- Phase 8 có URL và smoke result thật.
+- Phase 8 đạt DEMO VERIFIED, có URL, pass/fail note và provider measurement thật.
 
-### 9.1. Demo access
+### 9.1. URL và measured limitations
 
-Chọn một trong hai cách và ghi rõ trong README:
+- Điền frontend URL, backend URL, API docs/health link thật vào README; không giữ placeholder Phase 7.
+- Ghi cold-start quan sát, ngày đo, region/tier và quota/limitation thực tế đã xác minh ở Phase 8.
+- Known limitations phải khớp deployment: single backend instance, free-tier sleep, Redis transport/persistence/HA/TLS thực tế, không email recovery, token storage debt, media limits và UI capability còn thiếu.
+- Không công khai URI, secret, database username, dashboard identifier nhạy cảm hoặc log chứa credential.
 
-1. **Tài khoản demo dựng sẵn — ưu tiên cho phỏng vấn**
-   - Tạo bằng script idempotent `demo:seed` hoặc thao tác có tài liệu.
-   - Email/password lấy từ env lúc seed, không hard-code vào source.
-   - Account không có dữ liệu cá nhân/quyền đặc biệt.
-   - Credential công khai được coi là disposable; kiểm tra/reset thủ công trước buổi phỏng vấn.
-2. **Self-registration**
-   - Đây là fallback đơn giản và phải được test ngay trước khi gửi link.
-   - Ghi rõ account được kích hoạt ngay, không gửi email xác minh; password recovery qua email chưa có trong portfolio scope.
+### 9.2. Demo access bằng self-registration
 
-Nếu công khai credential trên README, đó phải là credential riêng cho account disposable; tuyệt đối không dùng lại password ở nơi khác.
+- Release này dùng self-registration, không thêm `demo:seed` hoặc public disposable password.
+- Test registration/login ngay trước khi gửi link; ghi rõ account được kích hoạt ngay, không gửi email verification và không có password recovery qua email.
+- Account evidence không dùng email/tên thật; nếu interviewer cần dữ liệu sẵn, hướng dẫn tạo A/B/C bằng registration thay vì hard-code credential.
 
-### 9.2. Frontend README
+### 9.3. README finalization
 
-Thay README Create Next App bằng:
+README structure, architecture, setup và deploy guide đã được hoàn thành ở Phase 7. Phase 9 chỉ:
 
-1. Tên dự án, demo URL, screenshot/GIF ngắn.
-2. Feature highlights tập trung vào notification/chat thay vì liệt kê chung chung.
-3. Tech stack và vai trò từng công nghệ.
-4. Sơ đồ kiến trúc frontend ↔ API/Socket ↔ MongoDB/Redis/BullMQ/Cloudinary.
-5. Local setup từ `.env.example`.
-6. Scripts build/lint/start.
-7. Demo account hoặc registration flow.
-8. Known limitations: free-tier cold start, Redis free không TLS/HA/persistence/backup, single backend instance, chưa có email verification/password recovery, token storage hiện tại, media size và các UI endpoint còn thiếu.
-9. Link backend README/API docs.
+- thay placeholder bằng URL/fact thật;
+- thêm screenshot/GIF ngắn và feature highlights cuối;
+- liên kết frontend ↔ backend README/API docs;
+- cập nhật smoke result, rollback và limitation theo Phase 8;
+- kiểm tra metadata browser không còn `Create Next App`;
+- giữ cách gọi “portfolio deployment”/“production-like demo”, không tự nhận production-ready.
 
-### 9.3. Backend README
+Không audit lại toàn repository hoặc viết lại architecture nếu Phase 8 không tạo remediation làm thay đổi contract.
 
-Bổ sung:
+### 9.4. Portfolio evidence và release checklist
 
-1. Production-like/free-tier topology và yêu cầu WebSocket/long-running process.
-2. MongoDB transaction requirement.
-3. Redis Cloud 8.2/RESP2, public TCP không TLS trên free tier, `no eviction`, Socket.IO adapter mode, in-process realtime seam, URL fallback theo capability, quota/connection budget, retention và outbox/reconciliation recovery.
-4. Docker topology: backend image trên Render; Compose Redis chỉ dành cho local, không phải production datastore.
-5. Env matrix required/optional/default.
-6. Health endpoints và deploy commands.
-7. Notification outbox/idempotency/reconciliation giải thích ngắn.
-8. Media inline/queue semantics, durable Cloudinary source, pending reconciliation và giới hạn backend-upload của demo.
-9. Smoke checklist/known limitations/rollback.
-10. Auth scope: register auto-verified/login ngay; email verification và password recovery cố ý không deploy.
-11. Không tự nhận production-ready; dùng cụm “portfolio deployment” hoặc “production-like demo”.
-
-### 9.4. Portfolio evidence
-
-- Một video 2–4 phút: login, tweet, hai cửa sổ chat realtime, notification badge, media.
-- Một screenshot kiến trúc và một screenshot API docs/health.
-- Ghi rõ phần khó tự thiết kế: transactional outbox, idempotent message, aggregation, unread source of truth và free-tier Redis trade-off.
-- Không đưa log/dashboard có secret hoặc email định danh thật vào ảnh.
+- Video 2–4 phút: self-registration/login, tweet, hai cửa sổ chat realtime, notification badge và media.
+- Một screenshot kiến trúc và một screenshot API docs/health; có thể tái sử dụng Mermaid đã tạo ở Phase 7.
+- Ghi ngắn phần khó tự thiết kế: transactional outbox, idempotent message, aggregation, unread source of truth và free-tier Redis trade-off.
+- Không đưa secret, dashboard URI hoặc email định danh thật vào ảnh/video.
+- Chốt commit/deployment id, env key thay đổi, smoke result và rollback deployment trong release note.
 
 **Gate hoàn thành**
 
 - Người mới mở README có thể vào demo hoặc chạy local mà không hỏi env key bị thiếu.
-- Metadata browser không còn `Create Next App`.
-- Demo credential hoạt động hoặc self-registration đã được test ngay trước khi chia sẻ.
-- Known limitations khớp code/deployment thật.
+- URL/API docs hoạt động và self-registration đã được test ngay trước khi chia sẻ.
+- Screenshot/video không lộ secret; known limitations khớp code và measurement thật.
+- Không còn placeholder giả, `Create Next App` metadata hoặc tuyên bố production-ready thiếu evidence.
+- Phase 9 không chứa runtime refactor; blocker runtime mới phải quay lại remediation có scope/evidence rõ.
 
 **Rollback**
 
-- Demo account có thể khóa/xóa độc lập mà không ảnh hưởng account thật.
-- README rollback không thay runtime; không xóa known limitation chỉ để trình bày đẹp hơn.
+- README/evidence rollback không thay runtime; không xóa known limitation chỉ để trình bày đẹp hơn.
+- Có thể tạm gỡ public URL/evidence nếu deployment không còn pass; không thay bằng credential hoặc URL giả.
 
 ---
 
@@ -1271,23 +1257,26 @@ Baseline
   → Phase 4 env/font/build
   → Phase 5 health/proxy
   → Phase 6 Redis/media upgrade-ready, realtime in-process
-  → Phase 7 packaging/deploy config
-  → Phase 8 deploy + smoke
-  → Phase 9 demo/README/handoff
+  → Phase 7 repository release preparation → CODE READY
+  → Phase 8 managed deployment + production smoke → DEMO VERIFIED
+  → Phase 9 portfolio handoff → PUBLIC READY
 ```
 
 - Phase 2 và Phase 3 không chạy song song vì cần lint làm gate cho dependency update.
 - Phase 5 phải xong trước deploy để health probe không tạo restart loop.
 - Phase 6 phải xong trước video smoke; deploy portfolio dùng inline nhưng queue mode local cũng phải chứng minh durable source/reconciliation, không chấp nhận job local filepath trên host có ephemeral disk.
-- Phase 9 chỉ ghi URL/kết quả thật sau Phase 8, không viết README như thể demo đã deploy trước khi có bằng chứng.
+- Phase 7 hoàn thành code/artifact/docs có thể biết trước deployment; Docker build/start local là gate bắt buộc, còn dashboard/credential/URL thật không thuộc phase này.
+- Phase 8 gom provider setup, secret, deploy, runtime measurement và P0 smoke; chỉ cho phép minimal remediation khi evidence thật chứng minh blocker trực tiếp.
+- Phase 9 chỉ điền URL/kết quả/evidence thật sau Phase 8; không viết README như thể demo đã deploy trước khi có bằng chứng và không mở runtime refactor mới.
 
 ## 7. Release milestone và rollback
 
 1. **Release A — Security/quality:** Phase 1–2. Không đổi hạ tầng; rollback theo repo.
 2. **Release B — Dependency/build:** Phase 3–4. Lockfile/font/env contract trong commit riêng.
 3. **Release C — Upgrade-ready runtime:** Phase 5–6. Health, Redis/cache mode, in-process realtime seam và durable media pipeline phải đi cùng deploy config tương thích; preset public vẫn là single-instance free-tier.
-4. **Release D — Staging portfolio:** Phase 7–8. Deploy một backend instance và chạy smoke A/B/C.
-5. **Release E — Public handoff:** Phase 9. Chỉ public link sau khi account/demo/README đã kiểm tra.
+4. **Release D — Code-ready artifact:** Phase 7. Hai repository, Docker artifact, deploy-as-code, cold-start UX và README skeleton pass local gate.
+5. **Release E — Verified portfolio:** Phase 8. Deploy một backend instance/frontend và chạy smoke A/B/C trên managed services.
+6. **Release F — Public handoff:** Phase 9. Chỉ public link sau khi self-registration, URL, evidence và README đã kiểm tra.
 
 Mỗi milestone ghi:
 
@@ -1321,11 +1310,11 @@ Mỗi milestone ghi:
 
 - [ ] Backend host hỗ trợ WebSocket và long-running Node process.
 - [ ] MongoDB tier chạy transaction.
-- [ ] Redis Cloud 8.2 dùng RESP2/TCP và hỗ trợ BullMQ; free tier không TLS được ghi rõ, không dùng nhầm `rediss://`.
+- [ ] Version, protocol và TLS của Redis Cloud được xác minh tại ngày deploy; cấu hình thực tế hỗ trợ BullMQ và README mô tả đúng transport đang dùng.
 - [ ] Portfolio dùng Socket.IO adapter `memory`; notification delivery đi qua in-process emitter seam và không tuyên bố đã hỗ trợ split-worker realtime.
 - [ ] Redis cache/queue/socket URL fallback đúng; connection/memory có số đo và còn buffer dưới quota provider.
-- [ ] Queue/cache retention nằm trong 30 MB; không dùng Redis làm unread/data source duy nhất và không cache full message payload.
-- [ ] Redis Cloud dùng AWS Singapore khi Render Singapore và eviction `no eviction`; giới hạn không persistence được ghi trong README.
+- [ ] Queue/cache retention nằm trong quota bộ nhớ đo được của provider và còn buffer; không dùng Redis làm unread/data source duy nhất và không cache full message payload.
+- [ ] Redis Cloud dùng region gần Render, eviction/persistence khớp cấu hình đã xác minh và các giới hạn thực tế được ghi trong README.
 - [ ] Không có BullMQ payload giữ ephemeral filepath.
 - [ ] Media inline deploy pass; media queue local dùng durable Cloudinary reference, deterministic job và missing-job reconciliation pass.
 - [ ] Health live/ready tối giản hoạt động, không bị limiter và không lộ config.
@@ -1345,8 +1334,8 @@ Các mục dưới đây là P0; edge case P1 trong Phase 8 không chặn public
 
 ### Portfolio handoff
 
-- [ ] Frontend/backend README khớp code và URL thật.
-- [ ] Có demo account disposable hoặc self-registration đã kiểm tra.
+- [ ] Frontend/backend README khớp code, measurement và URL thật.
+- [ ] Self-registration đã được kiểm tra ngay trước khi chia sẻ; không có demo credential hard-code/public.
 - [ ] Có screenshot/video ngắn không lộ secret.
 - [ ] Docker image backend chạy non-root, chứa `swagger.yaml`, không chứa secret; Compose Redis chỉ dùng local/loopback.
 - [ ] Known limitations ghi free-tier sleep, Redis không TLS/HA/persistence/backup, single instance, không email recovery, auth token technical debt và feature UI chưa nối.
