@@ -9,22 +9,29 @@
 - `POST /api/auth/resend-verify-email` - Gửi lại link xác nhận đăng kí
 - `POST /api/auth/forgot-password` - Tạo token và gửi link xác thực tới email tài khoản muốn đổi mật khẩu
 - `POST /api/auth/verify-forgot-password` - Xác thực token mà người dùng click từ link được gửi
-- `POST /api/auth/reset-password` - Đổi mật khẩu mới
+- `POST /api/auth/reset-password` - Xác thực token và đổi mật khẩu mới
+- `PATCH /api/auth/change-password` - Đổi mật khẩu
 
 # User API
 
 - `GET /api/users/me` - Lấy thông tin user hiện tại
 - `GET /api/users/:username` - Lấy thông tin user qua username
 - `PATCH /api/users/me` - Cập nhật thông tin user hiện tại
-- `PATCH /api/users/change-password` - Đổi mật khẩu
 - `POST /api/users/:username/block` - Chặn một user
-- `DELETE /api/users/:user_id/block/:blocked_id` - Bỏ chặn một user
-- `GET /api/blocked-users/:blocker_id` - Lấy danh sách người dùng bị chặn
+- `DELETE /api/users/:username/block` - Bỏ chặn một user
+- `GET /api/users/blocked-users/` - Lấy danh sách người dùng bị chặn
 - `POST /api/users/:username/follow` - Follow một ai đó
 - `DELETE /api/users/:username/unfollow` - Unfollow một ai đó
 - `GET /api/users/:username/following` - Ds người username này đang follow
 - `GET /api/users/:username/followers` - Ds người đang follow username này
-- `GET /api/users/:username/follow-status` - Kiểm tra user hiện tại có follow user trên không
+
+# Media
+
+- `POST /api/media/upload` - Upload image
+- `POST /api/media/upload/video` - Upload video
+- `POST /api/media/upload/audio` - Upload audio
+- `GET /api/media/{id}` - Lấy thông tin chi tiết
+- `DELETE /api/media/{id}` - Xóa file
 
 # Search API
 
@@ -42,10 +49,6 @@
 - `DELETE /api/tweets/:tweet_id/likes` - Unlike
 - `GET /api/tweets/:tweet_id` -Lấy thông tin 1 tweet bao gồm cả số lượng like, comment, retweet, quote tweet
 - `GET /api/tweets/:tweet_id/children` - Lấy thông tin tweet con của tweet_id kia
-
-# Media
-
-- `POST /api/media/upload` - Upload file (video, img, sticker)
 
 # Chat API
 

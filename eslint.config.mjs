@@ -5,8 +5,12 @@ import js from '@eslint/js'
 import tseslint from 'typescript-eslint'
 
 export default defineConfig([
+  { ignores: ['**/node_modules/**', '**/dist/**', '**/.test-dist/**'] },
   { files: ['**/*.{js,mjs,cjs,ts}'] },
-  { files: ['**/*.{js,mjs,cjs,ts}'], languageOptions: { globals: globals.browser } },
+  {
+    files: ['**/*.{js,mjs,cjs,ts}'],
+    languageOptions: { globals: { ...globals.browser, ...globals.node } }
+  },
   { files: ['**/*.{js,mjs,cjs,ts}'], plugins: { js }, extends: ['js/recommended'] },
   tseslint.configs.recommended,
   {
@@ -30,7 +34,6 @@ export default defineConfig([
           jsxSingleQuote: true
         }
       ]
-    },
-    ignores: ['**/node_modules/', '**/dist/']
+    }
   }
 ])

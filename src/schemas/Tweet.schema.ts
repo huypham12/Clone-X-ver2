@@ -10,11 +10,16 @@ interface TweetConstructor {
   parent_id: null | ObjectId //  chỉ null khi tweet gốc, một tweet có thể có nhiều tweet con nên cần parent_id để phân cấp
   hashtags: ObjectId[]
   mentions: ObjectId[]
-  medias: Media[]
+  media_ids: ObjectId[] // lưu riêng file
   guest_views?: number
   user_views?: number
   created_at?: Date
   updated_at?: Date
+  like_count?: number
+  reply_count?: number
+  retweet_count?: number
+  quote_count?: number
+  bookmark_count?: number
 }
 
 export default class Tweet {
@@ -26,11 +31,16 @@ export default class Tweet {
   parent_id: null | ObjectId
   hashtags: ObjectId[] // Mảng chứa các hashtag liên quan đến tweet
   mentions: ObjectId[]
-  medias: Media[]
+  medias: ObjectId[]
   guest_views?: number
   user_views?: number
   created_at?: Date
   updated_at?: Date
+  like_count: number
+  reply_count: number
+  retweet_count: number
+  quote_count: number
+  bookmark_count: number
 
   constructor(tweet: TweetConstructor) {
     const date = new Date()
@@ -39,13 +49,18 @@ export default class Tweet {
     this.type = tweet.type
     this.audience = tweet.audience || TweetAudience.Everyone
     this.content = tweet.content || ''
-    this.parent_id = tweet.parent_id || null
+    this.parent_id = tweet.parent_id ? new ObjectId(tweet.parent_id) : null
     this.hashtags = tweet.hashtags || []
     this.mentions = tweet.mentions || []
-    this.medias = tweet.medias || []
+    this.medias = tweet.media_ids || []
     this.guest_views = tweet.guest_views || 0
     this.user_views = tweet.user_views || 0
     this.created_at = tweet.created_at || date
     this.updated_at = tweet.updated_at || date
+    this.like_count = tweet.like_count || 0
+    this.reply_count = tweet.reply_count || 0
+    this.retweet_count = tweet.retweet_count || 0
+    this.quote_count = tweet.quote_count || 0
+    this.bookmark_count = tweet.bookmark_count || 0
   }
 }

@@ -1,6 +1,10 @@
 import { SuccessResponseDto } from '~/common/success-response.dto'
 import { HTTP_STATUS } from '~/constants/httpStatus'
 
+export class VerifyEmailBodyDto {
+  constructor(public token: string) {}
+}
+
 export class VerifyEmailResponseDto extends SuccessResponseDto<{
   message: string
 }> {

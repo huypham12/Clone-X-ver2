@@ -1,19 +1,27 @@
 import { AuthService } from './services/auth.service'
+import { SuccessResponseDto } from '~/common/success-response.dto'
 import {
-  ResendVerifyEmailBodyDto,
-  ResendVerifyEmailResponseDto,
+  SendEmailBodyDto,
+  SendEmailResponseDto,
   LoginBodyDto,
   LoginResponseDto,
   RegisterBodyDto,
   RegisterResponseDto,
-  VerifyEmailResponseDto
+  VerifyEmailResponseDto,
+  ResetPasswordResponseDto,
+  ResetPasswordBodyDto,
+  VerifyEmailBodyDto,
+  ChangePasswordResponseDto,
+  ChangePasswordBodyDto
 } from './dto'
-import { PostHandler, GetHandler } from '~/types/controller-handler.type'
+import { PatchHandler, PostHandler } from '~/types/controller-handler.type'
 import { LogoutBodyDto, LogoutResponseDto } from './dto/logout.dto'
 import { RefreshTokenBodyDto, RefreshTokenResponseDto } from './dto/refresh-token.dto'
 import { EmailService } from './services/email.service'
-import { getVerifyEmailTemplate } from '~/utils/email-templete'
+import { getForgotPasswordTemplate, getVerifyEmailTemplate } from '~/utils/email-templete'
 import { TokenPayload } from '~/types/token-payload.type'
+import { MESSAGES } from '~/constants/messages'
+import { HTTP_STATUS } from '~/constants/httpStatus'
 
 export class AuthController {
   constructor(
@@ -29,8 +37,10 @@ export class AuthController {
 
   // dùng đúng loại handler cho từng method, ở đây register là post nên dùng PostHandler
   register: PostHandler<RegisterBodyDto, RegisterResponseDto> = async (req, res) => {
-    const result = await this.authService.register(req.body)
-    res.status(result.statusCode).json(result)
+    await this.authService.checkEmailExists(req.body.email)
+    const registerResponseData = await this.authService.register(req.body)
+    const response = new RegisterResponseDto(HTTP_STATUS.CREATED, MESSAGES.REGISTER_SUCCESS, registerResponseData)
+    res.status(response.statusCode).json(response)
   }
 
   login: PostHandler<LoginBodyDto, LoginResponseDto> = async (req, res) => {
@@ -41,7 +51,6 @@ export class AuthController {
 
   logout: PostHandler<LogoutBodyDto, LogoutResponseDto> = async (req, res) => {
     const { refresh_token } = req.body
-    console.log('hi')
     const result = await this.authService.logout(refresh_token)
     res.json(result)
   }
@@ -60,21 +69,41 @@ export class AuthController {
     res.json(result)
   }
 
-  resendVerifyEmail: PostHandler<ResendVerifyEmailBodyDto, ResendVerifyEmailResponseDto> = async (req, res) => {
+  resendVerifyEmail: PostHandler<SendEmailBodyDto, SendEmailResponseDto> = async (req, res) => {
     const { email } = req.body
     const token = await this.authService.resendVerifyEmail(email)
     // gửi link kèm email verify token để khi người dùng click vào link đó thì gọi đến api /verify-email
-    const result = await this.emailService.sendEmail({
-      to: email,
-      subject: 'Xác minh địa chỉ email của bạn',
-      text: `Chào bạn, vui lòng xác minh địa chỉ email của bạn bằng cách nhấn vào liên kết sau: http://localhost:3000/verify-email?token=${token}`,
-      html: getVerifyEmailTemplate(token)
-    })
+    const html = getVerifyEmailTemplate(token)
+    const result = await this.emailService.sendEmail(
+      {
+        to: email,
+        subject: 'Xác nhận địa chỉ email của bạn',
+        html
+      },
+      MESSAGES.RESEND_VERIFY_EMAIL_SUCCESS
+    )
     res.json(result)
   }
 
-  verifyEmail: GetHandler<VerifyEmailResponseDto> = async (req, res) => {
-    const { token } = req.query
+  forgotPassword: PostHandler<SendEmailBodyDto, SendEmailResponseDto> = async (req, res) => {
+    const { email } = req.body
+    const token = await this.authService.forgotPassword(email)
+    console.log(token)
+    // gửi link kèm email verify token để khi người dùng click vào link đó thì gọi đến api /verify-email
+    const html = getForgotPasswordTemplate(token)
+    const result = await this.emailService.sendEmail(
+      {
+        to: email,
+        subject: 'Xác nhận địa chỉ email của bạn',
+        html
+      },
+      MESSAGES.FORGOT_PASSWORD_SUCCESS
+    )
+    res.json(result)
+  }
+
+  verifyEmail: PostHandler<VerifyEmailBodyDto, VerifyEmailResponseDto> = async (req, res) => {
+    const { token } = req.body
     const { user_id, verify } = req.decoded_email_verify_token as TokenPayload
     const result = await this.authService.verifyEmail({
       token,
@@ -82,6 +111,27 @@ export class AuthController {
       verify
     })
 
+    res.json(result)
+  }
+
+  verifyForgotPasswordToken: PostHandler = async (req, res) => {
+    res.json(new SuccessResponseDto(HTTP_STATUS.OK, MESSAGES.VERIFY_FORGOT_PASSWORD_TOKEN_SUCCESS, null))
+  }
+
+  resetPassword: PostHandler<ResetPasswordBodyDto, ResetPasswordResponseDto> = async (req, res) => {
+    const { token, new_password } = req.body
+    const result = await this.authService.resetPassword({ token, new_password })
+    res.json(result)
+  }
+
+  changePassword: PatchHandler<ChangePasswordBodyDto, ChangePasswordResponseDto> = async (req, res) => {
+    const { old_password, new_password } = req.body
+    const { user_id } = req.decoded_authorization as TokenPayload
+    const result = await this.authService.changePassword({
+      old_password,
+      new_password,
+      user_id
+    })
     res.json(result)
   }
 }

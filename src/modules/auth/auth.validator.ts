@@ -1,14 +1,12 @@
 import { Request, Response, NextFunction } from 'express'
-import { z, ZodError } from 'zod'
+import { z, ZodError, ZodTypeAny } from 'zod'
 import { HttpError } from '~/common/http-error'
 import { MESSAGES } from '~/constants/messages'
 import { verifyToken } from '~/utils/jwt'
 import { hashPassword } from '~/utils/crypto'
-import DatabaseService from '~/config/database.service'
+import { databaseService } from '~/config/database.service'
 import { ObjectId } from 'mongodb'
 import { TokenExpiredError } from 'jsonwebtoken'
-
-const databaseService = new DatabaseService()
 
 // Schema cho password
 const passwordSchema = z
@@ -80,29 +78,31 @@ const forgotPasswordTokenSchema = z
   })
 
 // Middleware để validate dữ liệu bằng Zod
-const validate = (schema: z.ZodSchema) => {
+export const validate = <T extends ZodTypeAny>(schema: T) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await schema.parseAsync({
+      const result = await schema.parseAsync({
         body: req.body,
         query: req.query,
         headers: req.headers,
         params: req.params
       })
+
+      req.validatedData = result
       next()
     } catch (error) {
       if (error instanceof ZodError) {
         const errors: Record<string, string[]> = {}
-        error.issues.forEach((err) => {
-          const path = err.path.join('.') || 'validation'
+        error.issues.forEach((issue) => {
+          const path = issue.path.join('.') || 'validation'
           if (!errors[path]) errors[path] = []
-          errors[path].push(err.message)
+          errors[path].push(issue.message)
         })
         return next(new HttpError('Validation failed', 400, errors))
-      } else {
-        console.error('Validation error:', error)
-        return next(new HttpError('Internal Server Error', 500))
       }
+
+      console.error('Unexpected validation error:', error)
+      return next(new HttpError('Internal Server Error', 500))
     }
   }
 }
@@ -197,7 +197,7 @@ export const refreshTokenValidator = validate(
 // Validator cho endpoint /verify-email
 export const verifyEmailValidator = validate(
   z.object({
-    query: z.object({
+    body: z.object({
       token: z
         .string({
           message: MESSAGES.TOKEN_MUST_BE_STRING
@@ -205,4 +205,22 @@ export const verifyEmailValidator = validate(
         .min(1, MESSAGES.TOKEN_IS_REQUIRED)
     })
   })
+)
+
+// Change password validator
+export const changePasswordValidator = validate(
+  z
+    .object({
+      body: z.object({
+        old_password: z
+          .string({ message: MESSAGES.OLD_PASSWORD_MUST_BE_STRING })
+          .min(1, MESSAGES.OLD_PASSWORD_IS_REQUIRED),
+        new_password: passwordSchema,
+        confirm_password: z.string().min(1, MESSAGES.CONFIRM_PASSWORD_IS_REQUIRED)
+      })
+    })
+    .refine((data) => data.body.new_password === data.body.confirm_password, {
+      message: MESSAGES.CONFIRM_PASSWORD_DOES_NOT_MATCH,
+      path: ['body', 'confirm_password']
+    })
 )

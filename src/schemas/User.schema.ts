@@ -21,6 +21,9 @@ interface UserType {
   username?: string
   avatar?: string
   cover_photo?: string
+  follower_count?: number
+  following_count?: number
+  tweet_count?: number
 }
 
 // tạo class để chuẩn hóa dữ liệu
@@ -42,6 +45,9 @@ export default class User {
   username: string
   avatar: string
   cover_photo: string
+  follower_count: number
+  following_count: number
+  tweet_count: number
 
   constructor(user: UserType) {
     const date = new Date()
@@ -62,5 +68,8 @@ export default class User {
     this.username = user.username || ''
     this.avatar = user.avatar || ''
     this.cover_photo = user.cover_photo || ''
+    this.follower_count = user.follower_count || 0
+    this.following_count = user.following_count || 0
+    this.tweet_count = user.tweet_count || 0
   }
 }

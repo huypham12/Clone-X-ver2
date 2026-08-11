@@ -7,8 +7,9 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, next) => {
   const status = err instanceof HttpError ? err.statusCode : 500
   const message = err.message || 'Internal Server Error'
   const errors = err instanceof HttpError ? err.errors || {} : {}
+  const code = err instanceof HttpError ? err.code : undefined
 
-  const response = new ErrorResponseDto(status, message, errors)
+  const response = new ErrorResponseDto(status, message, errors, code)
 
   res.status(status).json(response)
 }

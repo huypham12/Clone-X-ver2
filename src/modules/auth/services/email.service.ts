@@ -1,6 +1,7 @@
 import sgMail from '@sendgrid/mail'
 import { envConfig } from '~/config/getEnvConfig'
-import { ResendVerifyEmailResponseDto } from '../dto'
+import { SendEmailResponseDto } from '../dto'
+import { MESSAGES } from '~/constants/messages'
 
 interface SendEmailOptions {
   to: string
@@ -13,41 +14,26 @@ export class EmailService {
   private readonly senderEmail: string
 
   constructor() {
-    // Khởi tạo SendGrid API key
     sgMail.setApiKey(envConfig.sendGrid.apiKey as string)
-    this.senderEmail = 'huy9008437@gmail.com' // Phải là email đã verify với SendGrid
+    this.senderEmail = 'huy9008437@gmail.com'
   }
 
-  async sendEmail({ to, subject, text, html }: SendEmailOptions): Promise<ResendVerifyEmailResponseDto> {
-    const content: { type: string; value: string }[] = []
-
-    if (text) {
-      content.push({ type: 'text/plain', value: text })
-    }
-
-    if (html) {
-      content.push({ type: 'text/html', value: html })
-    }
-
-    // Đảm bảo content không rỗng
-    if (content.length === 0) {
-      content.push({ type: 'text/plain', value: subject })
-    }
-
+  async sendEmail({ to, subject, text, html }: SendEmailOptions, message: string): Promise<SendEmailResponseDto> {
     const msg = {
       to,
       from: this.senderEmail,
       subject,
-      content: content as [{ type: string; value: string }, ...{ type: string; value: string }[]]
+      text: text ?? subject, // fallback nếu không truyền text
+      html
     }
 
     try {
       await sgMail.send(msg)
       console.log('Email sent to:', to)
-      return new ResendVerifyEmailResponseDto()
+      return new SendEmailResponseDto(message)
     } catch (error: any) {
-      console.error('Error sending email:', error.response?.body || error.message)
-      throw error
+      console.error('SendGrid error:', error.response?.body || error.message)
+      throw new Error('Gửi email thất bại.')
     }
   }
 }

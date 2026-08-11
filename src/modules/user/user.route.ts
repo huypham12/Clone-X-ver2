@@ -1,0 +1,162 @@
+import { Router } from 'express'
+import { databaseService } from '~/config/database.service'
+import { UserController } from './user.controller'
+import { UserService } from './user.service'
+import { wrapController } from '~/utils/wrap-controller'
+import { authenticateAccessToken, verifiedUserValidator, isUserLoggedInValidator } from '~/middleware/verify.middleware'
+import { accessTokenValidator } from '../auth/auth.validator'
+import {
+  followedUserIdValidator,
+  followNotificationPreferenceValidator,
+  mentionCandidatesValidator,
+  updateMeValidator
+} from './user.validator'
+import { paginationValidator } from '../tweet/tweet.validator'
+
+const userRouter = Router()
+const userService = new UserService(databaseService)
+const userController = new UserController(userService)
+
+userRouter.get('/me', accessTokenValidator, authenticateAccessToken, wrapController(userController.getMeController))
+
+userRouter.get(
+  '/suggested',
+  accessTokenValidator,
+  authenticateAccessToken,
+  wrapController(userController.getSuggestedUsersController)
+)
+
+userRouter.get(
+  '/friends',
+  accessTokenValidator,
+  authenticateAccessToken,
+  wrapController(userController.getFriendsController)
+)
+userRouter.get(
+  '/mention-candidates',
+  accessTokenValidator,
+  authenticateAccessToken,
+  verifiedUserValidator,
+  mentionCandidatesValidator,
+  wrapController(userController.getMentionCandidatesController)
+)
+userRouter.get(
+  '/profile/:username',
+  isUserLoggedInValidator(authenticateAccessToken),
+  wrapController(userController.getProfileController)
+)
+userRouter.patch(
+  '/me',
+  accessTokenValidator,
+  authenticateAccessToken,
+  updateMeValidator,
+  wrapController(userController.updateMeController)
+)
+
+userRouter.post(
+  '/:blocked_user_id/block',
+  accessTokenValidator,
+  authenticateAccessToken,
+  verifiedUserValidator,
+  wrapController(userController.blockUserController)
+)
+
+userRouter.delete(
+  '/:blocked_user_id/block',
+  accessTokenValidator,
+  authenticateAccessToken,
+  verifiedUserValidator,
+  wrapController(userController.unblockUserController)
+)
+
+userRouter.patch(
+  '/:followed_user_id/follow-notification-preferences',
+  accessTokenValidator,
+  authenticateAccessToken,
+  verifiedUserValidator,
+  followNotificationPreferenceValidator,
+  wrapController(userController.updateFollowNotificationPreferenceController)
+)
+
+userRouter.get(
+  '/:followed_user_id/follow-notification-preferences',
+  accessTokenValidator,
+  authenticateAccessToken,
+  verifiedUserValidator,
+  followedUserIdValidator,
+  wrapController(userController.getFollowNotificationPreferenceController)
+)
+
+userRouter.get(
+  '/blocked-users',
+  accessTokenValidator,
+  authenticateAccessToken,
+  verifiedUserValidator,
+  wrapController(userController.getBlockedUsersController)
+)
+
+userRouter.post(
+  '/:followed_user_id/follow',
+  accessTokenValidator,
+  authenticateAccessToken,
+  verifiedUserValidator,
+  followedUserIdValidator,
+  wrapController(userController.followUserController)
+)
+
+userRouter.delete(
+  '/:followed_user_id/follow',
+  accessTokenValidator,
+  authenticateAccessToken,
+  verifiedUserValidator,
+  followedUserIdValidator,
+  wrapController(userController.unfollowUserController)
+)
+
+userRouter.get(
+  '/:target_user_id/followers',
+  accessTokenValidator,
+  authenticateAccessToken,
+  wrapController(userController.getFollowersController)
+)
+
+userRouter.get(
+  '/:target_user_id/following',
+  accessTokenValidator,
+  authenticateAccessToken,
+  wrapController(userController.getFollowingController)
+)
+
+userRouter.get(
+  '/:username/tweets',
+  isUserLoggedInValidator(accessTokenValidator),
+  isUserLoggedInValidator(authenticateAccessToken),
+  paginationValidator,
+  wrapController(userController.getUserTweetsController)
+)
+
+userRouter.get(
+  '/:username/replies',
+  isUserLoggedInValidator(accessTokenValidator),
+  isUserLoggedInValidator(authenticateAccessToken),
+  paginationValidator,
+  wrapController(userController.getUserRepliesController)
+)
+
+userRouter.get(
+  '/:username/likes',
+  isUserLoggedInValidator(accessTokenValidator),
+  isUserLoggedInValidator(authenticateAccessToken),
+  paginationValidator,
+  wrapController(userController.getUserLikesController)
+)
+
+userRouter.get(
+  '/:username/media',
+  isUserLoggedInValidator(accessTokenValidator),
+  isUserLoggedInValidator(authenticateAccessToken),
+  paginationValidator,
+  wrapController(userController.getUserMediaController)
+)
+
+export default userRouter

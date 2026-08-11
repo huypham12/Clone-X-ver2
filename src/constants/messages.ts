@@ -2,7 +2,13 @@ export const MESSAGES = {
   // auth messages
   REGISTER_SUCCESS: 'Register success',
   REGISTER_SUCCESS_WITH_VERIFY_EMAIL: 'Register success, please check your email to verify your account',
+  CANNOT_BLOCK_YOURSELF: 'Cannot block yourself',
+  CANNOT_FOLLOW_YOURSELF: 'Cannot follow yourself',
+  FOLLOW_RELATION_NOT_FOUND: 'Follow relation not found',
+  USER_NOT_BLOCKED: 'User not blocked',
   LOGIN_SUCCESS: 'Login success',
+  USER_UNBLOCKED: 'User unblocked',
+  USER_BLOCKED: 'User blocked',
   LOGOUT_SUCCESS: 'Logout success',
   UNAUTHORIZED: 'Unauthorized',
   USER_NOT_VERIFIED: 'User not verified',
@@ -11,10 +17,15 @@ export const MESSAGES = {
   USER_DOES_NOT_EXIST: 'Email does not exist or password is incorrect',
   USER_NOT_FOUND: 'User not found',
   INVALID_PASSWORD: 'Invalid password',
+  INVALID_OLD_PASSWORD: 'Invalid old password',
   USER_ALREADY_VERIFIED: 'User already verified',
   EMAIL_ALREADY_VERIFIED: 'Email already verified',
+  FORGOT_PASSWORD_TOKEN_INVALID: 'Forgot password token is invalid',
+  USER_ALREADY_FOLLOWED: 'User already followed',
 
   // success messages
+  PASSWORD_RESET_SUCCESS: 'Password reset success',
+  FORGOT_PASSWORD_SUCCESS: 'Forgot password success, please check your email to reset your password',
   RESEND_VERIFY_EMAIL_SUCCESS: 'Resend verify email success',
   VERIFY_EMAIL_SUCCESS: 'Verify email success',
   REFRESH_TOKEN_SUCCESS: 'Refresh token success',
@@ -52,6 +63,7 @@ export const MESSAGES = {
   INVALID_TOKEN: 'Invalid token',
   REFRESH_TOKEN_INVALID_OR_REVOKED: 'Refresh token is invalid or revoked',
   VERIFY_FORGOT_PASSWORD_TOKEN_SUCCESS: 'Verify forgot password token success',
+  FOLLOW_NOT_ALLOWED: 'Follow not allowed',
 
   // user messages
   BIO_MUST_BE_STRING: 'Bio must be a string',

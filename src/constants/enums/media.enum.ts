@@ -5,6 +5,12 @@ export enum MediaType {
   Audio = 'audio'
 }
 
+export enum MediaStatus {
+  Pending = 'pending',
+  Ready = 'ready',
+  Failed = 'failed'
+}
+
 export type Media = {
   url: string
   type: MediaType

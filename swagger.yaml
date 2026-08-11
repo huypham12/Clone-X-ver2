@@ -1,0 +1,3438 @@
+openapi: 3.0.4
+info:
+  title: Clone X API
+  description: |-
+    API documentation for Clone X - A Twitter-like social media platform.
+
+    This API provides endpoints for authentication, user management, tweets, and messaging functionality.
+  termsOfService: https://swagger.io/terms/
+  contact:
+    email: apiteam@swagger.io
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+  version: 1.0.0
+externalDocs:
+  description: Find out more about Swagger
+  url: https://swagger.io
+servers:
+  - url: http://localhost:3000
+    description: Development server
+  - url: https://your-production-url.com
+    description: Production server
+tags:
+  - name: auth
+    description: Authentication operations
+  - name: user
+    description: User management operations
+  - name: tweet
+    description: Tweet operations
+  - name: media
+    description: Media upload operations
+  - name: conversation
+    description: Conversation operations
+  - name: message
+    description: Message operations
+  - name: notification
+    description: Notification center operations
+
+x-socket-events:
+  "@notification:new":
+    description: Emitted to the recipient personal room after persistence commits. The raw payload keeps all legacy fields at top level and may include additive schema-v2 fields. Clients upsert by _id. New Like/Repost/Message Reaction aggregate windows and directed Message Reply/Group Mention items also use this event.
+    payload:
+      $ref: "#/components/schemas/NotificationSocketPayload"
+  "@notification:unread-count":
+    description: Emitted after a committed notification mutation changes unread state. Clients ignore payloads with a version older than their cached version.
+    payload:
+      $ref: "#/components/schemas/NotificationUnreadStatePayload"
+  "@notification:read-state":
+    description: Emitted to every tab/device in the recipient personal room after mark-one or read-all commits.
+    payload:
+      $ref: "#/components/schemas/NotificationReadStatePayload"
+  "@notification:updated":
+    description: Emitted with the authoritative raw aggregate document when an actor is added, refreshed or removed while actor_count remains positive, including block cleanup.
+    payload:
+      $ref: "#/components/schemas/NotificationSocketPayload"
+  "@notification:removed":
+    description: Emitted after commit when an aggregate reaches actor_count zero or an individual item is invalidated by target delete, message revoke, delete-for-me or block cleanup. Clients remove the item by notification_id and apply versioned unread state when present.
+    payload:
+      $ref: "#/components/schemas/NotificationRemovedPayload"
+  "@conversation:send":
+    description: Direct messages are checked for blocks in both directions. Message, resolved group mentions, preview, outbox and unread state commit atomically. Optional client_message_id makes retries idempotent; optional mention_user_ids is additive.
+    payload:
+      $ref: "#/components/schemas/ConversationSendPayload"
+    acknowledgement:
+      $ref: "#/components/schemas/ConversationSendAcknowledgement"
+    errorEvent: "@conversation:error"
+    blockedError:
+      $ref: "#/components/schemas/ConversationSocketError"
+  "@conversation:receive":
+    description: Emitted to conversation members' personal rooms. The message includes public sender_info, medias_info and a compact reply_to preview.
+    payload:
+      $ref: "#/components/schemas/ConversationMessage"
+  "@conversation:read":
+    description: Client read acknowledgement. Omitting message_id marks through the latest visible message; a target message only advances the read position through that message.
+    payload:
+      $ref: "#/components/schemas/ConversationReadRequest"
+    acknowledgement:
+      $ref: "#/components/schemas/ConversationReadAcknowledgement"
+  "@conversation:read-state":
+    description: Authoritative inbox/conversation state emitted to the user's personal room after an unread increment or read acknowledgement commits. Clients order state by version.
+    payload:
+      $ref: "#/components/schemas/ConversationReadStatePayload"
+  "@message:revoked":
+    description: Emitted to conversation members after the sender atomically replaces a sent message with a payload-free tombstone, refreshes the last-message preview and records notification lifecycle cleanup in the same transaction.
+    payload:
+      $ref: "#/components/schemas/MessageRevokedEvent"
+  "@message:deleted-for-me":
+    description: Emitted only to the actor's personal room after delete-for-me and that actor's notification lifecycle record commit.
+    payload:
+      $ref: "#/components/schemas/MessageRevokedEvent"
+  "@message:reaction-updated":
+    description: Emitted to conversation members' personal rooms after an atomic react, change or unreact operation and cache invalidation.
+    payload:
+      $ref: "#/components/schemas/MessageReactionUpdatedEvent"
+  "@user:block-status-changed":
+    description: Emitted to both users after a block or unblock transaction succeeds. Block queues two-way notification cleanup; unblock never restores invalidated items. Clients refetch authoritative profile and notification state.
+    payload:
+      $ref: "#/components/schemas/UserBlockStatusChanged"
+  "@conversation:group-updated":
+    description: Emitted to affected users' personal rooms after group information or membership changes. Membership cache is invalidated before this event.
+    payload:
+      $ref: "#/components/schemas/GroupUpdatedEvent"
+  "@conversation:history-cleared":
+    description: Emitted only to the actor's personal room after their current history is hidden behind a stable message-ID cutoff and the shared message cache is invalidated.
+    payload:
+      $ref: "#/components/schemas/ConversationHistoryClearedEvent"
+
+paths:
+  /api/auth/register:
+    post:
+      tags:
+        - auth
+      summary: Register a new user account
+      description: Register a new user account and send email verification
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/AuthTokenResponse"
+                  - type: object
+                    properties:
+                      statusCode:
+                        example: 201
+                      message:
+                        example: "Register success, please check your email to verify your account"
+        "400":
+          description: Bad request - Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: User already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/login:
+    post:
+      tags:
+        - auth
+      summary: User login
+      description: Authenticate user with email/username and password
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/AuthTokenResponse"
+                  - type: object
+                    properties:
+                      statusCode:
+                        example: 201
+                      message:
+                        example: "Login success"
+        "400":
+          description: Bad request - Validation error or user does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/logout:
+    post:
+      tags:
+        - auth
+      summary: User logout
+      description: Logout user and invalidate tokens
+      operationId: logout
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshTokenRequest"
+      responses:
+        "200":
+          description: Logout successful
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      message:
+                        example: "Logout success"
+        "400":
+          description: Bad request - Invalid refresh token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized - Invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/auth/refresh-token:
+    post:
+      tags:
+        - auth
+      summary: Refresh access token
+      description: Get new access token using refresh token
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshTokenRequest"
+      responses:
+        "201":
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/AuthTokenResponse"
+                  - type: object
+                    properties:
+                      statusCode:
+                        example: 201
+                      message:
+                        example: "Refresh token success"
+        "400":
+          description: Invalid refresh token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized - Token expired or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/verify-email:
+    post:
+      tags:
+        - auth
+      summary: Verify email address
+      description: Verify user email using verification token
+      operationId: verifyEmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenRequest"
+      responses:
+        "200":
+          description: Email verified successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      message:
+                        example: "Verify email success"
+        "400":
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/resend-verify-email:
+    post:
+      tags:
+        - auth
+      summary: Resend email verification
+      description: Resend email verification link
+      operationId: resendVerifyEmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailRequest"
+      responses:
+        "200":
+          description: Verification email sent
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      message:
+                        example: "Resend verify email success"
+        "400":
+          description: Bad request - Invalid email or user not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Email does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/forgot-password:
+    post:
+      tags:
+        - auth
+      summary: Request password reset
+      description: Send password reset link to user email
+      operationId: forgotPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailRequest"
+      responses:
+        "200":
+          description: Password reset email sent
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      message:
+                        example: "Forgot password success, please check your email to reset your password"
+        "400":
+          description: Bad request - Invalid email
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/verify-forgot-password:
+    post:
+      tags:
+        - auth
+      summary: Verify password reset token
+      description: Verify password reset token from email link
+      operationId: verifyForgotPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenRequest"
+      responses:
+        "200":
+          description: Token verified successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      message:
+                        example: "Verify forgot password token success"
+        "400":
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized - Token invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/reset-password:
+    post:
+      tags:
+        - auth
+      summary: Reset password
+      description: Reset user password using verified token
+      operationId: resetPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResetPasswordRequest"
+      responses:
+        "200":
+          description: Password reset successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/AuthTokenResponse"
+                  - type: object
+                    properties:
+                      statusCode:
+                        example: 200
+                      message:
+                        example: "Password reset success"
+        "400":
+          description: Invalid token or password validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized - Token invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/change-password:
+    patch:
+      tags:
+        - auth
+      summary: Change password
+      description: Change user password (requires authentication)
+      operationId: changePassword
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordRequest"
+      responses:
+        "200":
+          description: Password changed successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      message:
+                        example: "Change password success"
+        "400":
+          description: Bad request - Validation error or incorrect old password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized - Invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Forbidden - User not verified
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/user/profile/{username}:
+    get:
+      tags:
+        - user
+      summary: Get a public user profile
+      description: When authenticated, is_blocked means the caller blocked this profile and is_blocked_by_user means this profile blocked the caller.
+      operationId: getUserProfile
+      security:
+        - bearerAuth: []
+        - {}
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User profile retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfileResponse"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/user/{followed_user_id}/follow:
+    post:
+      tags: [user]
+      summary: Follow a user
+      description: Atomically creates the follower relation and updates both counters. With the follow-outbox feature enabled (the local default), notification delivery is asynchronous and rechecks the relation and two-way blocks.
+      operationId: followUser
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/FollowedUserId"
+      responses:
+        "200":
+          description: Follow relation created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NullDataSuccessResponse"
+        "400":
+          description: Invalid user ID or self-follow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Follow is forbidden by a block in either direction
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Target user does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Follow relation already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [user]
+      summary: Unfollow a user
+      description: Atomically removes the follower relation and decrements both counters. Historical notifications are retained; a pending follow event is suppressed by worker-time relation validation.
+      operationId: unfollowUser
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/FollowedUserId"
+      responses:
+        "200":
+          description: Follow relation removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NullDataSuccessResponse"
+        "400":
+          description: Invalid user ID or follow relation does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Target user does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/user/{followed_user_id}/follow-notification-preferences:
+    patch:
+      tags: [user]
+      summary: Update followed-account post notification preference
+      description: Updates only the authenticated user's existing follow relation. New relations default to posts=false and unfollow removes the preference with the relation.
+      operationId: updateFollowNotificationPreference
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/FollowedUserId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [posts]
+              properties:
+                posts:
+                  type: boolean
+      responses:
+        "200":
+          description: Preference updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [statusCode, message, data]
+                properties:
+                  statusCode:
+                    type: integer
+                    example: 200
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    required: [followed_user_id, posts]
+                    properties:
+                      followed_user_id:
+                        type: string
+                        pattern: "^[a-fA-F0-9]{24}$"
+                      posts:
+                        type: boolean
+        "400":
+          description: Invalid user ID or body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: FOLLOW_RELATION_NOT_FOUND
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/tweets:
+    post:
+      tags: [tweet]
+      summary: Create a tweet
+      description: Explicit mention IDs and usernames in content are normalized and deduplicated. With the tweet-outbox feature enabled (the local default), tweet state, parent counter, feeds and the notification event commit atomically. An original public tweet can asynchronously fan out followed_user_tweet items only to opted-in follow relations; the request never waits for follower fan-out.
+      operationId: createTweet
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTweetRequest"
+      responses:
+        "201":
+          description: Tweet created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TweetMutationResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Referenced media is not ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Referenced media processing failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/tweets/{tweet_id}:
+    patch:
+      tags: [tweet]
+      summary: Update a tweet
+      description: Keeps the legacy response contract. Mention additions create idempotent notification items and removals invalidate the corresponding Mention item when the tweet-outbox feature is enabled.
+      operationId: updateTweet
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: tweet_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTweetRequest"
+      responses:
+        "200":
+          description: Tweet updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TweetMutationResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/tweets/{tweet_id}/like:
+    post:
+      tags: [tweet]
+      summary: Like a tweet
+      description: Idempotently creates the Like relation. Relation, tweet counter and optional aggregate event commit in one transaction; notifications are asynchronous when social aggregation is enabled.
+      operationId: likeTweet
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TweetId"
+      responses:
+        "200":
+          description: Existing or newly created Like relation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TweetInteractionMutationResponse"
+        "401":
+          description: Missing or invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Tweet not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [tweet]
+      summary: Unlike a tweet
+      description: Removes the caller's Like relation once. A repeated request returns success with null data and does not decrement counters or aggregate membership again.
+      operationId: unlikeTweet
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TweetId"
+      responses:
+        "200":
+          description: Removed relation or null when it did not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TweetInteractionMutationResponse"
+
+  /api/tweets/{tweet_id}/retweet:
+    delete:
+      tags: [tweet]
+      summary: Undo a retweet
+      description: Atomically removes the caller's Retweet relation, decrements the target counter, removes its news-feed rows and publishes one undo event. Repeated calls are no-ops.
+      operationId: undoRetweet
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TweetId"
+      responses:
+        "200":
+          description: Removed Retweet document or null when it did not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TweetInteractionMutationResponse"
+
+  /api/conversations:
+    get:
+      tags: [conversation]
+      summary: List conversations with per-conversation unread state
+      operationId: getConversations
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Existing conversation list with additive unread fields
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/ConversationSummary"
+
+  /api/conversations/unread-summary:
+    get:
+      tags: [conversation]
+      summary: Get authoritative inbox unread summary
+      operationId: getConversationUnreadSummary
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Inbox badge and total unread messages
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationUnreadSummaryResponse"
+
+  /api/conversations/group:
+    post:
+      tags: [conversation]
+      summary: Create a group within the configured member limit
+      description: The creator counts toward MAX_GROUP_MEMBERS, which defaults to 500. Exceeding it returns GROUP_MEMBER_LIMIT_EXCEEDED.
+      operationId: createGroupConversation
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, members]
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                members:
+                  type: array
+                  maxItems: 500
+                  items:
+                    type: string
+                    pattern: "^[a-fA-F0-9]{24}$"
+                avatar_url:
+                  type: string
+                  format: uri
+      responses:
+        "201":
+          description: Group created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Invalid request or group member limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/direct/{receiver_id}:
+    post:
+      tags:
+        - conversation
+      summary: Open or create a direct conversation
+      description: Returns a normalized conversation and a server reopen timestamp so the client can open and cache it immediately. Does not create or restore a direct conversation when either participant has blocked the other. Existing message history is not deleted.
+      operationId: getOrCreateDirectConversation
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: receiver_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+      responses:
+        "200":
+          description: Direct conversation opened successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationOpenResponse"
+        "403":
+          description: Direct messaging is blocked in either direction
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/groups/search:
+    get:
+      tags:
+        - conversation
+      summary: Search the authenticated user's group conversations
+      description: Searches visible and hidden groups by name. Only groups where the authenticated user is still a member are returned. This endpoint does not restore hidden groups.
+      operationId: searchGroupConversations
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 100
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+            default: 10
+      responses:
+        "200":
+          description: Matching group conversations retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupConversationLookupPageResponse"
+        "400":
+          description: Invalid search query, cursor, or limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}:
+    patch:
+      tags:
+        - conversation
+      summary: Update group information
+      description: Only a current group admin can update the group name or avatar.
+      operationId: updateGroupInformation
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                avatar_url:
+                  type: string
+                  format: uri
+      responses:
+        "200":
+          description: Group information updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "403":
+          description: The caller is not a group admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Group not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags:
+        - conversation
+      summary: Hide a conversation from your inbox
+      description: Hides the conversation only for the authenticated member. It does not delete message history for other members, and receiving new messages does not restore it. The authenticated member must explicitly find and reopen it.
+      operationId: hideConversationFromInbox
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Conversation hidden from the authenticated user's inbox
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      message:
+                        example: "Conversation hidden from your inbox successfully"
+                      data:
+                        type: object
+                        required:
+                          - success
+                        properties:
+                          success:
+                            type: boolean
+                            example: true
+        "403":
+          description: The authenticated user is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/unhide:
+    post:
+      tags:
+        - conversation
+      summary: Restore a conversation to your inbox
+      description: Removes only the authenticated member from hidden_by and returns the normalized direct/group conversation with a server reopen timestamp. The operation is idempotent and does not change another member's hidden state.
+      operationId: unhideConversation
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Conversation restored to the authenticated user's inbox
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationOpenResponse"
+        "403":
+          description: The authenticated user is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/history:
+    delete:
+      tags:
+        - conversation
+      summary: Delete current conversation history for the authenticated user
+      description: Atomically captures a stable latest-message cutoff, clears the caller's conversation unread count, hides and unpins/unmutes the conversation, and leaves all physical messages and every other member's history unchanged. The first later message restores this deleted chat as a new visible conversation; a plain inbox hide remains hidden until explicitly reopened.
+      operationId: clearConversationHistoryForMe
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Current history cleared only for the authenticated member
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required:
+                          - success
+                          - cleared_at
+                        properties:
+                          success:
+                            type: boolean
+                            example: true
+                          cleared_at:
+                            type: string
+                            format: date-time
+        "403":
+          description: The authenticated user is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/members:
+    get:
+      tags:
+        - conversation
+      summary: Get group members
+      description: The authenticated caller must be a current member. Each member user contains only _id, name, username, and avatar.
+      operationId: getGroupMembers
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Group members retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "403":
+          description: The caller is not a group member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags:
+        - conversation
+      summary: Add group members
+      description: Any current group member can add existing users they follow. The complete list is appended in one atomic update pipeline, membership is compared by user_id, and concurrent requests cannot create duplicates or partial success. This operation emits membership sync only and does not create a system message or notification.
+      operationId: addGroupMembers
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - members
+              properties:
+                members:
+                  type: array
+                  minItems: 1
+                  maxItems: 500
+                  uniqueItems: true
+                  items:
+                    type: string
+                    pattern: "^[a-fA-F0-9]{24}$"
+      responses:
+        "200":
+          description: Members added or already present
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Invalid, duplicate, unknown, or non-followed user IDs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The caller is not a current group member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/members/{user_id}:
+    delete:
+      tags:
+        - conversation
+      summary: Remove a group member
+      description: A current admin can remove another member, but cannot remove themselves through this endpoint. Membership removal, conversation read-state deletion and inbox summary adjustment commit atomically.
+      operationId: removeGroupMember
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+      responses:
+        "200":
+          description: Member removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: GROUP_ADMIN_CANNOT_REMOVE_SELF; use the leave endpoint
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The caller is not a group admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Group or target member not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Membership changed concurrently
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/leave:
+    delete:
+      tags:
+        - conversation
+      summary: Leave a group
+      description: A member can leave; membership removal, conversation read-state deletion and inbox summary adjustment commit atomically. If the caller is the sole admin and other members remain, use transfer-admin-and-leave instead.
+      operationId: leaveGroup
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Member left the group
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "403":
+          description: The caller is not a group member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: GROUP_SOLE_ADMIN_CANNOT_LEAVE or membership changed concurrently
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/transfer-admin-and-leave:
+    post:
+      tags:
+        - conversation
+      summary: Transfer group admin and leave
+      description: Atomically promotes one current member to the group's only admin, removes the current sole admin and clears that user's group unread state. A group has at most one admin.
+      operationId: transferAdminAndLeave
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - successor_user_id
+              properties:
+                successor_user_id:
+                  type: string
+                  pattern: "^[a-fA-F0-9]{24}$"
+      responses:
+        "200":
+          description: Admin transferred and previous admin left the group
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: GROUP_ADMIN_SUCCESSOR_INVALID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The caller is not the current group admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: GROUP_ADMIN_TRANSFER_CONFLICT because admin or membership state changed concurrently
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/admins/{user_id}:
+    post:
+      tags: [conversation]
+      summary: Grant group admin role
+      description: A current admin atomically promotes a current member. When group management notifications are enabled, the same transaction creates one system message and one direct admin_granted event for the affected user.
+      operationId: grantGroupAdmin
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+      responses:
+        "200":
+          description: Admin role granted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "403":
+          description: Caller is not a current group admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: GROUP_ADMIN_GRANT_CONFLICT
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [conversation]
+      summary: Revoke group admin role
+      description: A current admin atomically demotes an admin while preserving at least one admin whenever members remain. The affected user receives admin_revoked when group management notifications are enabled.
+      operationId: revokeGroupAdmin
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+      responses:
+        "200":
+          description: Admin role revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "403":
+          description: Caller is not a current group admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: GROUP_ADMIN_REVOKE_CONFLICT or sole-admin guard
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/read:
+    post:
+      tags: [conversation]
+      summary: Advance the authenticated member's conversation read position
+      description: An empty body marks through the latest visible message. A supplied message_id must be visible in this conversation; messages committed after it remain unread. Message.read_by is not updated.
+      operationId: markConversationRead
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConversationReadRequest"
+      responses:
+        "200":
+          description: Read position and inbox summary after the committed transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationReadResponse"
+        "400":
+          description: Invalid or invisible target message
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller is not a current conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/messages:
+    get:
+      tags:
+        - message
+      summary: Get messages in a conversation
+      description: Returns a cursor-paginated message page. The authenticated user must be a conversation member.
+      operationId: getConversationMessages
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/MessageCursor"
+        - $ref: "#/components/parameters/MessageLimit"
+      responses:
+        "200":
+          description: Messages retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessagePageResponse"
+        "403":
+          description: The authenticated user is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/messages/{message_id}/context:
+    get:
+      tags:
+        - message
+      summary: Get messages around a target message
+      description: Returns active messages around a target in chronological order. The authenticated user must be a conversation member.
+      operationId: getConversationMessageContext
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: message_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: before
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 50
+            default: 20
+        - name: after
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 50
+            default: 20
+      responses:
+        "200":
+          description: Message context retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageContextResponse"
+        "403":
+          description: The authenticated user is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Conversation or target message not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/search:
+    get:
+      tags:
+        - message
+      summary: Search active messages in a conversation
+      description: Searches only messages with status sent. The authenticated user must be a conversation member.
+      operationId: searchConversationMessages
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: "#/components/parameters/MessageCursor"
+        - $ref: "#/components/parameters/MessageLimit"
+      responses:
+        "200":
+          description: Matching messages retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessagePageResponse"
+        "403":
+          description: The authenticated user is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/{conversation_id}/media:
+    get:
+      tags:
+        - conversation
+        - media
+      summary: Get shared media in a conversation
+      description: Returns active messages containing ready image, video, or audio metadata in medias_info. The authenticated user must be a conversation member.
+      operationId: getConversationMedia
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/MessageCursor"
+        - $ref: "#/components/parameters/MessageLimit"
+      responses:
+        "200":
+          description: Shared media retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessagePageResponse"
+        "403":
+          description: The authenticated user is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/messages/{message_id}/forward:
+    post:
+      tags: [message]
+      summary: Forward one message to deduplicated target conversations
+      description: Source and all targets are validated before the atomic transaction. Target ObjectIds are canonicalized before deduplication. Optional client_operation_id is expanded per canonical target and prevents retry from creating, broadcasting or counting the forward twice.
+      operationId: forwardConversationMessage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [conversation_ids]
+              properties:
+                conversation_ids:
+                  type: array
+                  minItems: 1
+                  uniqueItems: true
+                  items:
+                    type: string
+                    pattern: "^[a-fA-F0-9]{24}$"
+                client_operation_id:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+      responses:
+        "200":
+          description: Legacy success response; repeated operation IDs return the same committed operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Source message unavailable or invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Source/target access denied or direct messaging blocked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/messages/{message_id}:
+    delete:
+      tags:
+        - message
+      summary: Delete a sent message for the current user
+      description: Transactionally adds only the caller to private deleted_by state and recomputes that caller's preview override. Other members keep the original message and do not receive the private realtime event.
+      operationId: deleteConversationMessage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+      responses:
+        "200":
+          description: Message hidden for the caller and caller personal devices synchronized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Invalid message ID, message is not sent, or it is already hidden for the caller
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller is not a current conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/messages/{message_id}/revoke:
+    post:
+      tags:
+        - message
+      summary: Revoke a sent message for everyone
+      description: The tombstone, sidebar preview and notification lifecycle outbox event commit atomically. Existing response and conversation socket payloads are unchanged.
+      operationId: revokeConversationMessage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+      responses:
+        "200":
+          description: Message revoked and member personal rooms synchronized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Invalid message ID or message is not in sent status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller is not a member or is not the sender
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/messages/{message_id}/react:
+    post:
+      tags:
+        - message
+      summary: React to a sent message
+      operationId: reactToConversationMessage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - emoji
+              properties:
+                emoji:
+                  type: string
+                  minLength: 1
+                  maxLength: 64
+                  description: Exactly one Unicode emoji grapheme.
+              additionalProperties: false
+      responses:
+        "200":
+          description: Reaction stored and member personal rooms synchronized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageReactionStateResponse"
+        "400":
+          description: Invalid input or message is not in sent status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags:
+        - message
+      summary: Remove the caller's reaction from a sent message
+      operationId: unreactToConversationMessage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+      responses:
+        "200":
+          description: Reaction removed and member personal rooms synchronized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageReactionStateResponse"
+        "403":
+          description: Caller is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/conversations/messages/{message_id}/reactions:
+    get:
+      tags:
+        - message
+      summary: Get reaction details for a sent message
+      operationId: getConversationMessageReactions
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+      responses:
+        "200":
+          description: Reaction details retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageReactionDetailsResponse"
+        "403":
+          description: Caller is not a conversation member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/notifications:
+    get:
+      tags:
+        - notification
+      summary: List notifications
+      description: Returns non-invalidated notifications ordered by immutable tuple created_at descending then _id descending. next_cursor is opaque; a legacy 24-hex ObjectId cursor is still accepted when it identifies a notification owned by the caller. Pagination fetches one extra record so has_next_page is exact. During asynchronous lifecycle cleanup, an actor or target that is no longer visible is redacted at read time; its raw sender_id/target_id becomes null, actor_ids_preview is filtered, context is empty, and deduplication/aggregation keys are omitted.
+      operationId: getNotifications
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Use next_cursor verbatim. Opaque v2 cursors and legacy 24-hex ObjectId cursors are accepted.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+      responses:
+        "200":
+          description: Notification page returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationPageResponse"
+        "400":
+          description: Invalid cursor or limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/notifications/unread-count:
+    get:
+      tags:
+        - notification
+      summary: Get notification unread state
+      description: Returns the authoritative unread item count and monotonic version from NotificationState. There is no runtime countDocuments fallback; incompatible local notification/state data must be reset together before startup.
+      operationId: getNotificationUnreadCount
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Notification unread state returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationUnreadCountResponse"
+        "401":
+          description: Missing or invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/notifications/read-all:
+    post:
+      tags:
+        - notification
+      summary: Mark all notifications as read
+      description: Transitions only unread, non-invalidated notifications at or before the request cutoff. New items and reactivations after the cutoff remain unread, including reactivations that keep an existing notification ID. The response includes the authoritative unread count and version.
+      operationId: markAllNotificationsAsRead
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Idempotent update result; updatedCount is zero when nothing was unread
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationReadAllResponse"
+        "401":
+          description: Missing or invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/notifications/{id}/read:
+    post:
+      tags:
+        - notification
+      summary: Mark one notification as read
+      description: Idempotent for a notification owned by the caller. Only the first unread-to-read transition decrements unread state and closes an active aggregation window. Missing and foreign IDs both return 404.
+      operationId: markNotificationAsRead
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+      responses:
+        "200":
+          description: Notification belongs to the caller and is now read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationReadOneResponse"
+        "400":
+          description: Invalid notification ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Notification does not exist or belongs to another user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  parameters:
+    TweetId:
+      name: tweet_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-fA-F0-9]{24}$"
+    FollowedUserId:
+      name: followed_user_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-fA-F0-9]{24}$"
+    ConversationId:
+      name: conversation_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-fA-F0-9]{24}$"
+    MessageCursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+        pattern: "^[a-fA-F0-9]{24}$"
+    MessageLimit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+    MessageId:
+      name: message_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-fA-F0-9]{24}$"
+  schemas:
+    NullDataSuccessResponse:
+      type: object
+      required: [statusCode, message, data]
+      properties:
+        statusCode:
+          type: integer
+          example: 200
+        message:
+          type: string
+        data:
+          nullable: true
+          example: null
+
+    CreateTweetRequest:
+      type: object
+      required: [type, audience, content, parent_id]
+      properties:
+        type:
+          type: integer
+          enum: [0, 1, 2, 3]
+          description: 0 Tweet, 1 Retweet, 2 Comment/Reply, 3 QuoteTweet
+        audience:
+          type: integer
+          enum: [0, 1]
+          description: 0 Everyone, 1 TwitterCircle
+        content:
+          type: string
+          maxLength: 1000
+        parent_id:
+          type: string
+          nullable: true
+          pattern: "^[a-fA-F0-9]{24}$"
+        hashtags:
+          type: array
+          default: []
+          items:
+            type: string
+        mentions:
+          type: array
+          default: []
+          uniqueItems: true
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+        medias:
+          type: array
+          default: []
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+
+    UpdateTweetRequest:
+      type: object
+      properties:
+        audience:
+          type: integer
+          enum: [0, 1]
+        content:
+          type: string
+          maxLength: 1000
+        hashtags:
+          type: array
+          items:
+            type: string
+        mentions:
+          type: array
+          uniqueItems: true
+          description: Optional PATCH field. When omitted, stored mentions are preserved even if content changes. Send the full desired explicit mention list to add or remove mentions; backend also resolves @username values from the effective content.
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+        medias:
+          type: array
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+
+    TweetDocument:
+      type: object
+      required: [_id, user_id, type, audience, content, parent_id, hashtags, mentions, medias]
+      properties:
+        _id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        user_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        type:
+          type: integer
+          enum: [0, 1, 2, 3]
+        audience:
+          type: integer
+          enum: [0, 1]
+        content:
+          type: string
+        parent_id:
+          type: string
+          nullable: true
+          pattern: "^[a-fA-F0-9]{24}$"
+        hashtags:
+          type: array
+          items:
+            type: string
+        mentions:
+          type: array
+          items:
+            type: string
+        medias:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    TweetMutationResponse:
+      type: object
+      required: [statusCode, message, data]
+      properties:
+        statusCode:
+          type: integer
+        message:
+          type: string
+        data:
+          $ref: "#/components/schemas/TweetDocument"
+
+    TweetInteractionMutationResponse:
+      type: object
+      required: [statusCode, message, data]
+      properties:
+        statusCode:
+          type: integer
+          example: 200
+        message:
+          type: string
+        data:
+          nullable: true
+          description: The current Like/Retweet relation document, or null when an undo request is already reconciled.
+
+    LegacyNotificationFields:
+      type: object
+      required:
+        - _id
+        - recipient_id
+        - sender_id
+        - type
+        - target_id
+        - is_read
+        - created_at
+      properties:
+        _id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        recipient_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        sender_id:
+          type: string
+          nullable: true
+          pattern: "^[a-fA-F0-9]{24}$"
+        type:
+          type: string
+          enum: [like, reply, retweet, quote, follow, mention, system, message_reply, message_mention, group_add, group_join, group_kick, admin_granted, admin_revoked, followed_user_tweet]
+        target_id:
+          type: string
+          nullable: true
+          pattern: "^[a-fA-F0-9]{24}$"
+        is_read:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    NotificationActorInfo:
+      type: object
+      required: [_id, name, username]
+      properties:
+        _id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        name:
+          type: string
+        username:
+          type: string
+        avatar:
+          type: string
+
+    NotificationTargetInfo:
+      type: object
+      required: [_id, target_type]
+      properties:
+        _id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        target_type:
+          type: string
+          enum: [USER, TWEET, MESSAGE, CONVERSATION]
+        name:
+          type: string
+        username:
+          type: string
+        avatar:
+          type: string
+        owner_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        tweet_type:
+          type: integer
+          enum: [0, 1, 2, 3]
+        content:
+          type: string
+          maxLength: 140
+        conversation_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        sender_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        status:
+          type: string
+          enum: [sent, revoked, deleted]
+        conversation_type:
+          type: string
+          enum: [direct, group]
+        avatar_url:
+          type: string
+
+    NotificationV2Fields:
+      type: object
+      properties:
+        target_type:
+          type: string
+          nullable: true
+          enum: [USER, TWEET, MESSAGE, CONVERSATION]
+        actor_ids_preview:
+          type: array
+          maxItems: 3
+          description: Contains only actor IDs currently visible to the recipient; hidden actors are removed rather than represented as null entries.
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+        actor_count:
+          type: integer
+          minimum: 0
+        context:
+          type: object
+          additionalProperties: true
+        deduplication_key:
+          type: string
+          description: Omitted from REST list items when the actor or target is redacted.
+        aggregation_key:
+          type: string
+          description: Omitted from REST list items when the actor or target is redacted.
+        aggregation_active:
+          type: boolean
+        read_at:
+          type: string
+          format: date-time
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+        invalidated_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    NotificationSocketPayload:
+      allOf:
+        - $ref: "#/components/schemas/LegacyNotificationFields"
+        - $ref: "#/components/schemas/NotificationV2Fields"
+
+    NotificationUnreadStatePayload:
+      type: object
+      required: [unread_count, version, updated_at]
+      properties:
+        unread_count:
+          type: integer
+          minimum: 0
+        version:
+          type: integer
+          minimum: 0
+        updated_at:
+          type: string
+          format: date-time
+
+    NotificationReadStatePayload:
+      type: object
+      required: [action, notification_id, read_at, updated_count, unread_count, version]
+      properties:
+        action:
+          type: string
+          enum: [mark_one, read_all]
+        notification_id:
+          type: string
+          nullable: true
+          pattern: "^[a-fA-F0-9]{24}$"
+        read_at:
+          type: string
+          format: date-time
+        updated_count:
+          type: integer
+          minimum: 0
+        unread_count:
+          type: integer
+          minimum: 0
+        version:
+          type: integer
+          minimum: 0
+
+    NotificationRemovedPayload:
+      type: object
+      required: [notification_id, aggregation_key, updated_at]
+      properties:
+        notification_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        aggregation_key:
+          type: string
+          nullable: true
+        unread_count:
+          type: integer
+          minimum: 0
+        version:
+          type: integer
+          minimum: 0
+        updated_at:
+          type: string
+          format: date-time
+
+    NotificationListItem:
+      allOf:
+        - $ref: "#/components/schemas/LegacyNotificationFields"
+        - $ref: "#/components/schemas/NotificationV2Fields"
+        - type: object
+          required:
+            - target_type
+            - actor_ids_preview
+            - actor_count
+            - context
+            - aggregation_active
+            - read_at
+            - updated_at
+            - invalidated_at
+            - actor_info
+            - actor_infos_preview
+            - target_info
+          properties:
+            actor_info:
+              nullable: true
+              allOf:
+                - $ref: "#/components/schemas/NotificationActorInfo"
+            actor_infos_preview:
+              type: array
+              maxItems: 3
+              items:
+                nullable: true
+                allOf:
+                  - $ref: "#/components/schemas/NotificationActorInfo"
+            target_info:
+              nullable: true
+              allOf:
+                - $ref: "#/components/schemas/NotificationTargetInfo"
+
+    NotificationPageData:
+      type: object
+      required:
+        - notifications
+        - unreadCount
+        - next_cursor
+        - has_next_page
+      properties:
+        notifications:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationListItem"
+        unreadCount:
+          type: integer
+          minimum: 0
+        next_cursor:
+          type: string
+          nullable: true
+          description: Opaque pagination cursor. Send it back verbatim; do not parse it.
+        has_next_page:
+          type: boolean
+
+    NotificationPageResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              $ref: "#/components/schemas/NotificationPageData"
+
+    NotificationReadAllResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              type: object
+              required:
+                - updatedCount
+                - unreadCount
+                - version
+              properties:
+                updatedCount:
+                  type: integer
+                  minimum: 0
+                unreadCount:
+                  type: integer
+                  minimum: 0
+                version:
+                  type: integer
+                  minimum: 0
+
+    NotificationReadOneResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              type: object
+              required:
+                - success
+                - unreadCount
+                - version
+              properties:
+                success:
+                  type: boolean
+                  enum: [true]
+                unreadCount:
+                  type: integer
+                  minimum: 0
+                version:
+                  type: integer
+                  minimum: 0
+
+    NotificationUnreadCountResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: object
+              required: [unreadCount, version, updated_at]
+              properties:
+                unreadCount:
+                  type: integer
+                  minimum: 0
+                version:
+                  type: integer
+                  minimum: 0
+                updated_at:
+                  type: string
+                  format: date-time
+
+    User:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: 507f1f77bcf86cd799439011
+        name:
+          type: string
+          example: John Doe
+        email:
+          type: string
+          format: email
+          example: user@example.com
+        username:
+          type: string
+          example: johndoe
+        bio:
+          type: string
+          example: Software developer
+        avatar:
+          type: string
+          example: https://example.com/avatar.jpg
+        cover_photo:
+          type: string
+          example: https://example.com/cover.jpg
+        date_of_birth:
+          type: string
+          format: date-time
+          example: 1990-01-01T00:00:00.000Z
+        location:
+          type: string
+          example: New York, USA
+        website:
+          type: string
+          example: https://johndoe.com
+        verify:
+          type: integer
+          example: 1
+          description: User verification status (0=Unverified, 1=Verified, 2=Banned)
+        created_at:
+          type: string
+          format: date-time
+          example: 2023-01-01T00:00:00.000Z
+        updated_at:
+          type: string
+          format: date-time
+          example: 2023-01-01T00:00:00.000Z
+        is_following:
+          type: boolean
+        is_blocked:
+          type: boolean
+          description: The authenticated caller blocked this profile.
+        is_blocked_by_user:
+          type: boolean
+          description: This profile blocked the authenticated caller.
+
+    UserProfileResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/User"
+
+    ConversationSocketError:
+      type: object
+      required:
+        - code
+        - conversation_id
+        - message
+      properties:
+        code:
+          type: string
+          enum: [DIRECT_MESSAGE_BLOCKED, REPLY_MESSAGE_UNAVAILABLE]
+        conversation_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        message:
+          type: string
+
+    ConversationSendPayload:
+      type: object
+      required:
+        - conversation_id
+        - conversation_type
+        - content
+      properties:
+        conversation_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        conversation_type:
+          type: string
+          enum: [direct, group]
+        content:
+          type: string
+        media_ids:
+          type: array
+          maxItems: 4
+          uniqueItems: true
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+        reply_to_message_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        mention_user_ids:
+          type: array
+          maxItems: 500
+          description: Optional explicit group mention IDs. Backend deduplicates and keeps only current non-self group members, then merges text @username mentions.
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+        client_message_id:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Stable client-generated operation ID. Reuse it only with the same content, media, reply and mention payload; a different payload conflicts.
+
+    ConversationSendAcknowledgement:
+      oneOf:
+        - type: object
+          required:
+            - success
+            - message_id
+          properties:
+            success:
+              type: boolean
+              enum: [true]
+            message_id:
+              type: string
+              pattern: "^[a-fA-F0-9]{24}$"
+        - type: object
+          required:
+            - success
+            - error
+          properties:
+            success:
+              type: boolean
+              enum: [false]
+            error:
+              type: object
+              required:
+                - code
+                - message
+              properties:
+                code:
+                  type: string
+                conversation_id:
+                  type: string
+                  pattern: "^[a-fA-F0-9]{24}$"
+                message:
+                  type: string
+
+    ConversationReadRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        conversation_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+          description: Required for the Socket.IO event; supplied by the REST path otherwise.
+        message_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+
+    ConversationReadStatePayload:
+      type: object
+      required:
+        - conversation_id
+        - last_read_message_id
+        - last_read_at
+        - unread_message_count
+        - unread_conversation_count
+        - total_unread_message_count
+        - version
+        - updated_at
+      properties:
+        conversation_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        last_read_message_id:
+          type: string
+          nullable: true
+          pattern: "^[a-fA-F0-9]{24}$"
+        last_read_at:
+          type: string
+          format: date-time
+          nullable: true
+        unread_message_count:
+          type: integer
+          minimum: 0
+        unread_conversation_count:
+          type: integer
+          minimum: 0
+        total_unread_message_count:
+          type: integer
+          minimum: 0
+        version:
+          type: integer
+          minimum: 0
+        updated_at:
+          type: string
+          format: date-time
+
+    ConversationReadAcknowledgement:
+      oneOf:
+        - type: object
+          required:
+            - success
+            - conversation_id
+            - unread_message_count
+            - unread_conversation_count
+            - total_unread_message_count
+            - version
+          properties:
+            success:
+              type: boolean
+              enum: [true]
+            conversation_id:
+              type: string
+              pattern: "^[a-fA-F0-9]{24}$"
+            unread_message_count:
+              type: integer
+              minimum: 0
+            unread_conversation_count:
+              type: integer
+              minimum: 0
+            total_unread_message_count:
+              type: integer
+              minimum: 0
+            version:
+              type: integer
+              minimum: 0
+        - type: object
+          required: [success, error]
+          properties:
+            success:
+              type: boolean
+              enum: [false]
+            error:
+              $ref: "#/components/schemas/ConversationSocketError"
+
+    ConversationUnreadSummary:
+      type: object
+      required: [unread_conversation_count, total_unread_message_count, version, updated_at]
+      properties:
+        unread_conversation_count:
+          type: integer
+          minimum: 0
+        total_unread_message_count:
+          type: integer
+          minimum: 0
+        version:
+          type: integer
+          minimum: 0
+        updated_at:
+          type: string
+          format: date-time
+
+    ConversationUnreadSummaryResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ConversationUnreadSummary"
+
+    ConversationReadResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          properties:
+            data:
+              allOf:
+                - $ref: "#/components/schemas/ConversationReadStatePayload"
+                - type: object
+                  required: [success]
+                  properties:
+                    success:
+                      type: boolean
+                      enum: [true]
+
+    UserBlockStatusChanged:
+      type: object
+      required:
+        - user_ids
+      properties:
+        user_ids:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+
+    MessageRevokedEvent:
+      type: object
+      required:
+        - conversation_id
+        - message_id
+      properties:
+        conversation_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        message_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+
+    MessageReaction:
+      type: object
+      additionalProperties: false
+      required:
+        - emoji
+        - user_id
+      properties:
+        emoji:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Exactly one Unicode emoji grapheme.
+        user_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+
+    MessageReactionSummaryItem:
+      type: object
+      additionalProperties: false
+      required:
+        - emoji
+        - count
+      properties:
+        emoji:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Exactly one Unicode emoji grapheme.
+        count:
+          type: integer
+          minimum: 1
+
+    MessageReactionState:
+      type: object
+      required:
+        - reactions
+        - summary
+      properties:
+        reactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/MessageReaction"
+        summary:
+          type: array
+          items:
+            $ref: "#/components/schemas/MessageReactionSummaryItem"
+
+    MessageReactionUpdatedEvent:
+      allOf:
+        - $ref: "#/components/schemas/MessageReactionState"
+        - type: object
+          required:
+            - conversation_id
+            - message_id
+          properties:
+            conversation_id:
+              type: string
+              pattern: "^[a-fA-F0-9]{24}$"
+            message_id:
+              type: string
+              pattern: "^[a-fA-F0-9]{24}$"
+
+    MessageReactionStateResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              $ref: "#/components/schemas/MessageReactionState"
+
+    MessageReactionDetail:
+      type: object
+      additionalProperties: false
+      required:
+        - emoji
+        - user
+      properties:
+        emoji:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Exactly one Unicode emoji grapheme.
+        user:
+          $ref: "#/components/schemas/MessageSenderInfo"
+
+    MessageReactionDetailsResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/MessageReactionDetail"
+
+    GroupUpdatedEvent:
+      type: object
+      required:
+        - conversation_id
+        - change_type
+        - actor_id
+        - affected_user_ids
+      properties:
+        conversation_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        change_type:
+          type: string
+          enum: [info_updated, group_created, members_added, member_removed, member_left, admin_granted, admin_revoked, admin_transferred]
+        actor_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        affected_user_ids:
+          type: array
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+
+    ConversationHistoryClearedEvent:
+      type: object
+      required:
+        - conversation_id
+        - cleared_at
+      properties:
+        conversation_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        cleared_at:
+          type: string
+          format: date-time
+
+    # Base response schemas
+    SuccessResponse:
+      type: object
+      properties:
+        statusCode:
+          type: integer
+          example: 200
+        message:
+          type: string
+          example: "Operation successful"
+      required:
+        - statusCode
+        - message
+
+    ConversationLastMessagePreview:
+      type: object
+      required:
+        - sender_id
+        - sender_info
+        - kind
+        - system_event_type
+        - content
+        - message_type
+      properties:
+        message_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        sender_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        sender_info:
+          allOf:
+            - $ref: "#/components/schemas/MessageSenderInfo"
+          nullable: true
+        kind:
+          type: string
+          enum: [user, system]
+          nullable: true
+        system_event_type:
+          type: string
+          enum:
+            - group_created
+            - member_added
+            - member_left
+            - member_kicked
+            - admin_granted
+            - admin_revoked
+            - admin_transferred_and_left
+          nullable: true
+        content:
+          type: string
+        message_type:
+          type: string
+          enum: [text, image, video, audio, file]
+
+    ConversationSummary:
+      type: object
+      description: Actor-normalized direct or group conversation. Internal history cutoff markers and preview overrides are not exposed.
+      required:
+        - _id
+        - type
+        - last_message_at
+        - last_message_preview
+        - is_pinned
+        - created_at
+        - updated_at
+      properties:
+        _id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        type:
+          type: string
+          enum: [direct, group]
+        last_message_at:
+          type: string
+          format: date-time
+        last_message_preview:
+          $ref: "#/components/schemas/ConversationLastMessagePreview"
+        is_pinned:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        partner_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        partner_info:
+          allOf:
+            - $ref: "#/components/schemas/MessageSenderInfo"
+          nullable: true
+        name:
+          type: string
+        avatar_url:
+          type: string
+          format: uri
+        members:
+          type: array
+          items:
+            type: object
+        unread_message_count:
+          type: integer
+          minimum: 0
+        last_read_message_id:
+          type: string
+          nullable: true
+          pattern: "^[a-fA-F0-9]{24}$"
+        last_read_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ConversationOpenResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              type: object
+              required:
+                - success
+                - reopened_at
+                - conversation
+              properties:
+                success:
+                  type: boolean
+                  example: true
+                reopened_at:
+                  type: string
+                  format: date-time
+                conversation:
+                  $ref: "#/components/schemas/ConversationSummary"
+
+    GroupConversationLookupItem:
+      type: object
+      required:
+        - _id
+        - name
+        - member_count
+        - is_hidden
+      properties:
+        _id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        name:
+          type: string
+        avatar_url:
+          type: string
+          format: uri
+        member_count:
+          type: integer
+          minimum: 1
+        is_hidden:
+          type: boolean
+
+    GroupConversationLookupPageResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              type: object
+              required:
+                - groups
+                - next_cursor
+                - has_next_page
+              properties:
+                groups:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/GroupConversationLookupItem"
+                next_cursor:
+                  type: string
+                  nullable: true
+                  pattern: "^[a-fA-F0-9]{24}$"
+                has_next_page:
+                  type: boolean
+
+    MediaMetadata:
+      type: object
+      required:
+        - _id
+        - url
+        - type
+        - status
+      properties:
+        _id:
+          type: string
+        url:
+          type: string
+          format: uri
+        thumbnail:
+          type: string
+          format: uri
+        type:
+          type: string
+          enum: [image, video, audio]
+        status:
+          type: string
+          enum: [ready]
+
+    MessageSenderInfo:
+      type: object
+      required:
+        - _id
+        - name
+        - username
+      properties:
+        _id:
+          type: string
+        name:
+          type: string
+        username:
+          type: string
+        avatar:
+          type: string
+
+    MessageReplyPreview:
+      type: object
+      required:
+        - _id
+        - sender_info
+        - content
+        - status
+      properties:
+        _id:
+          type: string
+        sender_info:
+          allOf:
+            - $ref: "#/components/schemas/MessageSenderInfo"
+          nullable: true
+        content:
+          type: string
+          maxLength: 140
+        media_type:
+          type: string
+          enum: [image, video, audio]
+        status:
+          type: string
+          enum: [sent, revoked]
+
+    ConversationMessage:
+      type: object
+      required:
+        - _id
+        - conversation_id
+        - conversation_type
+        - sender_id
+        - sender_info
+        - reply_to
+        - content
+        - media_ids
+        - send_at
+        - status
+        - reactions
+      properties:
+        _id:
+          type: string
+        conversation_id:
+          type: string
+        conversation_type:
+          type: string
+          enum: [direct, group]
+        sender_id:
+          type: string
+        kind:
+          type: string
+          enum: [user, system]
+        system_event_type:
+          type: string
+          enum: [group_created, member_added, member_left, member_kicked, admin_granted, admin_revoked, admin_transferred_and_left]
+        affected_user_ids:
+          type: array
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+        context:
+          type: object
+          additionalProperties: true
+        sender_info:
+          allOf:
+            - $ref: "#/components/schemas/MessageSenderInfo"
+          nullable: true
+        reply_to_message_id:
+          type: string
+          nullable: true
+        mention_user_ids:
+          type: array
+          description: Resolved current group member IDs mentioned by explicit ID or @username. New direct messages return an empty array.
+          items:
+            type: string
+            pattern: "^[a-fA-F0-9]{24}$"
+        client_message_id:
+          type: string
+          description: Present when the sender supplied an idempotency key.
+        origin_message_id:
+          type: string
+          pattern: "^[a-fA-F0-9]{24}$"
+        is_forwarded:
+          type: boolean
+        reply_to:
+          allOf:
+            - $ref: "#/components/schemas/MessageReplyPreview"
+          nullable: true
+        content:
+          type: string
+        media_ids:
+          type: array
+          items:
+            type: string
+        medias_info:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaMetadata"
+        send_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [sent, revoked, deleted]
+        reactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/MessageReaction"
+    MessagePageData:
+      type: object
+      required:
+        - messages
+        - next_cursor
+        - has_next_page
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationMessage"
+        next_cursor:
+          type: string
+          nullable: true
+        has_next_page:
+          type: boolean
+
+    MessagePageResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              $ref: "#/components/schemas/MessagePageData"
+
+    MessageContextData:
+      type: object
+      required:
+        - messages
+        - target_message_id
+        - older_cursor
+        - newer_cursor
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationMessage"
+        target_message_id:
+          type: string
+        older_cursor:
+          type: string
+          nullable: true
+        newer_cursor:
+          type: string
+          nullable: true
+
+    MessageContextResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              $ref: "#/components/schemas/MessageContextData"
+
+    # Token related schemas
+    TokenData:
+      type: object
+      properties:
+        access_token:
+          type: string
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjc2MDU5NGRjMzQ4YzIzMzEwMzQ2YjkwIiwidG9rZW5fdHlwZSI6ImFjY2Vzc190b2tlbiIsInZlcmlmeSI6MSwiaWF0IjoxNzM0Mzc0ODA1LCJleHAiOjE3MzQzNzU3MDV9.xyz123"
+        refresh_token:
+          type: string
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjc2MDU5NGRjMzQ4YzIzMzEwMzQ2YjkwIiwidG9rZW5fdHlwZSI6InJlZnJlc2hfdG9rZW4iLCJ2ZXJpZnkiOjEsImlhdCI6MTczNDM3NDgwNSwiZXhwIjoxNzM3MDUzMjA1fQ.abc456"
+      required:
+        - access_token
+        - refresh_token
+
+    AuthTokenResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/TokenData"
+
+    # Request schemas
+    RegisterRequest:
+      type: object
+      required:
+        - name
+        - email
+        - password
+        - confirm_password
+        - date_of_birth
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: "John Doe"
+          description: "User's full name"
+        email:
+          type: string
+          format: email
+          example: "user@example.com"
+          description: "User's email address"
+        password:
+          type: string
+          minLength: 6
+          example: "P@ssw0rd123"
+          description: "Password must contain at least 6 characters with uppercase, lowercase, number and special character"
+        confirm_password:
+          type: string
+          minLength: 6
+          example: "P@ssw0rd123"
+          description: "Must match the password field"
+        date_of_birth:
+          type: string
+          pattern: '^\d{4}-\d{2}-\d{2}$'
+          example: "1990-01-01"
+          description: "Date of birth in YYYY-MM-DD format"
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          example: "user@example.com"
+        password:
+          type: string
+          example: "P@ssw0rd123"
+
+    RefreshTokenRequest:
+      type: object
+      required:
+        - refresh_token
+      properties:
+        refresh_token:
+          type: string
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjc2MDU5NGRjMzQ4YzIzMzEwMzQ2YjkwIiwidG9rZW5fdHlwZSI6InJlZnJlc2hfdG9rZW4iLCJ2ZXJpZnkiOjEsImlhdCI6MTczNDM3NDgwNSwiZXhwIjoxNzM3MDUzMjA1fQ.abc456"
+
+    EmailRequest:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+          example: "user@example.com"
+
+    TokenRequest:
+      type: object
+      required:
+        - token
+      properties:
+        token:
+          type: string
+          example: "verification-token-here"
+
+    ChangePasswordRequest:
+      type: object
+      required:
+        - old_password
+        - new_password
+        - confirm_password
+      properties:
+        old_password:
+          type: string
+          example: "P@ssw0rd123"
+          description: "Current password"
+        new_password:
+          type: string
+          minLength: 6
+          example: "P@ssw0rd1234"
+          description: "New password must contain at least 6 characters with uppercase, lowercase, number and special character"
+        confirm_password:
+          type: string
+          minLength: 6
+          example: "P@ssw0rd1234"
+          description: "Must match the new password field"
+
+    ResetPasswordRequest:
+      type: object
+      required:
+        - token
+        - new_password
+      properties:
+        token:
+          type: string
+          example: "verified-reset-token"
+          description: "The verified reset token from verify-forgot-password endpoint"
+        new_password:
+          type: string
+          minLength: 6
+          example: "P@ssw0rd1234"
+          description: "New password must contain at least 6 characters with uppercase, lowercase, number and special character"
+
+    Error:
+      type: object
+      properties:
+        statusCode:
+          type: integer
+          example: 400
+          description: HTTP status code
+        message:
+          type: string
+          example: "Validation failed"
+          description: Error message describing what went wrong
+        error:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+          example:
+            "body.email": ["Email must be valid"]
+            "body.password": ["Password is required"]
+          description: Detailed validation errors (optional, only present for validation failures)
+        code:
+          type: string
+          description: Stable optional application error code; clients should branch on this value instead of parsing message text.
+          example: "GROUP_SOLE_ADMIN_CANNOT_LEAVE"
+      required:
+        - statusCode
+        - message
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
