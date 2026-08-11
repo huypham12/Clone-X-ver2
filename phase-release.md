@@ -395,74 +395,79 @@ X-ver2: npm run prettier → exit 0
 
 ---
 
-## Phase 3 — Vá dependency high severity theo phạm vi an toàn
+## Phase 3 — Dependency cleanup và bản vá tối thiểu
 
-**Trạng thái: Chưa triển khai.**
+**Trạng thái: Đã triển khai ngày 2026-08-11.**
 
 **Mục tiêu**
 
-Giảm rủi ro dễ bị interviewer/security scanner phát hiện bằng removal hoặc patch/minor update an toàn; không đổi framework/kiến trúc chỉ để đưa audit count về 0.
+Loại bỏ dependency không dùng và áp dụng các bản vá patch/minor cần thiết cho runtime công khai. Phase này không cố đưa mọi advisory về 0, không nâng major và không thay đổi kiến trúc.
 
 **Phụ thuộc**
 
-- Phase 2 để lint là regression gate hữu ích.
+- Phase 2 để lint/build là regression gate.
 
-### 3.1. Backend dependency cleanup
+### 3.1. Cách thực hiện giới hạn
 
-Kiểm tra và gỡ dependency trực tiếp không có source import:
+Chỉ thực hiện hai batch, một cho mỗi repository:
 
-- `bcryptjs`, `brcypt` khi source chỉ dùng `bcrypt`.
-- package `crypto` vì source dùng Node built-in `crypto`.
-- `resend`, SendGrid SDK và email-provider package khác sau khi email đã ra khỏi release scope.
-- `yamljs`, `zx`, `slash`, `lodash`, `mime` hoặc package khác chỉ sau khi `rg` xác nhận không có runtime/script consumer.
-- Chuyển `@types/*` đang nằm trong `dependencies` về `devDependencies` nếu runtime không cần.
+1. **Backend:** dùng `rg` xác nhận dependency trực tiếp không có consumer rồi gỡ cùng type package liên quan; cập nhật Express, Socket.IO, JWT và YAML trong major hiện tại.
+2. **Frontend:** cập nhật Next.js và `eslint-config-next` đồng bộ tới bản stable nhỏ nhất sửa advisory; giữ Axios/Socket.IO client nếu bản hiện tại đã an toàn; chỉ chuyển package sang `devDependencies` khi source/build không import package đó trực tiếp.
 
-Sau đó nâng theo nhóm, ưu tiên patch/minor và package cha có đường nâng tương thích:
+Quy tắc tiết kiệm thời gian và token:
 
-1. Axios/follow-redirects/form-data.
-2. Express/body-parser/path-to-regexp/qs.
-3. Socket.IO/engine.io/socket.io-parser/ws/adapter.
-4. jsonwebtoken/jws.
-5. Sharp/libvips.
-6. YAML/BullMQ/nanoid và transitive còn lại.
+- Chỉ audit một lần ở baseline và một lần sau khi hoàn tất cả hai batch; không in toàn bộ JSON nếu chỉ cần count/path.
+- Chỉ cập nhật lockfile một lần cho mỗi repository; không chạy `npm ci` sau từng package hoặc từng advisory.
+- Không dùng `npm audit fix --force`, không thêm override transitive và không nâng major trong phase này.
+- Chạy toàn bộ gate đúng một vòng cuối. Nếu một gate lỗi, chỉ sửa và chạy lại gate đó, tối đa hai lần trước khi dừng và ghi blocker.
+- Advisory chỉ có breaking fix hoặc không reachable được ghi nhận; không tiếp tục lặp command chỉ để đạt audit count bằng 0.
 
-Breaking update như Sharp chỉ làm khi advisory reachable trên luồng demo hoặc bản hiện tại gây lỗi deploy; phải có commit và smoke media riêng.
+### 3.2. Gate cuối duy nhất
 
-### 3.2. Frontend dependency update
-
-1. Nâng Next.js lên bản stable nhỏ nhất đã chứa bản vá theo advisory và tương thích React hiện tại; không migration major chỉ để audit đẹp.
-2. Nâng PostCSS/Sharp theo dependency tree của Next; không ép một transitive version chưa được Next hỗ trợ.
-3. Nâng Axios và Socket.IO client tương thích backend.
-4. Audit các dependency tool/runtime bị kéo bởi package UI; gỡ package không dùng trước khi override.
-
-### 3.3. Gate sau từng nhóm
+Frontend:
 
 ```text
 npm ci
-npm audit --omit=dev
 npx tsc --noEmit
 npm run build
 npm run lint
+npm audit --omit=dev
 ```
 
-Backend chạy thêm:
+Backend:
 
 ```text
+npm ci
+npx tsc --noEmit
+npm run build
+npm run lint
 npm run test:notification-handoff
 npm run test:notification-relevance
+npm audit --omit=dev
 ```
+
+Sau gate, chạy `npm ls --omit=dev --depth=0` một lần ở mỗi repo và smoke có mục tiêu cho login, Socket.IO connect và media upload nếu dependency liên quan đã đổi.
 
 **Gate hoàn thành**
 
 - Không còn high advisory runtime reachable có fix patch/minor hoặc removal an toàn.
-- Không có `npm ls` invalid/extraneous dependency.
-- Lockfile được commit cùng package manifest.
-- Login, Socket.IO connect và media upload smoke cục bộ pass.
-- Nếu còn advisory transitive không reachable, chưa có upstream fix hoặc chỉ có breaking migration không đáng cho portfolio, README security note ghi package/advisory, đường reachability, lý do chấp nhận và điều kiện xem lại; không chỉ ghi “ignore”.
+- Không có dependency direct rõ ràng không dùng; `npm ls` exit 0 và không có direct dependency invalid/missing. Optional platform artifact do npm cài cho native package không chặn gate nếu lockfile hợp lệ.
+- Lockfile khớp package manifest; frontend/backend typecheck, build và lint pass.
+- Static notification handoff/relevance backend pass.
+- Advisory còn lại, nếu có, được ghi rõ reachability và lý do chấp nhận.
+
+**Kết quả triển khai 2026-08-11**
+
+- Backend gỡ các package không có source consumer, chuyển type package về `devDependencies`, cập nhật Express/JWT/Socket.IO/YAML và các transitive patch trong range.
+- Frontend cập nhật đồng bộ Next.js/ESLint config lên `16.3.0`; giữ `shadcn` trong `dependencies` vì `globals.css` import `shadcn/tailwind.css`, đồng thời cập nhật các transitive advisory trong range.
+- `npm audit --omit=dev`: backend `0`, frontend `0`.
+- Typecheck/build/lint hai repo pass; frontend còn một lint warning không chặn release tại `src/services/api.client.ts`.
+- Notification handoff và notification relevance backend pass.
+- Không khởi động MongoDB/Redis/Cloudinary chỉ để smoke dependency patch; login, Socket.IO và media smoke trên môi trường đầy đủ vẫn thuộc P0 của Phase 8.
 
 **Rollback**
 
-- Revert theo nhóm dependency, không rollback toàn bộ Phase 3 cùng lúc.
+- Backend và frontend là hai batch độc lập, có thể revert riêng.
 - Không giữ override gây duplicate major hoặc peer-dependency invalid.
 
 ---
