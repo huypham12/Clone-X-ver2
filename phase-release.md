@@ -1080,7 +1080,7 @@ Nếu thiếu Docker daemon, Docker gate là `NOT VERIFIED — Docker daemon req
 
 ## Phase 8 — Managed deployment và production smoke
 
-**Trạng thái: Chưa triển khai.**
+**Trạng thái: Đã hoàn thành.**
 
 **Mục tiêu**
 
