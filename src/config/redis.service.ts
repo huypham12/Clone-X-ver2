@@ -1,11 +1,13 @@
-import { createClient, RedisClientType } from 'redis'
+import { createClient } from 'redis'
 import { envConfig } from './getEnvConfig'
 
 const REDIS_STARTUP_TIMEOUT_MS = 10_000
+const createResp2Client = (url: string, name: string) => createClient({ url, name, RESP: 2 })
+type AppRedisClient = ReturnType<typeof createResp2Client>
 
 export interface SocketAdapterRedisClients {
-  pubClient: RedisClientType
-  subClient: RedisClientType
+  pubClient: AppRedisClient
+  subClient: AppRedisClient
 }
 
 export interface RedisClientStatus {
@@ -14,16 +16,13 @@ export interface RedisClientStatus {
 }
 
 class RedisService {
-  private readonly client: RedisClientType
+  private readonly client: AppRedisClient
   private socketClients?: SocketAdapterRedisClients
   private connectPromise?: Promise<void>
   private disconnectPromise?: Promise<void>
 
   constructor() {
-    this.client = createClient({
-      url: envConfig.redis.cacheUrl,
-      name: 'clone-x-cache'
-    })
+    this.client = createResp2Client(envConfig.redis.cacheUrl, 'clone-x-cache')
     this.registerErrorHandler(this.client, 'cache')
   }
 
@@ -42,7 +41,7 @@ class RedisService {
     if (this.disconnectPromise) return this.disconnectPromise
 
     const clients = [this.client, this.socketClients?.pubClient, this.socketClients?.subClient].filter(
-      (client): client is RedisClientType => client !== undefined
+      (client): client is AppRedisClient => client !== undefined
     )
     this.disconnectPromise = Promise.allSettled(clients.map((client) => this.closeClient(client))).then(() => undefined)
     try {
@@ -74,7 +73,7 @@ class RedisService {
     await this.client.del(key)
   }
 
-  get clientInstance(): RedisClientType {
+  get clientInstance(): AppRedisClient {
     return this.client
   }
 
@@ -104,10 +103,7 @@ class RedisService {
       const clients = [this.client]
       if (envConfig.socket.adapterMode === 'redis') {
         if (!this.socketClients) {
-          const pubClient = createClient({
-            url: envConfig.redis.socketUrl,
-            name: 'clone-x-socket-pub'
-          })
+          const pubClient = createResp2Client(envConfig.redis.socketUrl, 'clone-x-socket-pub')
           const subClient = pubClient.duplicate()
           this.registerErrorHandler(pubClient, 'socket-pub')
           this.registerErrorHandler(subClient, 'socket-sub')
@@ -135,12 +131,12 @@ class RedisService {
     }
   }
 
-  private async ensureConnected(client: RedisClientType): Promise<void> {
+  private async ensureConnected(client: AppRedisClient): Promise<void> {
     if (!client.isOpen) await client.connect()
     await client.ping()
   }
 
-  private async closeClient(client: RedisClientType): Promise<void> {
+  private async closeClient(client: AppRedisClient): Promise<void> {
     if (!client.isOpen) return
     if (client.isReady) {
       await client.quit()
@@ -149,9 +145,13 @@ class RedisService {
     client.destroy()
   }
 
-  private registerErrorHandler(client: RedisClientType, clientName: string): void {
-    client.on('error', (error: Error) => {
-      console.error(`[Redis ${clientName}] connection error (${error.name})`)
+  private registerErrorHandler(client: AppRedisClient, clientName: string): void {
+    client.on('error', (error: Error & { code?: string }) => {
+      console.error(`[Redis ${clientName}] connection error`, {
+        name: error.name,
+        code: error.code,
+        message: error.message
+      })
     })
   }
 }
