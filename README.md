@@ -59,7 +59,7 @@ Không commit `.env`, URI, password, token hoặc credential. `.env.example` là
 | --- | --- | --- |
 | App | `PORT` | Render cấp runtime; app bind trên port này |
 | Proxy/CORS | `TRUST_PROXY_HOPS`, `CORS_ORIGIN` | `1`; target exact `https://x.cacbonat.top` |
-| MongoDB | `MONGODB_URI`, `DB_NAME` | URI là secret; database mặc định Blueprint `x_clone` |
+| MongoDB | `MONGODB_URI` hoặc `DB_CLUSTER_HOST` + `DB_USERNAME` + `DB_PASSWORD`; `DB_NAME` | Local có thể dùng URI; Blueprint portfolio dùng bộ ba `DB_*` và database `Clone-X-ver2` |
 | Redis | `REDIS_URL` | Redis TCP URI là secret |
 | Redis optional | `REDIS_CACHE_URL`, `REDIS_QUEUE_URL`, `REDIS_SOCKET_URL` | Để trống/không set thì fallback `REDIS_URL` |
 | Auth | `JWT_SECRET_ACCESS_TOKEN`, `JWT_SECRET_REFRESH_TOKEN` | Hai secret độc lập |

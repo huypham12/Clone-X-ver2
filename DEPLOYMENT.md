@@ -19,8 +19,8 @@ Backend và frontend là hai Git repository độc lập. Khi import từng repo
 
 1. Trong MongoDB Atlas, tạo project/cluster demo riêng ở free tier hiện có tại ngày deploy.
 2. Tạo database user riêng và network access tối thiểu khả dụng cho Render.
-3. Chọn database name `x_clone` hoặc cập nhật `DB_NAME` nhất quán.
-4. Lấy `MONGODB_URI` vào secret manager; không paste URI vào source, build arg, screenshot hoặc log.
+3. Chọn database name `Clone-X-ver2` hoặc cập nhật `DB_NAME` nhất quán trong Blueprint.
+4. Lấy cluster host, database username và password để nhập lần lượt vào `DB_CLUSTER_HOST`, `DB_USERNAME` và `DB_PASSWORD` trong Render secret manager. Không paste credential vào source, build arg, screenshot hoặc log. Runtime vẫn hỗ trợ `MONGODB_URI` cho local/alternative deployment, nhưng Blueprint portfolio dùng bộ ba `DB_*` và không set đồng thời hai cách.
 5. Trước deploy, chạy một transaction `withTransaction()` an toàn trên database demo và xác nhận commit/abort hoạt động.
 
 Evidence cần ghi: tier, region, MongoDB version, transaction PASS/FAIL, ngày xác minh và error đã redact nếu có. Không gửi URI/user/password.
@@ -54,7 +54,7 @@ Tham chiếu: [Cloudinary pricing](https://cloudinary.com/pricing).
 1. Chọn New → Blueprint và kết nối backend repository.
 2. Dùng `render.yaml` ở root. Xác nhận `runtime: docker`, `plan: free`, `region: singapore`, `numInstances: 1`, `./Dockerfile`, `/health/ready` theo Blueprint.
 3. Root Directory để `.` hoặc trống. Không set Docker Command để image dùng `CMD ["npm", "run", "start:prod"]`.
-4. Nhập các giá trị `sync: false`: `MONGODB_URI`, `REDIS_URL`, ba Cloudinary keys, hai JWT secrets và `CORS_ORIGIN` tạm phù hợp URL frontend đang kiểm tra. Không gửi lại giá trị secret.
+4. Nhập các giá trị `sync: false`: `DB_CLUSTER_HOST`, `DB_USERNAME`, `DB_PASSWORD`, `REDIS_URL`, ba Cloudinary keys, hai JWT secrets và `CORS_ORIGIN` tạm phù hợp URL frontend đang kiểm tra. Không gửi lại giá trị secret.
 5. Xác nhận preset `SOCKET_ADAPTER_MODE=memory`, `MEDIA_PROCESSING_MODE=inline`, `CONVERSATION_MESSAGE_CACHE_MODE=off` và notification flags từ Blueprint.
 6. Deploy. Trong log an toàn cần thấy database/index/Redis ready, media inline, notification worker/outbox enabled và server listening; không được thấy URI, token hoặc password.
 7. Trên `.onrender.com`, kiểm tra lần lượt `/health/live` → `200`, `/health/ready` → `200`, `/api-docs` load được. Tách lỗi deploy khỏi DNS trước khi đi tiếp.

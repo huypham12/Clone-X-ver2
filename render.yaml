@@ -8,7 +8,11 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health/ready
     envVars:
-      - key: MONGODB_URI
+      - key: DB_CLUSTER_HOST
+        sync: false
+      - key: DB_USERNAME
+        sync: false
+      - key: DB_PASSWORD
         sync: false
       - key: REDIS_URL
         sync: false
@@ -25,7 +29,7 @@ services:
       - key: CORS_ORIGIN
         sync: false
       - key: DB_NAME
-        value: x_clone
+        value: Clone-X-ver2
       - key: TRUST_PROXY_HOPS
         value: '1'
       - key: ACCESS_TOKEN_EXPIRES_IN
