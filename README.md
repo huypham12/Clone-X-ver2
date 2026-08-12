@@ -1,138 +1,149 @@
 # X-ver2 backend
 
-Node.js/TypeScript backend cho X Clone. MongoDB là nguồn dữ liệu bền, Redis phục vụ cache/Socket.IO/BullMQ và notification được xử lý qua typed domain event + transactional outbox.
+Node.js/TypeScript backend cho X Clone portfolio deployment. MongoDB giữ dữ liệu bền và transactional outbox; Redis phục vụ BullMQ, presence/cache best-effort; Cloudinary giữ media bền. Bản portfolio chạy một API process có HTTP, Socket.IO và worker cùng process, không tự nhận production-ready.
+
+## Demo
+
+**URL sẽ được điền sau Phase 8.** Contract dự kiến:
+
+- Frontend: `https://x.cacbonat.top`
+- Backend API/Socket.IO: `https://api.x.cacbonat.top`
+- API docs: `https://api.x.cacbonat.top/api-docs`
+
+DNS, HTTPS, provider URL và runtime production hiện là **NOT VERIFIED**. Không có placeholder nào được coi là deployment đang hoạt động.
+
+## Kiến trúc portfolio
+
+```mermaid
+flowchart LR
+  Browser[Browser / Next.js]
+  API[Node.js API + Socket.IO\none process / one instance]
+  Mongo[(MongoDB\nsource of truth + outbox)]
+  Redis[(Redis TCP\nBullMQ + best-effort cache)]
+  Cloudinary[(Cloudinary\ndurable media)]
+  Workers[Notification, fan-out, media workers\nin same process]
+
+  Browser -->|HTTPS + credentials| API
+  Browser <-->|Socket.IO| API
+  API --> Mongo
+  API --> Redis
+  API --> Cloudinary
+  API --> Workers
+  Workers --> Mongo
+  Workers --> Redis
+```
+
+MongoDB deployment phải hỗ trợ multi-document transaction vì business flow dùng `withTransaction()`. Portfolio dùng `SOCKET_ADAPTER_MODE=memory`, nên một instance là invariant; không có Redis emitter/process-role code trong release này.
 
 ## Chạy local
 
-Yêu cầu:
-
-- Node.js và dependencies từ `package-lock.json`.
-- MongoDB hỗ trợ multi-document transaction.
-- Redis TCP cho cache và BullMQ; Socket.IO chỉ dùng Redis khi chọn adapter `redis`.
-- File `.env` local hợp lệ. Không commit token, mật khẩu hoặc connection string.
-
-Tạo file cấu hình từ contract mẫu:
+Yêu cầu Node.js 22, MongoDB có transaction, Redis TCP và Cloudinary credential cho media.
 
 ```powershell
 Copy-Item .env.example .env
-```
-
-Trên macOS/Linux, dùng `cp .env.example .env`. Điền MongoDB, Cloudinary và hai JWT secret bắt buộc trước khi start. Sinh riêng từng JWT secret mạnh bằng Node.js (chạy lệnh hai lần, không tái sử dụng cùng một giá trị):
-
-```bash
-node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"
-```
-
-Các biến collection và feature flag đã có default. Một `REDIS_URL` là đủ cho local; các URL Redis theo capability để trống sẽ fallback về URL này.
-
-```bash
+docker compose up -d redis
 npm ci
 npm run build
 npm run start:dev
 ```
 
-Startup kết nối MongoDB, ensure index, kiểm tra read-state/lifecycle baseline, kết nối Redis rồi mới mở HTTP/Socket.IO. Dữ liệu hiện chỉ dùng local/test; nếu startup báo baseline legacy không tương thích, reset đồng thời các collection được nêu trong lỗi thay vì tạo migration:
+Trên macOS/Linux dùng `cp .env.example .env`. Redis Compose bind riêng `127.0.0.1:6379`, bật AOF `everysec`, `noeviction`, volume local và healthcheck; file này không dành cho Render production.
 
-- `notifications`, `notificationActors`, `notificationStates`;
-- `messages`, `conversationReadStates`, `userMessageStates`;
-- `tweets` nếu còn Retweet relation trùng trước unique index.
+Startup kết nối MongoDB, tạo index, kết nối Redis cache/BullMQ rồi mới listen. API docs đọc `./swagger.yaml`, nên Docker runtime cố định working directory `/app` và copy file này.
 
-## Redis và runtime preset
+## Env contract
 
-Preset portfolio một process trong `.env.example`:
+Không commit `.env`, URI, password, token hoặc credential. `.env.example` là contract local không chứa giá trị thật.
 
-| Capability | Giá trị | Hành vi |
+| Nhóm | Biến | Production |
 | --- | --- | --- |
-| Socket.IO | `SOCKET_ADAPTER_MODE=memory` | Dùng adapter in-memory, không mở Redis pub/sub. |
-| Media | `MEDIA_PROCESSING_MODE=inline` | Upload durable lên Cloudinary, hoàn thiện metadata trong request và trả `ready`. |
-| Message cache | `CONVERSATION_MESSAGE_CACHE_MODE=off` | Đọc message từ MongoDB và không ghi hydrated message vào Redis. |
-| Queue | concurrency `1`, attempts `5` | Giữ tải media worker ở mức bảo thủ. |
+| App | `PORT` | Render cấp runtime; app bind trên port này |
+| Proxy/CORS | `TRUST_PROXY_HOPS`, `CORS_ORIGIN` | `1`; target exact `https://x.cacbonat.top` |
+| MongoDB | `MONGODB_URI`, `DB_NAME` | URI là secret; database mặc định Blueprint `x_clone` |
+| Redis | `REDIS_URL` | Redis TCP URI là secret |
+| Redis optional | `REDIS_CACHE_URL`, `REDIS_QUEUE_URL`, `REDIS_SOCKET_URL` | Để trống/không set thì fallback `REDIS_URL` |
+| Auth | `JWT_SECRET_ACCESS_TOKEN`, `JWT_SECRET_REFRESH_TOKEN` | Hai secret độc lập |
+| Token TTL | `ACCESS_TOKEN_EXPIRES_IN`, `REFRESH_TOKEN_EXPIRES_IN` | `15m`, `7d` |
+| Cloudinary | `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Nhập trong provider secret manager |
+| Runtime mode | `SOCKET_ADAPTER_MODE`, `MEDIA_PROCESSING_MODE`, `CONVERSATION_MESSAGE_CACHE_MODE` | `memory`, `inline`, `off` |
+| Queue | `MEDIA_WORKER_CONCURRENCY`, `MEDIA_QUEUE_MAX_ATTEMPTS` | `1`, `5` |
+| Retention | `QUEUE_COMPLETED_RETENTION_COUNT`, `QUEUE_FAILED_RETENTION_COUNT` | `300`, `500` |
+| Upload | `MAX_IMAGE_UPLOAD_MB`, `MAX_VIDEO_UPLOAD_MB`, `MAX_AUDIO_UPLOAD_MB` | `10`, `20`, `10` |
+| Notification | `NOTIFICATION_*_ENABLED` | Các flag trong `render.yaml` bật |
 
-`REDIS_CACHE_URL`, `REDIS_QUEUE_URL` và `REDIS_SOCKET_URL` là optional và lần lượt fallback về `REDIS_URL`. Cả `redis://` và `rediss://` đều được chấp nhận; scheme không tự đổi adapter hoặc processing mode. Readiness vẫn ping MongoDB, Redis cache và BullMQ Redis.
+Collection override và toàn bộ default có trong `.env.example`. `CORS_ORIGIN` chấp nhận CSV cho local, nhưng deployment portfolio phải dùng exact origin, không dùng `*` với credentials.
 
-Notification và fan-out queue dùng chung exponential backoff. Mỗi queue giữ tối đa `QUEUE_COMPLETED_RETENTION_COUNT=300` job thành công trong 1 giờ và `QUEUE_FAILED_RETENTION_COUNT=500` job lỗi trong 7 ngày. Tăng count bằng env khi có quota lớn hơn, không sửa từng queue.
+## Redis và runtime modes
 
-Chỉ cân nhắc `CONVERSATION_MESSAGE_CACHE_MODE=full` khi Redis transport và mạng đủ tin cậy: mode này lưu hydrated message payload trong sorted set. Portfolio dùng Redis không TLS phải giữ `off`; cache miss, dữ liệu cache lỗi hoặc Redis cache lỗi đều fallback về MongoDB. Presence chỉ lưu user ID/timestamp best-effort có TTL; friend ID cache có TTL 5 phút.
+| Capability | Portfolio | Hành vi |
+| --- | --- | --- |
+| Socket.IO | `memory` | Không mở Redis pub/sub; chỉ đúng với một API instance. |
+| Media | `inline` | Upload Cloudinary durable rồi hoàn tất metadata trong request. |
+| Message cache | `off` | Đọc message từ MongoDB, không ghi full message payload vào Redis. |
+| Notification outbox | `true` | Publisher/worker cùng process; MongoDB outbox cho phép retry backlog. |
 
-Budget connection mục tiêu của preset portfolio là một `node-redis` cache/presence client, một ioredis base cho queue/publisher, connection nội bộ bắt buộc của từng BullMQ worker đang bật và không có Socket.IO pub/sub connection. Đây không phải tổng hard-code: trước public release, chủ dự án cần đo số connection thực tế trên dashboard Redis hoặc bằng `CLIENT LIST` nếu provider cho phép.
+`redis://` và `rediss://` đều được parser hỗ trợ; scheme thật phải lấy từ provider Connect wizard. Version/protocol/TLS/persistence/HA/backup/quota/region là dữ liệu dashboard Phase 8, hiện **NOT VERIFIED**. Không mô tả Redis queue là durable production storage: MongoDB/outbox và durable media record là nguồn phục hồi.
 
-## Media pipeline
+Queue dùng exponential backoff và env-driven count retention. Presence, last-seen và friend-ID cache là best-effort. Trước public release phải đo connection/ops/memory thực tế thay vì dùng connection budget trong source như evidence.
 
-Cả hai processing mode đều upload original lên Cloudinary trước; MongoDB chỉ lưu durable URL/public ID và queue không nhận local filepath:
+## Media durable source và reconciliation
 
-- `inline` là preset portfolio: upload trả `ready` ngay sau khi Cloudinary và MongoDB thành công.
-- `queue` dành cho local/VPS: upload trả `pending`, frontend poll `GET /api/media/:media_id`, worker chuyển record sang `ready` hoặc `failed` sau khi hết retry.
-- Nếu enqueue hoặc Redis tạm lỗi, record durable vẫn ở `pending`; reconciler quét batch nhỏ và tạo lại deterministic job bị thiếu.
-- File tạm được dọn trong `finally`. Nếu Cloudinary thành công nhưng MongoDB insert lỗi, backend thử xóa asset vừa upload.
+- `inline`: Cloudinary upload + MongoDB metadata hoàn tất trước response `ready`.
+- `queue`: response `pending`; job chỉ mang media ID/durable Cloudinary reference, không mang local filepath.
+- Nếu enqueue lỗi, record `pending` vẫn tồn tại và reconciler tạo deterministic missing job.
+- File multipart trong `uploads/...` chỉ là temp ephemeral và được cleanup trong `finally`.
+- Nếu queue mode lỗi khi vận hành, chuyển về `inline` sau khi xử lý/reconcile pending record; không xóa Redis/Mongo tùy tiện.
 
-Giới hạn portfolio mặc định là ảnh/audio 10 MB và video 20 MB, cấu hình bằng `MAX_IMAGE_UPLOAD_MB`, `MAX_AUDIO_UPLOAD_MB` và `MAX_VIDEO_UPLOAD_MB`. Frontend hiện áp dụng đúng các default này; nếu tăng limit backend thì cần đồng bộ giới hạn frontend trước khi public.
-
-## Giới hạn free-tier
-
-- Deploy portfolio dùng một backend instance; Socket.IO memory adapter và realtime notification in-process không hỗ trợ nhiều API instance.
-- Redis Cloud Free được chấp nhận không TLS/HA/persistence/backup; không bật full message cache trên transport này.
-- Redis là cache/queue có thể phục hồi, không phải nguồn duy nhất của message, notification unread hoặc media source.
-- Cold start, quota hosting và tốc độ Cloudinary có thể làm request đầu tiên hoặc upload lâu hơn bình thường.
-
-## Manual smoke trước public release
-
-Các mục sau do chủ dự án kiểm tra trên web; chưa chạy trong implementation này:
-
-1. `NOT VERIFIED — manual smoke required`: preset portfolio với một backend process, Socket.IO memory, notification realtime in-process và media inline.
-2. `NOT VERIFIED — manual smoke required`: queue preset local trả `pending` rồi `ready`; restart backend và missing-job reconciliation vẫn hoàn tất media.
-3. `NOT VERIFIED — manual smoke required`: Socket.IO adapter `redis` trên một process giữ nguyên room, presence và event contract; không suy ra multi-instance đã pass.
-4. `NOT VERIFIED — manual smoke required`: cache `off` vẫn send/receive/paginate chat và Redis không chứa full message payload.
-5. `NOT VERIFIED — manual smoke required`: cache `full` với Redis local có cache hit, MongoDB fallback và invalidation đúng.
-6. `NOT VERIFIED — manual smoke required`: image/video/audio success và failure đều cleanup file tạm; restart không làm media đã durable mất URL.
-
-Mất sạch Redis và exactly-once toàn hệ thống chỉ là giới hạn được tài liệu hóa, không phải gate portfolio. Để kiểm tra reconciler local, có thể xóa một media job và quan sát deterministic job được tạo lại từ record `pending`.
-
-## Nâng cấp VPS sau này
-
-Chỉ thực hiện khi có nhu cầu scale thật, theo thứ tự:
-
-1. Tách startup composition thành API, notification và media process role.
-2. Thêm Redis implementation cho `RealtimeEmitter` và bật Socket.IO Redis adapter trên API.
-3. Cấu hình sticky session hoặc WebSocket-only khi chạy nhiều API instance.
-4. Tách worker/Redis endpoint và scale concurrency theo số đo.
-5. Sau đó mới cân nhắc signed direct upload hoặc storage driver khác.
-
-## Notification backend
-
-Luồng runtime cuối cùng:
+## Notification và realtime
 
 ```text
 business transaction
 → typed domain event + transactional outbox
 → BullMQ worker
-→ policy
-→ repository + unread state trong transaction
-→ Socket.IO delivery sau commit
+→ policy + repository transaction
+→ in-process RealtimeEmitter after commit
 ```
 
-Các notification feature đã hoàn thành và mặc định bật cho local. Có thể tắt riêng để rollback/debug bằng:
+`NotificationState`, `ConversationReadState` và `UserMessageState` là nguồn REST cho unread reconciliation. `NOTIFICATION_OUTBOX_ENABLED=false` có thể pause publisher/worker mà không xóa pending outbox. Frontend refetch state sau Socket.IO reconnect.
 
-- `NOTIFICATION_OUTBOX_ENABLED`
-- `NOTIFICATION_FOLLOW_OUTBOX_ENABLED`
-- `NOTIFICATION_TWEET_OUTBOX_ENABLED`
-- `NOTIFICATION_SOCIAL_AGGREGATION_ENABLED`
-- `NOTIFICATION_MESSAGE_DIRECTED_ENABLED`
-- `NOTIFICATION_GROUP_MANAGEMENT_ENABLED`
-- `NOTIFICATION_FOLLOWED_TWEET_ENABLED`
+## Auth scope
 
-`NOTIFICATION_OUTBOX_ENABLED=false` tạm dừng publisher/worker nhưng không xóa pending outbox. Message event vẫn commit cùng message; khi bật lại, backlog được xử lý theo các handler flag đang có. Đây là pause có thể replay, không phải discard event.
+Self-registration auto-verifies user và cho phép login ngay. Email verification, forgot/reset password và email recovery không được deploy; không tạo email provider/dummy secret. Refresh/access token hiện vẫn là client-readable cookie contract, là technical debt được ghi nhận thay vì mô tả như auth production hoàn chỉnh.
 
-Không còn unread rollout flag hoặc fallback `countDocuments`; `NotificationState` là nguồn runtime cho notification badge. `ConversationReadState` và `UserMessageState` là nguồn runtime cho inbox unread; message mới không đọc hoặc dual-write `Message.read_by`.
+## Health, Docker và kiểm tra release
 
-Contract tích hợp frontend nằm tại [frontend-notification-contract.md](./frontend-notification-contract.md). Danh sách endpoint tóm tắt ở [endpoint.md](./endpoint.md), OpenAPI ở [swagger.yaml](./swagger.yaml).
-
-## Kiểm tra Phase 18
+- `GET /health/live`: liveness không ping dependency.
+- `GET /health/ready`: ping MongoDB, Redis cache và BullMQ Redis với timeout; trả `503` nếu dependency chưa sẵn sàng.
+- Health routes đứng trước global rate limiter.
+- `GET /api-docs`: Swagger UI từ runtime `swagger.yaml`.
 
 ```bash
 npx tsc --noEmit
 npm run build
 npm run lint
-npm run test:notification-handoff
+docker compose config
+docker compose up -d redis
+docker compose ps
+docker build -t clone-x-api:phase7 .
+docker run --rm --env-file .env.docker.local -p 4000:4000 clone-x-api:phase7
 ```
 
-`test:notification-handoff` là static audit: kiểm tra caller bypass, module boundary, source unread, index bootstrap, ownership/privacy marker, Socket implementation, fan-out enqueue boundary, feature default và độ phủ contract. Phase 18 không chạy load test, fault injection, benchmark hoặc multi-instance verification; backend hiện được xác nhận local/contract-ready, không được mô tả là production-ready.
+Tạo `.env.docker.local` từ `.env` (file này đã bị ignore) và đổi hostname dependency chạy trên host sang `host.docker.internal`; không commit hoặc gửi nội dung file. Docker image multi-stage dùng Node 22 Debian slim, cài production dependency riêng, chạy `USER node` và chỉ chứa `dist`, production dependencies, package manifests, Swagger cùng writable temp upload directories. Không mount persistent volume cho upload.
+
+## Deploy và rollback
+
+Xem [DEPLOYMENT.md](./DEPLOYMENT.md) cho thứ tự MongoDB → Redis → Cloudinary → Render → backend custom domain → Vercel → frontend custom domain, env matrix, evidence cần thu và rollback.
+
+- Render dùng repository backend riêng; Root Directory là `.` hoặc trống, không phải `X-ver2`.
+- `render.yaml` dùng Dockerfile root, `/health/ready`, một instance và không override Docker `CMD`.
+- Native Node fallback chỉ dùng khi có Docker blocker đã xác minh: build `npm ci && npm run build`, start `npm run start:prod`, giữ nguyên health/env contract.
+- Runtime rollback ưu tiên deployment/image trước có env contract tương thích; capability rollback dùng `memory + inline + off`, không khôi phục queue filepath hay full message cache trên transport không phù hợp.
+
+## Known limitations trước deployment
+
+- Một backend instance; không hỗ trợ split-worker/multi-instance realtime.
+- Filesystem upload là ephemeral temp, không phải persistent storage.
+- Free-tier sleep/cold-start có thể ngắt socket và dừng worker tạm thời; hành vi/quãng thời gian thật phải đo Phase 8.
+- Redis loss có thể mất queue/cache best-effort; recovery dựa trên MongoDB/outbox/media pending, không bảo đảm exactly-once toàn hệ thống.
+- Provider tier/quota/TLS/persistence/HA/backup và custom domain/HTTPS đều **NOT VERIFIED** cho tới deployment thật.
+- Một số backend endpoint chưa có frontend UI; đây không phải blocker cho các luồng P0 đã chốt.
