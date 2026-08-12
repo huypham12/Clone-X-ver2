@@ -5,7 +5,7 @@ import js from '@eslint/js'
 import tseslint from 'typescript-eslint'
 
 export default defineConfig([
-  { ignores: ['**/node_modules/**', '**/dist/**', '**/.test-dist/**'] },
+  { ignores: ['**/node_modules/**', '**/dist/**', '**/.test-dist/**', '**/uploads/**'] },
   { files: ['**/*.{js,mjs,cjs,ts}'] },
   {
     files: ['**/*.{js,mjs,cjs,ts}'],
@@ -27,7 +27,7 @@ export default defineConfig([
           semi: false,
           trailingComma: 'none',
           tabWidth: 2,
-          endOfLine: 'auto',
+          endOfLine: 'lf',
           useTabs: false,
           singleQuote: true,
           printWidth: 120,

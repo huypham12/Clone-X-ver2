@@ -127,22 +127,24 @@ export class NotificationPolicyService {
       session
     )
     return {
-      commands: event.payload.direct_recipient_ids.filter((recipient) => eligible.has(recipient.toHexString())).map((recipient) => ({
-        recipient_id: recipient,
-        sender_id: event.actor_id,
-        type: event.payload.notification_type as Exclude<
-          GroupManagementChangedEvent['payload']['notification_type'],
-          null
-        >,
-        target_id: event.payload.conversation_id,
-        target_type: NotificationTargetType.Conversation,
-        context: {
-          system_event_type: event.payload.system_event_type,
-          system_message_id: event.payload.system_message_id,
-          affected_user_ids: event.payload.affected_user_ids
-        },
-        created_at: event.occurred_at
-      }))
+      commands: event.payload.direct_recipient_ids
+        .filter((recipient) => eligible.has(recipient.toHexString()))
+        .map((recipient) => ({
+          recipient_id: recipient,
+          sender_id: event.actor_id,
+          type: event.payload.notification_type as Exclude<
+            GroupManagementChangedEvent['payload']['notification_type'],
+            null
+          >,
+          target_id: event.payload.conversation_id,
+          target_type: NotificationTargetType.Conversation,
+          context: {
+            system_event_type: event.payload.system_event_type,
+            system_message_id: event.payload.system_message_id,
+            affected_user_ids: event.payload.affected_user_ids
+          },
+          created_at: event.occurred_at
+        }))
     }
   }
 
@@ -286,10 +288,7 @@ export class NotificationPolicyService {
     return { commands, primary, current_mention_ids: [...currentMentionIds.values()] }
   }
 
-  async resolveMessagePlan(
-    event: MessageCreatedEvent,
-    session?: ClientSession
-  ): Promise<MessageNotificationPlan> {
+  async resolveMessagePlan(event: MessageCreatedEvent, session?: ClientSession): Promise<MessageNotificationPlan> {
     if (session) {
       const predatesRestore = await this.lifecycleGuard.touchTarget(
         NotificationTargetType.Message,
@@ -356,9 +355,7 @@ export class NotificationPolicyService {
     const context = {
       conversation_id: event.payload.conversation_id,
       conversation_type: event.payload.conversation_type,
-      ...(event.payload.reply_to_message_id
-        ? { reply_to_message_id: event.payload.reply_to_message_id }
-        : {})
+      ...(event.payload.reply_to_message_id ? { reply_to_message_id: event.payload.reply_to_message_id } : {})
     }
     const commands: CreateNotificationCommand[] = []
     for (const mentionId of mentionIds.values()) {

@@ -115,10 +115,7 @@ const createUnhideConversationPipeline = (userId: ObjectId, reopenedAt: Date): D
             input: { $ifNull: ['$history_cleared_by', []] },
             as: 'marker',
             cond: {
-              $and: [
-                { $eq: ['$$marker.user_id', userId] },
-                { $eq: ['$$marker.restore_on_next_message', true] }
-              ]
+              $and: [{ $eq: ['$$marker.user_id', userId] }, { $eq: ['$$marker.restore_on_next_message', true] }]
             }
           }
         }
@@ -127,53 +124,52 @@ const createUnhideConversationPipeline = (userId: ObjectId, reopenedAt: Date): D
     ]
   }
 
-  return [{
-    $set: {
-      hidden_by: {
-        $filter: {
-          input: { $ifNull: ['$hidden_by', []] },
-          as: 'hiddenUserId',
-          cond: { $ne: ['$$hiddenUserId', userId] }
-        }
-      },
-      history_cleared_by: {
-        $map: {
-          input: { $ifNull: ['$history_cleared_by', []] },
-          as: 'marker',
-          in: {
-            $cond: [
-              { $eq: ['$$marker.user_id', userId] },
-              { $mergeObjects: ['$$marker', { restore_on_next_message: false }] },
-              '$$marker'
-            ]
+  return [
+    {
+      $set: {
+        hidden_by: {
+          $filter: {
+            input: { $ifNull: ['$hidden_by', []] },
+            as: 'hiddenUserId',
+            cond: { $ne: ['$$hiddenUserId', userId] }
           }
-        }
-      },
-      muted_by: {
-        $cond: [
-          hasPendingHistoryRestore,
-          {
-            $filter: {
-              input: { $ifNull: ['$muted_by', []] },
-              as: 'mute',
-              cond: { $ne: ['$$mute.user_id', userId] }
+        },
+        history_cleared_by: {
+          $map: {
+            input: { $ifNull: ['$history_cleared_by', []] },
+            as: 'marker',
+            in: {
+              $cond: [
+                { $eq: ['$$marker.user_id', userId] },
+                { $mergeObjects: ['$$marker', { restore_on_next_message: false }] },
+                '$$marker'
+              ]
             }
-          },
-          { $ifNull: ['$muted_by', []] }
-        ]
-      },
-      updated_at: reopenedAt
+          }
+        },
+        muted_by: {
+          $cond: [
+            hasPendingHistoryRestore,
+            {
+              $filter: {
+                input: { $ifNull: ['$muted_by', []] },
+                as: 'mute',
+                cond: { $ne: ['$$mute.user_id', userId] }
+              }
+            },
+            { $ifNull: ['$muted_by', []] }
+          ]
+        },
+        updated_at: reopenedAt
+      }
     }
-  }]
+  ]
 }
 const isMessageVisibleToUser = (message: MessageWithMediaInfo, userId: string) =>
-  message.status !== 'deleted' &&
-  !message.deleted_by?.some((deletedByUserId) => deletedByUserId.toString() === userId)
+  message.status !== 'deleted' && !message.deleted_by?.some((deletedByUserId) => deletedByUserId.toString() === userId)
 const createMessageReactionState = (reactions: Message['reactions']): MessageReactionState => {
   const publicReactions = reactions.flatMap((reaction) =>
-    isMessageReactionEmoji(reaction.emoji)
-      ? [{ emoji: reaction.emoji, user_id: reaction.user_id.toString() }]
-      : []
+    isMessageReactionEmoji(reaction.emoji) ? [{ emoji: reaction.emoji, user_id: reaction.user_id.toString() }] : []
   )
   const counts = new Map<MessageReactionEmoji, number>()
 
@@ -205,19 +201,14 @@ class ConversationService {
     this.databaseService = databaseService
   }
 
-  private formatDirectConversation(
-    conversationDocument: DirectConversationAggregate,
-    actorId: ObjectId
-  ) {
+  private formatDirectConversation(conversationDocument: DirectConversationAggregate, actorId: ObjectId) {
     const {
       partnerInfo,
       last_message_overrides,
       history_cleared_by: _historyClearedBy,
       ...conversation
     } = conversationDocument
-    const actorOverride = last_message_overrides?.find((override) =>
-      override.user_id.equals(actorId)
-    )
+    const actorOverride = last_message_overrides?.find((override) => override.user_id.equals(actorId))
 
     return {
       ...conversation,
@@ -237,14 +228,8 @@ class ConversationService {
   }
 
   private formatGroupConversation(conversationDocument: GroupConversation, actorId: ObjectId) {
-    const {
-      last_message_overrides,
-      history_cleared_by: _historyClearedBy,
-      ...conversation
-    } = conversationDocument
-    const actorOverride = last_message_overrides?.find((override) =>
-      override.user_id.equals(actorId)
-    )
+    const { last_message_overrides, history_cleared_by: _historyClearedBy, ...conversation } = conversationDocument
+    const actorOverride = last_message_overrides?.find((override) => override.user_id.equals(actorId))
 
     return {
       ...conversation,
@@ -373,10 +358,7 @@ class ConversationService {
     },
     session: ClientSession
   ) {
-    if (
-      !envConfig.features.notificationOutboxEnabled ||
-      !envConfig.features.notificationGroupManagementEnabled
-    ) {
+    if (!envConfig.features.notificationOutboxEnabled || !envConfig.features.notificationGroupManagementEnabled) {
       return undefined
     }
     const result = await this.systemMessageService.createInTransaction(
@@ -437,10 +419,7 @@ class ConversationService {
     }
 
     const firstMedia = message.media_ids[0]
-      ? await this.databaseService.medias.findOne(
-          { _id: message.media_ids[0] },
-          { projection: { type: 1 }, session }
-        )
+      ? await this.databaseService.medias.findOne({ _id: message.media_ids[0] }, { projection: { type: 1 }, session })
       : null
     const messageType =
       firstMedia?.type === MediaType.Image ||
@@ -469,12 +448,15 @@ class ConversationService {
 
     const actorId = new this.databaseService.ObjectId(userId)
     const latestVisibleMessage = await this.databaseService.messages
-      .find({
-        conversation_id: deletedMessage.conversation_id,
-        status: { $in: ['sent', 'revoked'] },
-        deleted_by: { $ne: actorId },
-        ...(historyCutoffMessageId ? { _id: { $gt: historyCutoffMessageId } } : {})
-      }, { session })
+      .find(
+        {
+          conversation_id: deletedMessage.conversation_id,
+          status: { $in: ['sent', 'revoked'] },
+          deleted_by: { $ne: actorId },
+          ...(historyCutoffMessageId ? { _id: { $gt: historyCutoffMessageId } } : {})
+        },
+        { session }
+      )
       .sort({ _id: -1 })
       .limit(1)
       .next()
@@ -488,8 +470,7 @@ class ConversationService {
     const override = {
       user_id: actorId,
       message_id: latestVisibleMessage?._id,
-      last_message_at:
-        latestVisibleMessage?.send_at ?? deletedMessage.conversation_id.getTimestamp(),
+      last_message_at: latestVisibleMessage?.send_at ?? deletedMessage.conversation_id.getTimestamp(),
       last_message_preview: lastMessagePreview
     }
     const updatePipeline: Document[] = [
@@ -552,8 +533,7 @@ class ConversationService {
     const affectedOverrideUserIds = (conversation.last_message_overrides ?? [])
       .filter(
         (override) =>
-          override.message_id?.equals(message._id) ||
-          override.last_message_preview.message_id?.equals(message._id)
+          override.message_id?.equals(message._id) || override.last_message_preview.message_id?.equals(message._id)
       )
       .map((override) => override.user_id.toString())
 
@@ -642,13 +622,13 @@ class ConversationService {
 
     const formattedDirects = directs
       .map((conversation) => this.formatDirectConversation(conversation, objectIdUserId))
-      .filter((conversation): conversation is typeof conversation & { _id: ObjectId } =>
-        conversation._id instanceof ObjectId
+      .filter(
+        (conversation): conversation is typeof conversation & { _id: ObjectId } => conversation._id instanceof ObjectId
       )
     const formattedGroups = groups
       .map((conversation) => this.formatGroupConversation(conversation, objectIdUserId))
-      .filter((conversation): conversation is typeof conversation & { _id: ObjectId } =>
-        conversation._id instanceof ObjectId
+      .filter(
+        (conversation): conversation is typeof conversation & { _id: ObjectId } => conversation._id instanceof ObjectId
       )
 
     const formattedConversations = [...formattedDirects, ...formattedGroups]
@@ -659,27 +639,27 @@ class ConversationService {
         formattedConversations.map((conversation) => conversation._id)
       )
     ])
-    const readStateByConversation = new Map(
-      readStates.map((state) => [state.conversation_id.toHexString(), state])
-    )
-    const merged = hydratedConversations.map((conversation) => {
-      const state = readStateByConversation.get(conversation._id.toHexString())
-      return {
-        ...conversation,
-        unread_message_count: state?.unread_message_count ?? 0,
-        last_read_message_id: state?.last_read_message_id ?? null,
-        last_read_at: state?.last_read_at ?? null
-      }
-    }).sort((a, b) => {
-      // 1. Sort by pinned status first
-      if (a.is_pinned && !b.is_pinned) return -1
-      if (!a.is_pinned && b.is_pinned) return 1
+    const readStateByConversation = new Map(readStates.map((state) => [state.conversation_id.toHexString(), state]))
+    const merged = hydratedConversations
+      .map((conversation) => {
+        const state = readStateByConversation.get(conversation._id.toHexString())
+        return {
+          ...conversation,
+          unread_message_count: state?.unread_message_count ?? 0,
+          last_read_message_id: state?.last_read_message_id ?? null,
+          last_read_at: state?.last_read_at ?? null
+        }
+      })
+      .sort((a, b) => {
+        // 1. Sort by pinned status first
+        if (a.is_pinned && !b.is_pinned) return -1
+        if (!a.is_pinned && b.is_pinned) return 1
 
-      // 2. Then sort by last_message_at
-      const timeA = a.last_message_at ? new Date(a.last_message_at).getTime() : 0
-      const timeB = b.last_message_at ? new Date(b.last_message_at).getTime() : 0
-      return timeB - timeA
-    })
+        // 2. Then sort by last_message_at
+        const timeA = a.last_message_at ? new Date(a.last_message_at).getTime() : 0
+        const timeB = b.last_message_at ? new Date(b.last_message_at).getTime() : 0
+        return timeB - timeA
+      })
 
     return merged
   }
@@ -894,12 +874,15 @@ class ConversationService {
       await session.endSession()
     }
     await this.deliverGroupActivity(activity)
-    await this.syncGroupMembership(uniqueMembers.map((id) => id.toHexString()), {
-      conversation_id: newGroup._id.toHexString(),
-      change_type: 'group_created',
-      actor_id: userId,
-      affected_user_ids: uniqueMembers.filter((id) => !id.equals(creatorId)).map((id) => id.toHexString())
-    })
+    await this.syncGroupMembership(
+      uniqueMembers.map((id) => id.toHexString()),
+      {
+        conversation_id: newGroup._id.toHexString(),
+        change_type: 'group_created',
+        actor_id: userId,
+        affected_user_ids: uniqueMembers.filter((id) => !id.equals(creatorId)).map((id) => id.toHexString())
+      }
+    )
     return newGroup
   }
 
@@ -1057,19 +1040,23 @@ class ConversationService {
 
     let rawMessages: MessageWithMediaInfo[] = []
 
-    if (!cursor) {
-      const cachedMessages = await redisService.clientInstance.zRange(redisKey, 0, limit, { REV: true })
-      if (cachedMessages && cachedMessages.length > limit) {
-        const visibleCachedMessages = cachedMessages
-          .map((msg: string) => JSON.parse(msg) as MessageWithMediaInfo)
-          .filter(
-            (message) =>
-              isMessageVisibleToUser(message, userId) &&
-              isMessageAfterCutoff(message._id, historyCutoffMessageId)
-          )
-        if (visibleCachedMessages.length > limit) {
-          rawMessages = visibleCachedMessages
+    if (envConfig.conversation.messageCacheMode === 'full' && !cursor) {
+      try {
+        const cachedMessages = await redisService.clientInstance.zRange(redisKey, 0, limit, { REV: true })
+        if (cachedMessages.length > limit) {
+          const visibleCachedMessages = cachedMessages
+            .map((msg: string) => JSON.parse(msg) as MessageWithMediaInfo)
+            .filter(
+              (message) =>
+                isMessageVisibleToUser(message, userId) && isMessageAfterCutoff(message._id, historyCutoffMessageId)
+            )
+          if (visibleCachedMessages.length > limit) {
+            rawMessages = visibleCachedMessages
+          }
         }
+      } catch (error) {
+        const errorName = error instanceof Error ? error.name : 'UnknownError'
+        console.error(`Could not read conversation message cache; falling back to MongoDB (${errorName})`)
       }
     }
 
@@ -1230,11 +1217,10 @@ class ConversationService {
 
   async revokeMessage(userId: string, messageId: string) {
     const msgId = new this.databaseService.ObjectId(messageId)
-    const { message, conversation } = await conversationMessageAccessService.assertMessageAccess(
-      userId,
-      messageId,
-      { requireSender: true, allowedStatuses: ['sent'] }
-    )
+    const { message, conversation } = await conversationMessageAccessService.assertMessageAccess(userId, messageId, {
+      requireSender: true,
+      allowedStatuses: ['sent']
+    })
     if (message.kind === MessageKind.System) {
       throw new HttpError('System messages cannot be revoked', HTTP_STATUS.BAD_REQUEST)
     }
@@ -1304,14 +1290,10 @@ class ConversationService {
 
   async deleteMessage(userId: string, messageId: string) {
     const msgId = new this.databaseService.ObjectId(messageId)
-    const { message, conversation } = await conversationMessageAccessService.assertMessageAccess(
-      userId,
-      messageId,
-      {
-        requireVisibleToUser: true,
-        allowedStatuses: ['sent']
-      }
-    )
+    const { message, conversation } = await conversationMessageAccessService.assertMessageAccess(userId, messageId, {
+      requireVisibleToUser: true,
+      allowedStatuses: ['sent']
+    })
     const actorId = new this.databaseService.ObjectId(userId)
     const occurredAt = new Date()
     const session = this.databaseService.startSession()
@@ -1745,9 +1727,7 @@ class ConversationService {
       joined_at: Date
       user: { _id: ObjectId; name: string; username: string; avatar?: string; verify?: UserVerifyStatus }
     }>
-    const otherMemberIds = members
-      .map((member) => member.user._id)
-      .filter((memberId) => !memberId.equals(userObjectId))
+    const otherMemberIds = members.map((member) => member.user._id).filter((memberId) => !memberId.equals(userObjectId))
     const blocks =
       otherMemberIds.length > 0
         ? await this.databaseService.userBlocks
@@ -1809,7 +1789,8 @@ class ConversationService {
       throw new HttpError('You can only add users you follow', HTTP_STATUS.BAD_REQUEST)
     }
     const currentMemberIds = new Set(access.memberIds)
-    const projectedMemberCount = currentMemberIds.size + uniqueMemberIds.filter((id) => !currentMemberIds.has(id)).length
+    const projectedMemberCount =
+      currentMemberIds.size + uniqueMemberIds.filter((id) => !currentMemberIds.has(id)).length
     if (projectedMemberCount > envConfig.conversation.maxGroupMembers) {
       throw new HttpError(
         `Group cannot exceed ${envConfig.conversation.maxGroupMembers} members`,
@@ -2004,13 +1985,7 @@ class ConversationService {
         if (result.modifiedCount === 0) {
           throw new HttpError('Group membership changed. Refresh and try again', HTTP_STATUS.CONFLICT)
         }
-        readMutation = await this.readService.clearMembershipInTransaction(
-          convId,
-          'group',
-          uId,
-          updatedAt,
-          session
-        )
+        readMutation = await this.readService.clearMembershipInTransaction(convId, 'group', uId, updatedAt, session)
         const currentGroup = await this.databaseService.groupConversations.findOne(
           { _id: convId },
           { projection: { members: 1 }, session }
@@ -2132,13 +2107,7 @@ class ConversationService {
             GROUP_SOLE_ADMIN_CANNOT_LEAVE_CODE
           )
         }
-        readMutation = await this.readService.clearMembershipInTransaction(
-          convId,
-          'group',
-          uId,
-          updatedAt,
-          session
-        )
+        readMutation = await this.readService.clearMembershipInTransaction(convId, 'group', uId, updatedAt, session)
         const currentGroup = await this.databaseService.groupConversations.findOne(
           { _id: convId },
           { projection: { members: 1 }, session }
@@ -2693,12 +2662,7 @@ class ConversationService {
     return message.filter((reaction) => isMessageReactionEmoji(reaction.emoji))
   }
 
-  async forwardMessage(
-    userId: string,
-    messageId: string,
-    conversationIds: string[],
-    clientOperationId?: string
-  ) {
+  async forwardMessage(userId: string, messageId: string, conversationIds: string[], clientOperationId?: string) {
     const results = await this.messageCommandService.forward({
       sender_id: userId,
       origin_message_id: messageId,

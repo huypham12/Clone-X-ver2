@@ -1,7 +1,7 @@
-import { ObjectId } from 'mongodb';
+import { ObjectId } from 'mongodb'
 
 export const getParentTweetLookupStages = (current_user_id?: string | null, prefix: string = '') => {
-  const p = prefix ? `${prefix}.` : '';
+  const p = prefix ? `${prefix}.` : ''
   const stages: any[] = [
     {
       $lookup: {
@@ -46,7 +46,7 @@ export const getParentTweetLookupStages = (current_user_id?: string | null, pref
         [`${p}parent_tweet.author.forgot_password_token`]: 0
       }
     }
-  ];
+  ]
 
   if (current_user_id) {
     stages.push(
@@ -58,10 +58,7 @@ export const getParentTweetLookupStages = (current_user_id?: string | null, pref
             {
               $match: {
                 $expr: {
-                  $and: [
-                    { $eq: ['$tweet_id', '$$tweet_id'] },
-                    { $eq: ['$user_id', new ObjectId(current_user_id)] }
-                  ]
+                  $and: [{ $eq: ['$tweet_id', '$$tweet_id'] }, { $eq: ['$user_id', new ObjectId(current_user_id)] }]
                 }
               }
             }
@@ -77,10 +74,7 @@ export const getParentTweetLookupStages = (current_user_id?: string | null, pref
             {
               $match: {
                 $expr: {
-                  $and: [
-                    { $eq: ['$tweet_id', '$$tweet_id'] },
-                    { $eq: ['$user_id', new ObjectId(current_user_id)] }
-                  ]
+                  $and: [{ $eq: ['$tweet_id', '$$tweet_id'] }, { $eq: ['$user_id', new ObjectId(current_user_id)] }]
                 }
               }
             }
@@ -112,17 +106,17 @@ export const getParentTweetLookupStages = (current_user_id?: string | null, pref
           [`${p}parent_tweet.likes`]: 0
         }
       }
-    );
+    )
   }
 
-  return stages;
-};
+  return stages
+}
 
 export const getIsRetweetedLookupStages = (user_id: string | null, prefix: string = '') => {
-  if (!user_id) return [];
-  const p = prefix ? `${prefix}.` : '';
-  const tweet_id_expr = prefix ? `$${prefix}._id` : '$_id';
-  
+  if (!user_id) return []
+  const p = prefix ? `${prefix}.` : ''
+  const tweet_id_expr = prefix ? `$${prefix}._id` : '$_id'
+
   return [
     {
       $lookup: {
@@ -160,5 +154,5 @@ export const getIsRetweetedLookupStages = (user_id: string | null, prefix: strin
         [`${p}retweets`]: 0
       }
     }
-  ];
-};
+  ]
+}

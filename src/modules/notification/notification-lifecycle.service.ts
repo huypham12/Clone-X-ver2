@@ -208,8 +208,7 @@ export class NotificationLifecycleService {
     }
     return {
       results,
-      next_cursor:
-        page.length > LIFECYCLE_PAGE_SIZE && selected.length > 0 ? selected[selected.length - 1]._id : null
+      next_cursor: page.length > LIFECYCLE_PAGE_SIZE && selected.length > 0 ? selected[selected.length - 1]._id : null
     }
   }
 

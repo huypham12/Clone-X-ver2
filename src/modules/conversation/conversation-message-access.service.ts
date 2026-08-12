@@ -10,8 +10,7 @@ import conversationAccessService, {
 } from './conversation-access.service'
 
 export const REPLY_MESSAGE_UNAVAILABLE_CODE = 'REPLY_MESSAGE_UNAVAILABLE' as const
-export const REPLY_MESSAGE_UNAVAILABLE_MESSAGE =
-  'The message you are replying to is unavailable in this conversation'
+export const REPLY_MESSAGE_UNAVAILABLE_MESSAGE = 'The message you are replying to is unavailable in this conversation'
 
 type MessageStatus = Message['status']
 
@@ -88,11 +87,7 @@ export class ConversationMessageAccessService {
     conversationId: string,
     conversationType: ConversationType
   ): Promise<Message> {
-    const conversation = await this.accessService.assertConversationMember(
-      userId,
-      conversationId,
-      conversationType
-    )
+    const conversation = await this.accessService.assertConversationMember(userId, conversationId, conversationType)
 
     if (!ObjectId.isValid(messageId)) {
       throw new HttpError(
@@ -110,12 +105,9 @@ export class ConversationMessageAccessService {
       targetMessage?.conversation_id.toString() === conversationId &&
       targetMessage.conversation_type === conversationType
 
-    const isDeletedForUser = targetMessage?.deleted_by?.some(
-      (deletedByUserId) => deletedByUserId.toString() === userId
-    )
+    const isDeletedForUser = targetMessage?.deleted_by?.some((deletedByUserId) => deletedByUserId.toString() === userId)
     const isBeforeHistoryCutoff = Boolean(
-      targetMessage?._id &&
-        !isMessageAfterHistoryCutoff(targetMessage._id, conversation.conversation, userId)
+      targetMessage?._id && !isMessageAfterHistoryCutoff(targetMessage._id, conversation.conversation, userId)
     )
 
     if (

@@ -5,8 +5,6 @@ import {
   RegisterBodyDto,
   LogoutResponseDto,
   RefreshTokenResponseDto,
-  VerifyEmailResponseDto,
-  ResetPasswordResponseDto,
   ChangePasswordResponseDto,
   RegisterResponseData
 } from '../dto'
@@ -19,15 +17,9 @@ import { signTokenByType, verifyToken } from '~/utils/jwt'
 import { comparePassword, hashPassword } from '~/utils/crypto'
 import { envConfig } from '~/config/getEnvConfig'
 import { HttpError } from '~/common/http-error'
-import { getVerifyEmailTemplate } from '~/utils/email-templete'
-import { EmailService } from './email.service'
-import { TokenPayload } from '~/types/token-payload.type'
 
 export class AuthService {
-  constructor(
-    private readonly databaseService: DatabaseService,
-    private readonly emailService: EmailService
-  ) {}
+  constructor(private readonly databaseService: DatabaseService) {}
 
   private signAccessToken({ user_id, verify }: { user_id: string; verify: UserVerifyStatus }): Promise<string> {
     return signTokenByType({
@@ -58,26 +50,6 @@ export class AuthService {
     })
   }
 
-  private signEmailVerifyToken({ user_id, verify }: { user_id: string; verify: UserVerifyStatus }): Promise<string> {
-    return signTokenByType({
-      user_id,
-      verify,
-      token_type: TokenType.EmailVerifyToken,
-      secretKey: envConfig.secrets.jwt.emailVerify as string,
-      expiresIn: envConfig.tokenExpires.emailVerify
-    })
-  }
-
-  private signForgotPasswordToken({ user_id, verify }: { user_id: string; verify: UserVerifyStatus }): Promise<string> {
-    return signTokenByType({
-      user_id,
-      verify,
-      token_type: TokenType.ForgotPasswordToken,
-      secretKey: envConfig.secrets.jwt.forgotPassword as string,
-      expiresIn: envConfig.tokenExpires.forgotPassword
-    })
-  }
-
   private signAccessAndRefreshToken({
     user_id,
     verify,
@@ -97,53 +69,6 @@ export class AuthService {
     })
   }
 
-  resendVerifyEmail = async (email: string) => {
-    const user = await this.databaseService.users.findOne({ email })
-
-    if (!user) {
-      throw new HttpError(MESSAGES.USER_DOES_NOT_EXIST, 401)
-    }
-
-    if (user.verify === UserVerifyStatus.Verified) {
-      throw new HttpError(MESSAGES.USER_ALREADY_VERIFIED, HTTP_STATUS.BAD_REQUEST)
-    }
-
-    // tạo email verify token, cập nhật lại db
-    const email_verify_token = await this.signEmailVerifyToken({
-      user_id: user._id.toString(),
-      verify: UserVerifyStatus.Unverified
-    })
-    await this.databaseService.users.updateOne(
-      { _id: user._id },
-      { email_verify_token, $currentDate: { updated_at: true } }
-    )
-
-    return email_verify_token
-  }
-
-  forgotPassword = async (email: string) => {
-    const user = await this.databaseService.users.findOne({ email })
-
-    if (!user) {
-      throw new HttpError(MESSAGES.USER_DOES_NOT_EXIST, 401)
-    }
-
-    // tạo forgot password token, cập nhật lại db
-    const forgot_password_token = await this.signForgotPasswordToken({
-      user_id: user._id.toString(),
-      verify: UserVerifyStatus.Unverified
-    })
-    await this.databaseService.users.updateOne(
-      { _id: user._id },
-      {
-        $set: { forgot_password_token },
-        $currentDate: { updated_at: true }
-      }
-    )
-
-    return forgot_password_token
-  }
-
   checkEmailExists = async (email: string) => {
     const existingUser = await this.databaseService.users.findOne({ email })
     if (existingUser) {
@@ -155,23 +80,7 @@ export class AuthService {
   register = async (payload: RegisterBodyDto): Promise<RegisterResponseData> => {
     // sau khi đăng ký thì thêm vào db và tạo các token gửi về cho người dùng
     const user_id = new ObjectId()
-    // --- TẠM THỜI BỎ QUA GỬI EMAIL VERIFY ĐỂ TRÁNH LIMIT SES/GMAIL ---
-    // const email_verify_token = await this.signEmailVerifyToken({
-    //   user_id: user_id.toString(),
-    //   verify: UserVerifyStatus.Unverified
-    // })
-    // const html = getVerifyEmailTemplate(email_verify_token)
-    // await this.emailService.sendEmail(
-    //   {
-    //     to: payload.email,
-    //     subject: 'Xác nhận địa chỉ email của bạn',
-    //     html
-    //   },
-    //   MESSAGES.VERIFY_EMAIL_SUCCESS
-    // )
-    // -------------------------------------------------------------------
-
-    // tạo token trả về (TẠM THỜI SET TRỰC TIẾP LÀ Verified)
+    // Portfolio auth does not depend on email delivery; new accounts are active immediately.
     const [access_token, refresh_token] = await this.signAccessAndRefreshToken({
       user_id: user_id.toString(),
       verify: UserVerifyStatus.Verified
@@ -286,73 +195,6 @@ export class AuthService {
       new RefreshToken({ user_id: new ObjectId(user_id), token: refreshToken, exp })
     )
     return new RefreshTokenResponseDto({ access_token: accessToken, refresh_token: refreshToken })
-  }
-
-  verifyEmail = async ({
-    token,
-    user_id,
-    verify
-  }: {
-    token: string
-    user_id: string
-    verify: UserVerifyStatus
-  }): Promise<VerifyEmailResponseDto> => {
-    const user = await this.databaseService.users.findOne({ _id: new ObjectId(user_id) })
-    if (!user) {
-      throw new HttpError(MESSAGES.USER_NOT_FOUND, HTTP_STATUS.NOT_FOUND)
-    }
-
-    if (user.verify === UserVerifyStatus.Verified) {
-      return new VerifyEmailResponseDto(MESSAGES.EMAIL_ALREADY_VERIFIED)
-    }
-
-    // (Tùy chọn) Kiểm tra token từ DB nếu bạn lưu trong user
-    if (user.email_verify_token !== token) {
-      throw new HttpError(MESSAGES.INVALID_TOKEN, HTTP_STATUS.BAD_REQUEST)
-    }
-
-    // Cập nhật trạng thái xác minh
-    await this.databaseService.users.updateOne(
-      { _id: new ObjectId(user_id) },
-      {
-        $set: {
-          verify: UserVerifyStatus.Verified,
-          email_verify_token: '' // Xóa token sau khi xác minh
-        }
-      }
-    )
-    return new VerifyEmailResponseDto(MESSAGES.VERIFY_EMAIL_SUCCESS)
-  }
-
-  resetPassword = async ({
-    token,
-    new_password
-  }: {
-    token: string
-    new_password: string
-  }): Promise<ResetPasswordResponseDto> => {
-    const hashedPassword = await hashPassword(new_password)
-    console.log(token)
-    const { user_id, verify } = (await this.decodeToken(
-      token,
-      envConfig.secrets.jwt.forgotPassword as string
-    )) as TokenPayload
-    await this.databaseService.users.updateOne(
-      { forgot_password_token: token },
-      {
-        $set: {
-          password: hashedPassword,
-          forgot_password_token: ''
-        },
-        $currentDate: { updated_at: true }
-      }
-    )
-
-    const [access_token, refresh_token] = await this.signAccessAndRefreshToken({
-      user_id: user_id.toString(),
-      verify: verify || UserVerifyStatus.Unverified
-    })
-    return new ResetPasswordResponseDto({ access_token, refresh_token })
   }
 
   changePassword = async ({

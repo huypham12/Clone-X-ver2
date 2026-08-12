@@ -1,6 +1,7 @@
 import { Queue } from 'bullmq'
 import { connection } from '~/config/redisConfig'
 import { createBullMqJobId } from './bullmq-job-id'
+import { createQueueJobOptions } from './queue-options'
 
 export const NOTIFICATION_QUEUE_NAME = 'notification-events'
 export const NOTIFICATION_JOB_NAME = 'process-domain-event'
@@ -19,10 +20,5 @@ export interface NotificationJobResult {
 
 export const notificationQueue = new Queue<NotificationJobData, NotificationJobResult>(NOTIFICATION_QUEUE_NAME, {
   connection,
-  defaultJobOptions: {
-    attempts: NOTIFICATION_JOB_ATTEMPTS,
-    backoff: { type: 'exponential', delay: 1_000 },
-    removeOnComplete: { age: 24 * 60 * 60, count: 10_000 },
-    removeOnFail: { age: 30 * 24 * 60 * 60, count: 50_000 }
-  }
+  defaultJobOptions: createQueueJobOptions(NOTIFICATION_JOB_ATTEMPTS)
 })

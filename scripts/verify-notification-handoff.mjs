@@ -30,7 +30,10 @@ const directNotificationCallers = findMatches(
 )
 assert.deepEqual(directNotificationCallers, [], `Direct notification callers: ${directNotificationCallers.join(', ')}`)
 
-const messageWriters = findMatches(/new\s+Message\s*\(/, new Set(['src/modules/conversation/conversation-message-command.service.ts']))
+const messageWriters = findMatches(
+  /new\s+Message\s*\(/,
+  new Set(['src/modules/conversation/conversation-message-command.service.ts'])
+)
 assert.deepEqual(messageWriters, [], `Message writers outside command service: ${messageWriters.join(', ')}`)
 
 const readByRuntimeUsers = findMatches(
@@ -52,7 +55,10 @@ assert.deepEqual(
 const repositorySource = read('src/modules/notification/notification.repository.ts')
 assert.doesNotMatch(repositorySource, /getIO|socket-server|NotificationDeliveryService/)
 const deliverySource = read('src/modules/notification/notification-delivery.service.ts')
-assert.doesNotMatch(deliverySource, /DatabaseService|notification\.repository|notification-policy|modules\/(user|tweet|conversation)/)
+assert.doesNotMatch(
+  deliverySource,
+  /DatabaseService|notification\.repository|notification-policy|modules\/(user|tweet|conversation)/
+)
 const policySource = read('src/modules/notification/notification-policy.service.ts')
 assert.doesNotMatch(policySource, /notification\.repository|notification-delivery|socket-server|getIO/)
 
@@ -116,9 +122,14 @@ assert.match(policySource, /UserVerifyStatus\.Banned/)
 assert.match(policySource, /userBlocks/)
 
 const workerSource = read('src/modules/notification/notification.worker.ts')
-const workerDeliveryIndex = workerSource.indexOf('if (handlerResult) this.eventHandler.deliverAfterCommit(handlerResult)')
+const workerDeliveryIndex = workerSource.indexOf(
+  'if (handlerResult) this.eventHandler.deliverAfterCommit(handlerResult)'
+)
 const rootFanoutEnqueueIndex = workerSource.indexOf('await notificationFanoutQueue.add')
-assert.ok(workerDeliveryIndex >= 0 && rootFanoutEnqueueIndex > workerDeliveryIndex, 'Root fanout must enqueue after commit')
+assert.ok(
+  workerDeliveryIndex >= 0 && rootFanoutEnqueueIndex > workerDeliveryIndex,
+  'Root fanout must enqueue after commit'
+)
 assert.ok(
   workerSource.lastIndexOf('markProcessed') > rootFanoutEnqueueIndex,
   'Fanout source must be marked processed only after root fanout enqueue succeeds'
@@ -186,7 +197,10 @@ const notificationTypeBlock = enumSource.match(/export enum NotificationType\s*{
 const notificationTypes = [...notificationTypeBlock.matchAll(/=\s*'([^']+)'/g)].map((match) => match[1])
 assert.ok(notificationTypes.length > 0, 'NotificationType enum is empty')
 for (const type of notificationTypes) {
-  assert.ok(frontendContract.includes(`\`${type}\``) || frontendContract.includes(`"${type}"`), `Undocumented NotificationType: ${type}`)
+  assert.ok(
+    frontendContract.includes(`\`${type}\``) || frontendContract.includes(`"${type}"`),
+    `Undocumented NotificationType: ${type}`
+  )
 }
 
 for (const document of ['endpoint.md', 'swagger.yaml', 'frontend-notification-contract.md']) {

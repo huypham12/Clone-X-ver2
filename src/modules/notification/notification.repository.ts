@@ -9,10 +9,7 @@ import type {
 } from './notification-event.type'
 import type { NotificationContext } from '~/schemas/Notification.schema'
 import { NotificationUnreadService, type NotificationUnreadSnapshot } from './notification-unread.service'
-import {
-  getEligibleNotificationTypeFilter,
-  isEligibleNotificationType
-} from './notification-eligibility'
+import { getEligibleNotificationTypeFilter, isEligibleNotificationType } from './notification-eligibility'
 
 export interface NotificationRepositoryOptions {
   session?: ClientSession
@@ -112,7 +109,9 @@ export class NotificationRepository {
           { returnDocument: 'after', session }
         )
         if (reactivated) {
-          const unreadState = await this.unreadService.increment(intent.recipient_id, 1, intent.occurred_at, { session })
+          const unreadState = await this.unreadService.increment(intent.recipient_id, 1, intent.occurred_at, {
+            session
+          })
           return { status: 'updated', notification: reactivated, unread_state: unreadState }
         }
       }
@@ -157,9 +156,7 @@ export class NotificationRepository {
       .toArray()
     const existingByKey = new Map(
       existing.flatMap((notification) =>
-        notification.deduplication_key
-          ? ([[notification.deduplication_key, notification]] as const)
-          : []
+        notification.deduplication_key ? ([[notification.deduplication_key, notification]] as const) : []
       )
     )
     for (const intent of normalized) {
@@ -203,9 +200,7 @@ export class NotificationRepository {
       .toArray()
     const persistedByKey = new Map(
       persisted.flatMap((notification) =>
-        notification.deduplication_key
-          ? ([[notification.deduplication_key, notification]] as const)
-          : []
+        notification.deduplication_key ? ([[notification.deduplication_key, notification]] as const) : []
       )
     )
     const createdIntents = normalized.filter((intent) => !existingByKey.has(intent.deduplication_key))
@@ -376,9 +371,10 @@ export class NotificationRepository {
       { returnDocument: 'after', session }
     )
     if (!notification) return null
-    const unreadState = !notification.is_read && isEligibleNotificationType(notification.type)
-      ? await this.unreadService.decrement(notification.recipient_id, 1, invalidatedAt, { session })
-      : undefined
+    const unreadState =
+      !notification.is_read && isEligibleNotificationType(notification.type)
+        ? await this.unreadService.decrement(notification.recipient_id, 1, invalidatedAt, { session })
+        : undefined
     return { status: 'invalidated', notification, unread_state: unreadState }
   }
 
@@ -413,9 +409,10 @@ export class NotificationRepository {
         { returnDocument: 'after', session }
       )
       if (!notification) continue
-      const unreadState = !notification.is_read && isEligibleNotificationType(notification.type)
-        ? await this.unreadService.decrement(notification.recipient_id, 1, invalidatedAt, { session })
-        : undefined
+      const unreadState =
+        !notification.is_read && isEligibleNotificationType(notification.type)
+          ? await this.unreadService.decrement(notification.recipient_id, 1, invalidatedAt, { session })
+          : undefined
       results.push({ status: 'invalidated', notification, unread_state: unreadState })
     }
     return {

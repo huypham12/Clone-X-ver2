@@ -205,7 +205,8 @@ export class OutboxRepository {
 
   private assertEventIdentity(outboxEvent: WithId<OutboxEvent>, event: DomainEvent): void {
     const sameActor =
-      (outboxEvent.actor_id === null && event.actor_id === null) || outboxEvent.actor_id?.equals(event.actor_id) === true
+      (outboxEvent.actor_id === null && event.actor_id === null) ||
+      outboxEvent.actor_id?.equals(event.actor_id) === true
     if (
       outboxEvent.type !== event.type ||
       outboxEvent.aggregate_type !== event.aggregate_type ||

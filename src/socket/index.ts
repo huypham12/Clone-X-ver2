@@ -18,6 +18,8 @@ declare module 'socket.io' {
 }
 
 let io: Server
+const LAST_SEEN_TTL_SECONDS = 30 * 24 * 60 * 60
+const MAX_PRESENCE_LOOKUP_USER_IDS = 200
 
 const isStringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((item) => typeof item === 'string')
@@ -31,10 +33,12 @@ export const initSocket = (httpServer: HttpServer, databaseService: DatabaseServ
   })
   setIO(io)
 
-  // Tích hợp Redis Adapter cho Horizontal Scaling
-  if (redisService.pubClient && redisService.subClient) {
-    io.adapter(createAdapter(redisService.pubClient, redisService.subClient))
-    console.log('Redis Adapter cho Socket.io đã được khởi tạo')
+  if (envConfig.socket.adapterMode === 'redis') {
+    const { pubClient, subClient } = redisService.getSocketAdapterClients()
+    io.adapter(createAdapter(pubClient, subClient))
+    console.log('Socket.IO Redis adapter is ready')
+  } else {
+    console.log('Socket.IO is using the single-instance in-memory adapter')
   }
 
   // Middleware xác thực token
@@ -90,20 +94,22 @@ export const initSocket = (httpServer: HttpServer, databaseService: DatabaseServ
     // API lấy trạng thái Online từ Frontend
     socket.on('get:presence', async (userIds: string[], callback) => {
       try {
-        if (!Array.isArray(userIds) || userIds.length === 0) {
+        if (!Array.isArray(userIds) || userIds.length === 0 || userIds.length > MAX_PRESENCE_LOOKUP_USER_IDS) {
           if (callback) callback([])
           return
         }
 
+        const requestedUserIds = [...new Set(userIds.filter((id): id is string => typeof id === 'string'))]
+
         const presenceList = await Promise.all(
-          userIds.map(async (id) => {
-            // Lấy tất cả socket id của user đó trên TOÀN BỘ cluster qua Redis Adapter
+          requestedUserIds.map(async (id) => {
             const sockets = await io.in(id).allSockets()
             const isOnline = sockets.size > 0
             let lastSeenAt = null
 
             if (!isOnline) {
-              lastSeenAt = await redisService.clientInstance.hGet('user_last_seen', id)
+              const cachedLastSeenAt = await redisService.get(`presence:last-seen:${id}`)
+              lastSeenAt = typeof cachedLastSeenAt === 'string' ? cachedLastSeenAt : null
             }
 
             return {
@@ -132,7 +138,7 @@ export const initSocket = (httpServer: HttpServer, databaseService: DatabaseServ
           // Nếu user đã ngắt kết nối hoàn toàn trên TẤT CẢ thiết bị
           if (remainingSockets.size === 0) {
             const lastSeenAt = new Date().toISOString()
-            await redisService.clientInstance.hSet('user_last_seen', userId, lastSeenAt)
+            await redisService.set(`presence:last-seen:${userId}`, lastSeenAt, LAST_SEEN_TTL_SECONDS)
 
             // Phát sự kiện offline cho Bạn Bè
             const friendIds = await getFriendIds(userId)

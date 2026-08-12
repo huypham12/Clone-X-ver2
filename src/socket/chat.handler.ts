@@ -55,8 +55,7 @@ type ReadConversationAcknowledgement = (
 const getDirectPartnerId = (currentUserId: string, memberIds: string[]) =>
   memberIds.find((memberId) => memberId !== currentUserId)
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
 
 const isSendMessagePayload = (payload: unknown): payload is ValidatedSendMessagePayload =>
   isRecord(payload) &&

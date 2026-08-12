@@ -216,11 +216,9 @@ export class ConversationMessageCommandService {
     }
   }
 
-  async sendSystemInTransaction(
-    command: SystemMessageCommand,
-    session: ClientSession
-  ): Promise<MessageCommandResult> {
-    if (!session.inTransaction()) throw new Error('System message must be created inside the group mutation transaction')
+  async sendSystemInTransaction(command: SystemMessageCommand, session: ClientSession): Promise<MessageCommandResult> {
+    if (!session.inTransaction())
+      throw new Error('System message must be created inside the group mutation transaction')
 
     const group = await this.databaseService.groupConversations.findOne(
       { _id: command.conversation_id },
@@ -264,10 +262,7 @@ export class ConversationMessageCommandService {
       {
         _id: command.conversation_id,
         $expr: {
-          $setEquals: [
-            '$members.user_id',
-            currentMemberIds
-          ]
+          $setEquals: ['$members.user_id', currentMemberIds]
         }
       },
       {
@@ -364,9 +359,7 @@ export class ConversationMessageCommandService {
         'INVALID_MESSAGE_PAYLOAD'
       )
     }
-    const mentionUserIds = [
-      ...new Set(rawMentionIds.map((id) => new this.databaseService.ObjectId(id).toHexString()))
-    ]
+    const mentionUserIds = [...new Set(rawMentionIds.map((id) => new this.databaseService.ObjectId(id).toHexString()))]
     return {
       ...command,
       content,
@@ -800,9 +793,7 @@ export class ConversationMessageCommandService {
       conversation_type: command.conversation_type,
       content: command.content ?? '',
       media_ids: (command.media_ids ?? []).map(canonicalObjectId),
-      reply_to_message_id: command.reply_to_message_id
-        ? canonicalObjectId(command.reply_to_message_id)
-        : null,
+      reply_to_message_id: command.reply_to_message_id ? canonicalObjectId(command.reply_to_message_id) : null,
       mention_user_ids: [...(command.mention_user_ids ?? [])].sort(),
       origin_message_id: originMessageId?.toHexString() ?? null
     }

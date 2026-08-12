@@ -24,17 +24,11 @@ type ResolvedGroupConversation = {
 
 export type ResolvedConversation = ResolvedDirectConversation | ResolvedGroupConversation
 
-type ConversationWithHistoryClear = Pick<
-  DirectConversation | GroupConversation,
-  'history_cleared_by'
->
+type ConversationWithHistoryClear = Pick<DirectConversation | GroupConversation, 'history_cleared_by'>
 
-export const getConversationHistoryCutoff = (
-  conversation: ConversationWithHistoryClear,
-  userId: string
-) =>
-  conversation.history_cleared_by?.find((marker) => marker.user_id.toString() === userId)
-    ?.cleared_through_message_id ?? undefined
+export const getConversationHistoryCutoff = (conversation: ConversationWithHistoryClear, userId: string) =>
+  conversation.history_cleared_by?.find((marker) => marker.user_id.toString() === userId)?.cleared_through_message_id ??
+  undefined
 
 export const isMessageAfterHistoryCutoff = (
   messageId: ObjectId,
@@ -52,10 +46,7 @@ class ConversationAccessService {
     this.databaseService = databaseService
   }
 
-  async resolveConversation(
-    conversationId: string,
-    expectedType?: ConversationType
-  ): Promise<ResolvedConversation> {
+  async resolveConversation(conversationId: string, expectedType?: ConversationType): Promise<ResolvedConversation> {
     const conversationObjectId = new this.databaseService.ObjectId(conversationId)
     const [directConversation, groupConversation] = await Promise.all([
       this.databaseService.directConversations.findOne({ _id: conversationObjectId }),

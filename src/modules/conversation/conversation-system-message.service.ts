@@ -26,9 +26,7 @@ const systemMessageContent: Record<ConversationSystemEventType, string> = {
 }
 
 export class ConversationSystemMessageService {
-  constructor(
-    private readonly commandService: ConversationMessageCommandService = conversationMessageCommandService
-  ) {}
+  constructor(private readonly commandService: ConversationMessageCommandService = conversationMessageCommandService) {}
 
   createInTransaction(
     command: CreateConversationSystemMessageCommand,

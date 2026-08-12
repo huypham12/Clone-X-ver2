@@ -5,9 +5,7 @@ import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 const { databaseService } = require('../dist/config/database.service.js')
 const { NotificationType, NotificationTargetType } = require('../dist/constants/enums/index.js')
-const { NotificationAggregationService } = require(
-  '../dist/modules/notification/notification-aggregation.service.js'
-)
+const { NotificationAggregationService } = require('../dist/modules/notification/notification-aggregation.service.js')
 const { NotificationRepository } = require('../dist/modules/notification/notification.repository.js')
 const { NotificationUnreadService } = require('../dist/modules/notification/notification-unread.service.js')
 
@@ -82,10 +80,7 @@ const main = async () => {
     assert(active)
     assert.equal(active.actor_count, 100)
     assert.equal(active.actor_ids_preview?.length, 3)
-    assert.equal(
-      await databaseService.notificationActors.countDocuments({ notification_id: active._id }),
-      100
-    )
+    assert.equal(await databaseService.notificationActors.countDocuments({ notification_id: active._id }), 100)
     assert.equal((await unreadService.get(recipientId)).unread_count, 1)
 
     await removeActor(sourceKeys[0])

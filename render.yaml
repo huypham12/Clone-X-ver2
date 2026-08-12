@@ -1,0 +1,70 @@
+services:
+  - type: web
+    name: clone-x-api
+    runtime: docker
+    plan: free
+    region: singapore
+    numInstances: 1
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health/ready
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: JWT_SECRET_ACCESS_TOKEN
+        sync: false
+      - key: JWT_SECRET_REFRESH_TOKEN
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false
+      - key: DB_NAME
+        value: x_clone
+      - key: TRUST_PROXY_HOPS
+        value: '1'
+      - key: ACCESS_TOKEN_EXPIRES_IN
+        value: 15m
+      - key: REFRESH_TOKEN_EXPIRES_IN
+        value: 7d
+      - key: SOCKET_ADAPTER_MODE
+        value: memory
+      - key: MEDIA_PROCESSING_MODE
+        value: inline
+      - key: CONVERSATION_MESSAGE_CACHE_MODE
+        value: 'off'
+      - key: MEDIA_WORKER_CONCURRENCY
+        value: '1'
+      - key: MEDIA_QUEUE_MAX_ATTEMPTS
+        value: '5'
+      - key: QUEUE_COMPLETED_RETENTION_COUNT
+        value: '300'
+      - key: QUEUE_FAILED_RETENTION_COUNT
+        value: '500'
+      - key: MAX_IMAGE_UPLOAD_MB
+        value: '10'
+      - key: MAX_VIDEO_UPLOAD_MB
+        value: '20'
+      - key: MAX_AUDIO_UPLOAD_MB
+        value: '10'
+      - key: MAX_GROUP_MEMBERS
+        value: '500'
+      - key: NOTIFICATION_OUTBOX_ENABLED
+        value: 'true'
+      - key: NOTIFICATION_FOLLOW_OUTBOX_ENABLED
+        value: 'true'
+      - key: NOTIFICATION_TWEET_OUTBOX_ENABLED
+        value: 'true'
+      - key: NOTIFICATION_SOCIAL_AGGREGATION_ENABLED
+        value: 'true'
+      - key: NOTIFICATION_MESSAGE_DIRECTED_ENABLED
+        value: 'true'
+      - key: NOTIFICATION_GROUP_MANAGEMENT_ENABLED
+        value: 'true'
+      - key: NOTIFICATION_FOLLOWED_TWEET_ENABLED
+        value: 'true'

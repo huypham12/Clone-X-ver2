@@ -13,10 +13,14 @@ config({
 })
 
 // Interface for configuration structure
+export type SocketAdapterMode = 'memory' | 'redis'
+export type MediaProcessingMode = 'inline' | 'queue'
+export type ConversationMessageCacheMode = 'off' | 'full'
+
 interface EnvConfig {
   app: {
     port: number
-    host: string
+    trustProxyHops: number
   }
   cors: {
     origin: string[]
@@ -50,33 +54,29 @@ interface EnvConfig {
       userMessageStates: string
     }
   }
-  google: {
-    clientId: string
-    clientSecret: string
-    redirectUri: string
-  }
-  clientRedirectUri: string
   secrets: {
-    password: string
     jwt: {
       access: string
       refresh: string
-      emailVerify: string
-      forgotPassword: string
     }
   }
   tokenExpires: {
     access: string
     refresh: string
-    emailVerify: string
-    forgotPassword: string
   }
-  sendGrid: {
-    apiKey: string
-  }
-  resendApiKey: string
   redis: {
     url: string
+    cacheUrl: string
+    queueUrl: string
+    socketUrl: string
+  }
+  socket: {
+    adapterMode: SocketAdapterMode
+  }
+  cloudinary: {
+    cloudName: string
+    apiKey: string
+    apiSecret: string
   }
   features: {
     notificationOutboxEnabled: boolean
@@ -89,6 +89,19 @@ interface EnvConfig {
   }
   conversation: {
     maxGroupMembers: number
+    messageCacheMode: ConversationMessageCacheMode
+  }
+  media: {
+    processingMode: MediaProcessingMode
+    workerConcurrency: number
+    queueMaxAttempts: number
+    maxImageUploadMb: number
+    maxVideoUploadMb: number
+    maxAudioUploadMb: number
+  }
+  queue: {
+    completedRetentionCount: number
+    failedRetentionCount: number
   }
 }
 
@@ -125,6 +138,29 @@ const dbCollections = {
   USER_MESSAGE_STATES: 'DB_USER_MESSAGE_STATES_COLLECTION'
 }
 
+const dbCollectionDefaults = {
+  USERS: 'users',
+  REFRESH_TOKEN: 'refresh-token',
+  FOLLOWERS: 'followers',
+  TWEETS: 'tweets',
+  HASHTAGS: 'hashtags',
+  BOOKMARKS: 'bookmarks',
+  LIKES: 'likes',
+  MESSAGES: 'messages',
+  DIRECT_CONVERSATIONS: 'direct-conversations',
+  GROUP_CONVERSATIONS: 'group-conversations',
+  USER_BLOCKS: 'user-blocks',
+  MEDIAS: 'medias',
+  NEWSFEEDS: 'newsFeeds',
+  NOTIFICATIONS: 'notifications',
+  OUTBOX_EVENTS: 'outboxEvents',
+  NOTIFICATION_STATES: 'notificationStates',
+  NOTIFICATION_ACTORS: 'notificationActors',
+  NOTIFICATION_LIFECYCLE_GUARDS: 'notificationLifecycleGuards',
+  CONVERSATION_READ_STATES: 'conversationReadStates',
+  USER_MESSAGE_STATES: 'userMessageStates'
+}
+
 const getBooleanEnvVar = (key: string, defaultValue: boolean): boolean => {
   const value = process.env[key]
   if (value === undefined || value === '') return defaultValue
@@ -142,11 +178,42 @@ const getPortEnvVar = (key: string, defaultValue: number): number => {
   return value
 }
 
-const getPositiveIntegerEnvVar = (key: string, defaultValue: number): number => {
+const getTrustProxyHopsEnvVar = (key: string, defaultValue: number): number => {
   const rawValue = getEnvVar(key, false, String(defaultValue))
   const value = Number(rawValue)
-  if (!Number.isSafeInteger(value) || value < 3) {
-    throw new Error(`${key} must be an integer greater than or equal to 3`)
+  if (!Number.isSafeInteger(value) || value < 0 || value > 10) {
+    throw new Error(`${key} must be an integer between 0 and 10`)
+  }
+  return value
+}
+
+const getIntegerEnvVar = (key: string, defaultValue: number, min: number, max: number): number => {
+  const rawValue = getEnvVar(key, false, String(defaultValue))
+  const value = Number(rawValue)
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`${key} must be an integer between ${min} and ${max}`)
+  }
+  return value
+}
+
+const getEnumEnvVar = <T extends string>(key: string, values: readonly T[], defaultValue: T): T => {
+  const value = getEnvVar(key, false, defaultValue)
+  if (!values.includes(value as T)) {
+    throw new Error(`${key} must be one of: ${values.join(', ')}`)
+  }
+  return value as T
+}
+
+const getRedisUrlEnvVar = (key: string, defaultValue?: string): string => {
+  const value = getEnvVar(key, false, defaultValue)
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new Error(`${key} must be a valid Redis URL`)
+  }
+  if (parsed.protocol !== 'redis:' && parsed.protocol !== 'rediss:') {
+    throw new Error(`${key} must use redis:// or rediss://`)
   }
   return value
 }
@@ -160,79 +227,85 @@ const getCsvEnvVar = (key: string, defaultValue: string): string[] => {
   return values
 }
 
+const mongodbUri = getEnvVar('MONGODB_URI', false)
+const dbClusterHost = mongodbUri ? '' : getEnvVar('DB_CLUSTER_HOST')
+const dbUsername = mongodbUri ? '' : getEnvVar('DB_USERNAME')
+const dbPassword = mongodbUri ? '' : getEnvVar('DB_PASSWORD')
+const redisUrl = getRedisUrlEnvVar('REDIS_URL', 'redis://localhost:6379')
+
 // Export configuration
 export const envConfig: EnvConfig = {
   app: {
     port: getPortEnvVar('PORT', 3000),
-    host: getEnvVar('HOST', true, 'http://localhost:3000')
+    trustProxyHops: getTrustProxyHopsEnvVar('TRUST_PROXY_HOPS', 0)
   },
   cors: {
     origin: getCsvEnvVar('CORS_ORIGIN', 'http://localhost:3001,http://localhost:5173')
   },
   db: {
-    uri: getEnvVar('MONGODB_URI', false),
-    clusterHost: getEnvVar('DB_CLUSTER_HOST', false, 'clone-x-ver2.qhuiotw.mongodb.net'),
-    username: getEnvVar('DB_USERNAME'),
-    password: getEnvVar('DB_PASSWORD'),
+    uri: mongodbUri,
+    clusterHost: dbClusterHost,
+    username: dbUsername,
+    password: dbPassword,
     name: getEnvVar('DB_NAME'),
     collections: {
-      users: getEnvVar(dbCollections.USERS),
-      refreshToken: getEnvVar(dbCollections.REFRESH_TOKEN),
-      followers: getEnvVar(dbCollections.FOLLOWERS),
-      tweets: getEnvVar(dbCollections.TWEETS),
-      hashtags: getEnvVar(dbCollections.HASHTAGS),
-      bookmarks: getEnvVar(dbCollections.BOOKMARKS),
-      likes: getEnvVar(dbCollections.LIKES),
-      messages: getEnvVar(dbCollections.MESSAGES),
-      directConversations: getEnvVar(dbCollections.DIRECT_CONVERSATIONS),
-      groupConversations: getEnvVar(dbCollections.GROUP_CONVERSATIONS),
-      userBlocks: getEnvVar(dbCollections.USER_BLOCKS),
-      medias: getEnvVar(dbCollections.MEDIAS, false, 'medias'),
-      newsFeeds: getEnvVar(dbCollections.NEWSFEEDS, false, 'newsFeeds'),
-      notifications: getEnvVar(dbCollections.NOTIFICATIONS, false, 'notifications'),
-      outboxEvents: getEnvVar(dbCollections.OUTBOX_EVENTS, false, 'outboxEvents'),
-      notificationStates: getEnvVar(dbCollections.NOTIFICATION_STATES, false, 'notificationStates'),
-      notificationActors: getEnvVar(dbCollections.NOTIFICATION_ACTORS, false, 'notificationActors'),
+      users: getEnvVar(dbCollections.USERS, false, dbCollectionDefaults.USERS),
+      refreshToken: getEnvVar(dbCollections.REFRESH_TOKEN, false, dbCollectionDefaults.REFRESH_TOKEN),
+      followers: getEnvVar(dbCollections.FOLLOWERS, false, dbCollectionDefaults.FOLLOWERS),
+      tweets: getEnvVar(dbCollections.TWEETS, false, dbCollectionDefaults.TWEETS),
+      hashtags: getEnvVar(dbCollections.HASHTAGS, false, dbCollectionDefaults.HASHTAGS),
+      bookmarks: getEnvVar(dbCollections.BOOKMARKS, false, dbCollectionDefaults.BOOKMARKS),
+      likes: getEnvVar(dbCollections.LIKES, false, dbCollectionDefaults.LIKES),
+      messages: getEnvVar(dbCollections.MESSAGES, false, dbCollectionDefaults.MESSAGES),
+      directConversations: getEnvVar(
+        dbCollections.DIRECT_CONVERSATIONS,
+        false,
+        dbCollectionDefaults.DIRECT_CONVERSATIONS
+      ),
+      groupConversations: getEnvVar(dbCollections.GROUP_CONVERSATIONS, false, dbCollectionDefaults.GROUP_CONVERSATIONS),
+      userBlocks: getEnvVar(dbCollections.USER_BLOCKS, false, dbCollectionDefaults.USER_BLOCKS),
+      medias: getEnvVar(dbCollections.MEDIAS, false, dbCollectionDefaults.MEDIAS),
+      newsFeeds: getEnvVar(dbCollections.NEWSFEEDS, false, dbCollectionDefaults.NEWSFEEDS),
+      notifications: getEnvVar(dbCollections.NOTIFICATIONS, false, dbCollectionDefaults.NOTIFICATIONS),
+      outboxEvents: getEnvVar(dbCollections.OUTBOX_EVENTS, false, dbCollectionDefaults.OUTBOX_EVENTS),
+      notificationStates: getEnvVar(dbCollections.NOTIFICATION_STATES, false, dbCollectionDefaults.NOTIFICATION_STATES),
+      notificationActors: getEnvVar(dbCollections.NOTIFICATION_ACTORS, false, dbCollectionDefaults.NOTIFICATION_ACTORS),
       notificationLifecycleGuards: getEnvVar(
         dbCollections.NOTIFICATION_LIFECYCLE_GUARDS,
         false,
-        'notificationLifecycleGuards'
+        dbCollectionDefaults.NOTIFICATION_LIFECYCLE_GUARDS
       ),
       conversationReadStates: getEnvVar(
         dbCollections.CONVERSATION_READ_STATES,
         false,
-        'conversationReadStates'
+        dbCollectionDefaults.CONVERSATION_READ_STATES
       ),
-      userMessageStates: getEnvVar(dbCollections.USER_MESSAGE_STATES, false, 'userMessageStates')
+      userMessageStates: getEnvVar(dbCollections.USER_MESSAGE_STATES, false, dbCollectionDefaults.USER_MESSAGE_STATES)
     }
   },
-  google: {
-    clientId: getEnvVar('GOOGLE_CLIENT_ID'),
-    clientSecret: getEnvVar('GOOGLE_CLIENT_SECRET'),
-    redirectUri: getEnvVar('GOOGLE_REDIRECT_URI')
-  },
-  clientRedirectUri: getEnvVar('CLIENT_REDIRECT_URI'),
   secrets: {
-    password: getEnvVar('PASSWORD_SECRET'),
     jwt: {
       access: getEnvVar('JWT_SECRET_ACCESS_TOKEN'),
-      refresh: getEnvVar('JWT_SECRET_REFRESH_TOKEN'),
-      emailVerify: getEnvVar('JWT_SECRET_EMAIL_VERIFY_TOKEN'),
-      forgotPassword: getEnvVar('JWT_SECRET_FORGOT_PASSWORD_TOKEN')
+      refresh: getEnvVar('JWT_SECRET_REFRESH_TOKEN')
     }
   },
   tokenExpires: {
     access: getEnvVar('ACCESS_TOKEN_EXPIRES_IN'),
-    refresh: getEnvVar('REFRESH_TOKEN_EXPIRES_IN'),
-    emailVerify: getEnvVar('EMAIL_VERIFY_TOKEN_EXPIRES_IN'),
-    forgotPassword: getEnvVar('FORGOT_PASSWORD_TOKEN_EXPIRES_IN')
+    refresh: getEnvVar('REFRESH_TOKEN_EXPIRES_IN')
   },
-  sendGrid: {
-    apiKey: getEnvVar('SENDGRID_API_KEY')
-  },
-  resendApiKey: getEnvVar('RESEND_API_KEY'),
   redis: {
-    url: getEnvVar('REDIS_URL', false, 'redis://localhost:6379')
+    url: redisUrl,
+    cacheUrl: getRedisUrlEnvVar('REDIS_CACHE_URL', redisUrl),
+    queueUrl: getRedisUrlEnvVar('REDIS_QUEUE_URL', redisUrl),
+    socketUrl: getRedisUrlEnvVar('REDIS_SOCKET_URL', redisUrl)
+  },
+  socket: {
+    adapterMode: getEnumEnvVar('SOCKET_ADAPTER_MODE', ['memory', 'redis'] as const, 'memory')
+  },
+  cloudinary: {
+    cloudName: getEnvVar('CLOUDINARY_CLOUD_NAME'),
+    apiKey: getEnvVar('CLOUDINARY_API_KEY'),
+    apiSecret: getEnvVar('CLOUDINARY_API_SECRET')
   },
   features: {
     notificationOutboxEnabled: getBooleanEnvVar('NOTIFICATION_OUTBOX_ENABLED', true),
@@ -244,7 +317,20 @@ export const envConfig: EnvConfig = {
     notificationFollowedTweetEnabled: getBooleanEnvVar('NOTIFICATION_FOLLOWED_TWEET_ENABLED', true)
   },
   conversation: {
-    maxGroupMembers: getPositiveIntegerEnvVar('MAX_GROUP_MEMBERS', 500)
+    maxGroupMembers: getIntegerEnvVar('MAX_GROUP_MEMBERS', 500, 3, 10_000),
+    messageCacheMode: getEnumEnvVar('CONVERSATION_MESSAGE_CACHE_MODE', ['off', 'full'] as const, 'off')
+  },
+  media: {
+    processingMode: getEnumEnvVar('MEDIA_PROCESSING_MODE', ['inline', 'queue'] as const, 'inline'),
+    workerConcurrency: getIntegerEnvVar('MEDIA_WORKER_CONCURRENCY', 1, 1, 32),
+    queueMaxAttempts: getIntegerEnvVar('MEDIA_QUEUE_MAX_ATTEMPTS', 5, 1, 20),
+    maxImageUploadMb: getIntegerEnvVar('MAX_IMAGE_UPLOAD_MB', 10, 1, 100),
+    maxVideoUploadMb: getIntegerEnvVar('MAX_VIDEO_UPLOAD_MB', 20, 1, 1_024),
+    maxAudioUploadMb: getIntegerEnvVar('MAX_AUDIO_UPLOAD_MB', 10, 1, 100)
+  },
+  queue: {
+    completedRetentionCount: getIntegerEnvVar('QUEUE_COMPLETED_RETENTION_COUNT', 300, 1, 100_000),
+    failedRetentionCount: getIntegerEnvVar('QUEUE_FAILED_RETENTION_COUNT', 500, 1, 100_000)
   }
 }
 
@@ -264,16 +350,3 @@ export const isCorsOriginAllowed = (origin: string | undefined): boolean => {
     return false
   }
 }
-
-// Optional: Validate critical configurations on initialization
-;(() => {
-  try {
-    // Ensure critical environment variables are present
-    const criticalVars = ['PORT', 'HOST', 'DB_NAME', 'DB_USERNAME', 'DB_PASSWORD']
-    criticalVars.forEach((key) => getEnvVar(key))
-    console.log('[ENV] All critical environment variables loaded successfully.')
-  } catch (error) {
-    console.error('[ENV] Configuration validation failed:', error)
-    process.exit(1)
-  }
-})()

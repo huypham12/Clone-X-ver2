@@ -4,6 +4,7 @@ import fs from 'fs'
 import path from 'path'
 import { HttpError } from '~/common/http-error'
 import { HTTP_STATUS } from '~/constants/httpStatus'
+import { envConfig } from '~/config/getEnvConfig'
 
 export const UPLOAD_IMAGE_TEMP_DIR = path.resolve('uploads/images/temp')
 export const UPLOAD_VIDEO_DIR = path.resolve('uploads/videos')
@@ -19,91 +20,93 @@ export const initFolder = () => {
   })
 }
 
-export const handleUploadImage = async (req: Request) => {
+export type ParsedMediaUpload = {
+  files: File[]
+  error?: HttpError
+}
+
+type MediaUploadOptions = {
+  fieldName: 'image' | 'video' | 'audio'
+  mimePrefix: 'image/' | 'video/' | 'audio/'
+  uploadDir: string
+  maxFiles: number
+  maxFileSizeMb: number
+}
+
+const parseMediaUpload = async (req: Request, options: MediaUploadOptions): Promise<ParsedMediaUpload> => {
+  let rejectedFile = false
+  const maxFileSize = options.maxFileSizeMb * 1024 * 1024
   const form = formidable({
+    uploadDir: options.uploadDir,
+    maxFiles: options.maxFiles,
+    keepExtensions: true,
+    maxFileSize,
+    maxTotalFileSize: maxFileSize * options.maxFiles,
+    filter: ({ name, mimetype }) => {
+      const valid = name === options.fieldName && Boolean(mimetype?.startsWith(options.mimePrefix))
+      if (!valid) rejectedFile = true
+      return valid
+    }
+  })
+
+  return new Promise<ParsedMediaUpload>((resolve) => {
+    form.parse(req, (err, _fields, parsedFiles) => {
+      const files = (parsedFiles[options.fieldName] || []) as File[]
+      if (err) {
+        resolve({ files, error: new HttpError(err.message, HTTP_STATUS.BAD_REQUEST) })
+        return
+      }
+      if (rejectedFile) {
+        resolve({ files, error: new HttpError('File field or MIME type is not valid', HTTP_STATUS.BAD_REQUEST) })
+        return
+      }
+      if (files.length === 0) {
+        resolve({ files, error: new HttpError('File is empty', HTTP_STATUS.BAD_REQUEST) })
+        return
+      }
+      resolve({ files })
+    })
+  })
+}
+
+export const cleanupUploadedFiles = async (files: File[]): Promise<void> => {
+  await Promise.all(
+    files.map(async ({ filepath }) => {
+      try {
+        await fs.promises.unlink(filepath)
+      } catch (error: unknown) {
+        const code = error instanceof Error && 'code' in error ? error.code : undefined
+        if (code !== 'ENOENT') {
+          console.error('[Media] Could not remove temporary upload', error)
+        }
+      }
+    })
+  )
+}
+
+export const handleUploadImage = (req: Request): Promise<ParsedMediaUpload> =>
+  parseMediaUpload(req, {
+    fieldName: 'image',
+    mimePrefix: 'image/',
     uploadDir: UPLOAD_IMAGE_TEMP_DIR,
     maxFiles: 4,
-    keepExtensions: true,
-    maxFileSize: 50 * 1024 * 1024, // 50MB
-    maxTotalFileSize: 50 * 1024 * 1024 * 4,
-    filter: function ({ name, originalFilename, mimetype }) {
-      const valid = name === 'image' && Boolean(mimetype?.includes('image/'))
-      if (!valid) {
-        form.emit('error' as any, new Error('File type is not valid') as any)
-      }
-      return valid
-    }
+    maxFileSizeMb: envConfig.media.maxImageUploadMb
   })
 
-  return new Promise<File[]>((resolve, reject) => {
-    form.parse(req, (err, fields, files) => {
-      if (err) {
-        return reject(new HttpError(err.message, HTTP_STATUS.BAD_REQUEST))
-      }
-      // files.image is an array of files in formidable v3
-      if (!files.image) {
-        return reject(new HttpError('File is empty', HTTP_STATUS.BAD_REQUEST))
-      }
-      
-      resolve(files.image as File[])
-    })
-  })
-}
-
-export const handleUploadVideo = async (req: Request) => {
-  const form = formidable({
+export const handleUploadVideo = (req: Request): Promise<ParsedMediaUpload> =>
+  parseMediaUpload(req, {
+    fieldName: 'video',
+    mimePrefix: 'video/',
     uploadDir: UPLOAD_VIDEO_DIR,
-    maxFiles: 1, // Nên cho upload 1 video mỗi lần để tránh quá tải
-    keepExtensions: true,
-    maxFileSize: 100 * 1024 * 1024, // 100MB
-    filter: function ({ name, originalFilename, mimetype }) {
-      const valid = name === 'video' && Boolean(mimetype?.includes('video/'))
-      if (!valid) {
-        form.emit('error' as any, new Error('File type is not valid') as any)
-      }
-      return valid
-    }
+    maxFiles: 1,
+    maxFileSizeMb: envConfig.media.maxVideoUploadMb
   })
 
-  return new Promise<File[]>((resolve, reject) => {
-    form.parse(req, (err, fields, files) => {
-      if (err) {
-        return reject(new HttpError(err.message, HTTP_STATUS.BAD_REQUEST))
-      }
-      if (!files.video) {
-        return reject(new HttpError('File is empty', HTTP_STATUS.BAD_REQUEST))
-      }
-      
-      resolve(files.video as File[])
-    })
-  })
-}
-
-export const handleUploadAudio = async (req: Request) => {
-  const form = formidable({
+export const handleUploadAudio = (req: Request): Promise<ParsedMediaUpload> =>
+  parseMediaUpload(req, {
+    fieldName: 'audio',
+    mimePrefix: 'audio/',
     uploadDir: UPLOAD_AUDIO_DIR,
     maxFiles: 1,
-    keepExtensions: true,
-    maxFileSize: 50 * 1024 * 1024, // 50MB
-    filter: function ({ name, originalFilename, mimetype }) {
-      const valid = name === 'audio' && Boolean(mimetype?.includes('audio/'))
-      if (!valid) {
-        form.emit('error' as any, new Error('File type is not valid') as any)
-      }
-      return valid
-    }
+    maxFileSizeMb: envConfig.media.maxAudioUploadMb
   })
-
-  return new Promise<File[]>((resolve, reject) => {
-    form.parse(req, (err, fields, files) => {
-      if (err) {
-        return reject(new HttpError(err.message, HTTP_STATUS.BAD_REQUEST))
-      }
-      if (!files.audio) {
-        return reject(new HttpError('File is empty', HTTP_STATUS.BAD_REQUEST))
-      }
-      
-      resolve(files.audio as File[])
-    })
-  })
-}

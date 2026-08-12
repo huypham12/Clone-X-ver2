@@ -1,6 +1,7 @@
 import type { WithId } from 'mongodb'
-import { getIO } from '~/socket/socket-server'
 import type Notification from '~/schemas/Notification.schema'
+import { inProcessRealtimeEmitter } from '~/modules/realtime/in-process-realtime-emitter'
+import type { RealtimeEmitter } from '~/modules/realtime/realtime-emitter'
 import type { NotificationDeliveryResult } from './notification.type'
 import type { NotificationUnreadSnapshot } from './notification-unread.service'
 
@@ -14,9 +15,15 @@ export interface NotificationReadStatePayload {
 }
 
 export class NotificationDeliveryService {
+  constructor(private readonly realtimeEmitter: RealtimeEmitter = inProcessRealtimeEmitter) {}
+
   deliverNew(notification: WithId<Notification>): NotificationDeliveryResult {
     try {
-      getIO().to(notification.recipient_id.toHexString()).emit('@notification:new', this.toPublicNotification(notification))
+      this.realtimeEmitter.emit(
+        notification.recipient_id.toHexString(),
+        '@notification:new',
+        this.toPublicNotification(notification)
+      )
       return { delivered: true }
     } catch (error: unknown) {
       console.error('Could not emit persisted notification', {
@@ -48,10 +55,7 @@ export class NotificationDeliveryService {
     )
   }
 
-  deliverRemoved(
-    notification: WithId<Notification>,
-    state?: NotificationUnreadSnapshot
-  ): NotificationDeliveryResult {
+  deliverRemoved(notification: WithId<Notification>, state?: NotificationUnreadSnapshot): NotificationDeliveryResult {
     return this.emit(notification.recipient_id.toHexString(), '@notification:removed', {
       notification_id: notification._id.toHexString(),
       aggregation_key: notification.aggregation_key ?? null,
@@ -63,7 +67,7 @@ export class NotificationDeliveryService {
 
   private emit(room: string, event: string, payload: unknown): NotificationDeliveryResult {
     try {
-      getIO().to(room).emit(event, payload)
+      this.realtimeEmitter.emit(room, event, payload)
       return { delivered: true }
     } catch (error: unknown) {
       console.error('Could not emit persisted notification state', {
